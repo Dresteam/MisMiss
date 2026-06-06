@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Optional
 
 from interfaces.bot.bot import Bot, BotPermission
 from interfaces.entity.gift import Gift
+from ..logging import get_logger
 from ..exceptions import (
     CoreApiException,
     CoreCookieException,
+    CoreDisabledException,
     CorePermissionException,
 )
 from ..models.gift import BotGift
@@ -30,6 +32,11 @@ if TYPE_CHECKING:
 
 # 内部使用的消息条目
 _MessageItem = namedtuple("_MessageItem", ["priority", "live_id", "message"])
+
+_log = get_logger(__name__)
+
+# 默认权限
+_DEFAULT_PERMISSIONS: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
 
 
 class MissevanBot(Bot):
@@ -50,8 +57,13 @@ class MissevanBot(Bot):
     :raises CoreCookieException: Cookie 无效或已过期
     """
 
-    def __init__(self, cookie: str) -> None:
-        self._cookie = cookie
+    def __init__(
+        self,
+        cookie: str,
+        *,
+        permissions: BotPermission = _DEFAULT_PERMISSIONS,
+    ) -> None:
+        self.__cookie = cookie
 
         # 延迟初始化 — 仅在首次需要时获取
         self._id: int = 0
@@ -65,8 +77,30 @@ class MissevanBot(Bot):
         self._queue_lock = asyncio.Lock()
         self._consumer_task: asyncio.Task[None] | None = None
 
-        # 权限：默认仅允许发送直播间消息
-        self._permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
+        # 权限：创建后不可修改
+        self._permissions: BotPermission = permissions
+        # 启用状态
+        self._enabled: bool = True
+
+    # ------------------------------------------------------------------ #
+    # 启停控制
+    # ------------------------------------------------------------------ #
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    def _check_enabled(self) -> None:
+        """检查是否已启用，停用时抛出异常。
+
+        :raises CoreDisabledException: 功能已停用
+        """
+        if not self._enabled:
+            raise CoreDisabledException("机器人已停用")
 
     # ------------------------------------------------------------------ #
     # 权限控制
@@ -74,11 +108,8 @@ class MissevanBot(Bot):
 
     @property
     def permissions(self) -> BotPermission:
+        """权限集合（只读——创建后不可修改）。"""
         return self._permissions
-
-    @permissions.setter
-    def permissions(self, value: BotPermission) -> None:
-        self._permissions = value
 
     def _check_permission(self, perm: BotPermission) -> None:
         """检查是否拥有指定权限，不足则抛出异常。
@@ -113,32 +144,55 @@ class MissevanBot(Bot):
         return self._icon_url or ""
 
     # ------------------------------------------------------------------ #
-    # 初始化
+    # 刷新
     # ------------------------------------------------------------------ #
 
-    async def initialize(self) -> None:
-        """初始化机器人信息。
+    async def refresh(self) -> None:
+        """刷新机器人信息并验证 Cookie 状态。
 
-        从 Missevan API 获取机器人的用户资料。
-        通常在构造后立即调用，也可在首次操作时自动触发。
+        从 Missevan API 重新获取用户资料，同时检查 Cookie 是否有效。
+        Cookie 过期时自动将机器人设为停用状态。
 
-        :raises CoreCookieException: Cookie 无效或已过期
+        可在创建实例后直接调用，也可通过 :meth:`_ensure_initialized` 自动触发。
+
+        :raises CoreCookieException: Cookie 已过期
         """
-        if self._initialized:
-            return
 
-        response = self._check_success(await BotInfoAPI(self._cookie).api())
-
+        response = self._check_success(await BotInfoAPI(self.__cookie).api())
         info = response.get("info", {}).get("user", {})
         if not info:
+            self.enabled = False
             raise CoreCookieException("Cookie 已过期")
 
         self._id = info.get("user_id", 0)
         self._name = info.get("username", "")
         self._introduction = info.get("introduction", "")
         self._icon_url = info.get("iconurl", "")
-
         self._initialized = True
+
+    # ------------------------------------------------------------------ #
+    # API 调用包装
+    # ------------------------------------------------------------------ #
+
+    async def _safe_call(self, factory):
+        """包装 API 调用——失败时自动检查 Cookie 状态并校验返回值。
+
+        当 API 调用因 :class:`CoreApiException` 失败时，
+        自动调用 :meth:`refresh` 检查 Cookie：
+        - 若 Cookie 过期则 bot 自动停用
+        - 无论刷新成败，均重新抛出原始异常
+
+        :param factory: 返回 awaitable 的无参工厂函数
+        :return: API 返回值（已通过 :meth:`_check_success` 校验）
+        :raises CoreApiException: 原始 API 异常
+        :raises CoreCookieException: Cookie 已过期（bot 已自动停用）
+        """
+        try:
+            result = await factory()
+            return self._check_success(result)
+        except CoreApiException:
+            await self.refresh()
+            raise
 
     # ------------------------------------------------------------------ #
     # Bot 接口实现
@@ -156,6 +210,7 @@ class MissevanBot(Bot):
         :param priority: 优先级（值越大越优先），默认为 0
         :raises CorePermissionException: 权限不足
         """
+        self._check_enabled()
         self._check_permission(BotPermission.SEND_LIVESTREAM_MESSAGE)
         await self._ensure_initialized()
 
@@ -190,15 +245,18 @@ class MissevanBot(Bot):
                 return
             item = self._message_queue.pop(0)
 
-        # 发送（失败不阻塞后续消息）
+        # 发送（失败不阻塞后续消息，包内自动检查 Cookie）
         try:
-            self._check_success(
-                await MessageSendAPI(self._cookie).api(
+            await self._safe_call(
+                lambda: MessageSendAPI(self.__cookie).api(
                     item.live_id, item.message
                 )
             )
         except CoreApiException:
-            pass
+            _log.warning("消息发送失败 直播间={} 内容={}", item.live_id, item.message)
+        except CoreCookieException:
+            _log.error("Cookie 已过期，清空消息队列")
+            self._message_queue.clear()
 
         # 发送间隔，防止请求过于频繁
         await asyncio.sleep(0.1)
@@ -219,6 +277,7 @@ class MissevanBot(Bot):
         :param message: 信息文本
         :raises CorePermissionException: 权限不足
         """
+        self._check_enabled()
         self._check_permission(BotPermission.SEND_PRIVATE_MESSAGE)
         await self._ensure_initialized()
         # TODO: 后续接入私信 API
@@ -232,14 +291,15 @@ class MissevanBot(Bot):
         :param live_id: 直播间 ID（用于刷新背包状态）
         :return: 背包礼物列表
         """
+        self._check_enabled()
         await self._ensure_initialized()
 
         # 登录房间 — 刷新背包状态
-        await OnlineAPI(self._cookie).api(live_id)
+        await self._safe_call(lambda: OnlineAPI(self.__cookie).api(live_id))
 
         # 获取背包
-        response = self._check_success(
-            await BotStatusAPI(self._cookie).api()
+        response = await self._safe_call(
+            lambda: BotStatusAPI(self.__cookie).api()
         )
 
         info = response.get("info", {})
@@ -270,13 +330,12 @@ class MissevanBot(Bot):
         :param num: 礼物数量
         :raises CorePermissionException: 权限不足
         """
+        self._check_enabled()
         self._check_permission(BotPermission.SEND_GIFT)
         await self._ensure_initialized()
-        self._check_success(
-            await GiftSendAPI(self._cookie).api(live_id, gift_id, num)
+        await self._safe_call(
+            lambda: GiftSendAPI(self.__cookie).api(live_id, gift_id, num)
         )
-        # 短暂延迟防止请求过于频繁
-        await asyncio.sleep(0.1)
 
     async def send_livestream_backpack(self, live_id: int, gift_id: int, num: int) -> None:
         """向直播间赠送背包内礼物。
@@ -288,10 +347,11 @@ class MissevanBot(Bot):
         :param num: 礼物数量
         :raises CorePermissionException: 权限不足
         """
+        self._check_enabled()
         self._check_permission(BotPermission.SEND_BACKPACK_GIFT)
         await self._ensure_initialized()
-        self._check_success(
-            await BackpackSendAPI(self._cookie).api(live_id, gift_id, num)
+        await self._safe_call(
+            lambda: BackpackSendAPI(self.__cookie).api(live_id, gift_id, num)
         )
 
     def get_cookie(self) -> str:
@@ -303,8 +363,9 @@ class MissevanBot(Bot):
         :return: Cookie 字符串
         :raises CorePermissionException: 权限不足
         """
+        self._check_enabled()
         self._check_permission(BotPermission.EXPOSE_COOKIE)
-        return self._cookie
+        return self.__cookie
 
     # ------------------------------------------------------------------ #
     # 辅助方法
@@ -314,9 +375,9 @@ class MissevanBot(Bot):
         return f"MissevanBot(id={self._id})"
 
     async def _ensure_initialized(self) -> None:
-        """确保已初始化。"""
+        """确保已初始化，未初始化时自动调用 :meth:`refresh`。"""
         if not self._initialized:
-            await self.initialize()
+            await self.refresh()
 
     @staticmethod
     def _check_success(response: dict) -> dict:

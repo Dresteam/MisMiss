@@ -33,13 +33,38 @@ class Bot(User, ABC):
     """机器人接口。
 
     继承自 :class:`User`，表示一个直播平台机器人。
-    内置 **权限控制机制**：每个敏感操作执行前会检查对应权限，
-    权限不足时抛出 :class:`CorePermissionException`。
+    内置 **权限控制** 和 **启停控制**：
+    每个敏感操作执行前会检查权限和启用状态。
 
-    默认权限：仅 :attr:`~BotPermission.SEND_LIVESTREAM_MESSAGE`。
+    - 权限不足时抛出 :class:`CorePermissionException`
+    - 停用时抛出 :class:`CoreDisabledException`
+    - 默认权限：仅 :attr:`~BotPermission.SEND_LIVESTREAM_MESSAGE`
+    - 默认状态：已启用
 
     .. versionadded:: 1.0
     """
+
+    # ------------------------------------------------------------------ #
+    # 启停控制
+    # ------------------------------------------------------------------ #
+
+    @property
+    @abstractmethod
+    def enabled(self) -> bool:
+        """获取启用状态。
+
+        :return: ``True`` 表示已启用，``False`` 表示已停用
+        """
+        ...
+
+    @enabled.setter
+    @abstractmethod
+    def enabled(self, value: bool) -> None:
+        """设置启用状态。
+
+        :param value: ``True`` 启用，``False`` 停用
+        """
+        ...
 
     # ------------------------------------------------------------------ #
     # 权限控制
@@ -48,18 +73,12 @@ class Bot(User, ABC):
     @property
     @abstractmethod
     def permissions(self) -> BotPermission:
-        """获取当前已授予的权限集合。
+        """获取当前已授予的权限集合（只读）。
+
+        权限仅在构造时通过 ``permissions`` 参数设置，
+        创建后不可修改，以保护 Cookie 等敏感操作。
 
         :return: 权限标志组合
-        """
-        ...
-
-    @permissions.setter
-    @abstractmethod
-    def permissions(self, value: BotPermission) -> None:
-        """设置权限集合。
-
-        :param value: 权限标志组合
         """
         ...
 
@@ -142,6 +161,22 @@ class Bot(User, ABC):
         :param num: 礼物数量
         :raises RequestFailedException: 当请求失败时
         :raises PermissionError: 权限不足
+        """
+        ...
+
+    # ------------------------------------------------------------------ #
+    # 刷新
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    async def refresh(self) -> None:
+        """刷新机器人信息并验证 Cookie 状态。
+
+        从 API 重新获取用户资料（名称、简介、头像等），
+        同时检查 Cookie 是否仍然有效。
+        Cookie 过期时自动将机器人设为停用状态。
+
+        :raises CoreCookieException: Cookie 已过期
         """
         ...
 

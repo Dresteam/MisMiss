@@ -28,6 +28,34 @@ class Livestream(EventManager, ABC):
     .. versionadded:: 1.0
     """
 
+    # ------------------------------------------------------------------ #
+    # 启停控制
+    # ------------------------------------------------------------------ #
+
+    @property
+    @abstractmethod
+    def enabled(self) -> bool:
+        """获取启用状态。
+
+        :return: ``True`` 表示已启用，``False`` 表示已停用
+        """
+        ...
+
+    @enabled.setter
+    @abstractmethod
+    def enabled(self, value: bool) -> None:
+        """设置启用状态。
+
+        停用时所有操作将抛出 :class:`CoreDisabledException`。
+
+        :param value: ``True`` 启用，``False`` 停用
+        """
+        ...
+
+    # ------------------------------------------------------------------ #
+    # 属性
+    # ------------------------------------------------------------------ #
+
     @property
     @abstractmethod
     def is_connected(self) -> bool:
