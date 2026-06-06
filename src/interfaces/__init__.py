@@ -5,6 +5,7 @@
 - 实体层: :class:`User`, :class:`LiveUser`, :class:`Creator`, :class:`Gift`, :class:`Medal`, :class:`Question`
 - 事件层: :class:`Event`, :class:`Listener`, :class:`EventManager`, :func:`event_handler`
 - 直播间层: :class:`Livestream`, :class:`LivestreamManager`
+- 服务器层: :class:`Server`
 - 机器人层: :class:`Bot`
 - 异常: :class:`RequestFailedException`, :class:`CookieException`
 
@@ -22,6 +23,7 @@ from .event.listener import Listener
 from .event.event_manager import EventManager
 from .event.event_handler import event_handler, event_handler as EventHandler
 from .exceptions import RequestFailedException
+from .server import Server
 
 __all__ = [
     "Event",
@@ -30,4 +32,5 @@ __all__ = [
     "event_handler",
     "EventHandler",
     "RequestFailedException",
+    "Server",
 ]

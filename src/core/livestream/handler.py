@@ -25,7 +25,7 @@ from ..network.websocket import LiveWebSocket
 
 if TYPE_CHECKING:
     from interfaces.entity.medal import Medal
-    from .room import MissevanLivestream
+    from .mis_livestream import MissevanLivestream
 
 
 class Live(LiveWebSocket):

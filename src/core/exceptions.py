@@ -5,8 +5,20 @@
 由调用方决定是否记录。
 """
 
+class MissevanException(Exception):
+    """功能已停用异常。
 
-class CoreApiException(Exception):
+    当 :class:`Bot` 或 :class:`Livestream` 被停用时，
+    调用其方法会抛出此异常。
+
+    :param message: 异常描述
+    """
+
+    def __init__(self, message: str = "功能已停用") -> None:
+        super().__init__(message)
+
+
+class CoreApiException(MissevanException):
     """API 请求异常。
 
     当 HTTP 请求非 200、JSON 解析失败或连接中断时抛出。
@@ -20,7 +32,7 @@ class CoreApiException(Exception):
         super().__init__(message)
 
 
-class CoreWebSocketException(Exception):
+class CoreWebSocketException(MissevanException):
     """WebSocket 连接异常。
 
     当 WebSocket 连接失败、断开或数据解析错误时抛出。
@@ -32,7 +44,20 @@ class CoreWebSocketException(Exception):
         super().__init__(message)
 
 
-class CoreCookieException(Exception):
+class CoreBotException(MissevanException):
+    """Bot 异常。
+
+    当 :class:`Bot` 发生异常时，
+    调用其方法会抛出此异常。
+
+    :param message: 异常描述
+    """
+
+    def __init__(self, message: str = "Bot 异常") -> None:
+        super().__init__(message)
+
+
+class CoreCookieException(CoreBotException):
     """Cookie 无效异常。
 
     当 Cookie 已过期或无法通过验证时抛出。
@@ -44,7 +69,7 @@ class CoreCookieException(Exception):
         super().__init__(message)
 
 
-class CoreBrotliException(Exception):
+class CoreBrotliException(MissevanException):
     """Brotli 解压异常。
 
     当 WebSocket 收到的数据无法正确解压时抛出。
@@ -56,7 +81,7 @@ class CoreBrotliException(Exception):
         super().__init__(message)
 
 
-class CorePermissionException(Exception):
+class CorePermissionException(MissevanException):
     """权限不足异常。
 
     当调用方法时权限不足时抛出。
@@ -68,3 +93,18 @@ class CorePermissionException(Exception):
     def __init__(self, message: str = "权限不足", required: str = "") -> None:
         self.required = required
         super().__init__(message)
+
+
+class CoreDisabledException(MissevanException):
+    """功能已停用异常。
+
+    当 :class:`Bot` 或 :class:`Livestream` 被停用时，
+    调用其方法会抛出此异常。
+
+    :param message: 异常描述
+    """
+
+    def __init__(self, message: str = "功能已停用") -> None:
+        super().__init__(message)
+
+

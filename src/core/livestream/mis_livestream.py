@@ -21,7 +21,7 @@ from ..events.bus import EventBus
 from ..models.creator import LiveCreator
 from .handler import Live
 from ..models.medal import RoomMedal
-from ..exceptions import CoreApiException
+from ..exceptions import CoreApiException, CoreDisabledException
 
 
 class MissevanLivestream(Livestream):
@@ -51,9 +51,31 @@ class MissevanLivestream(Livestream):
 
         # WebSocket
         self._websocket: Live | None = None
+        # 启用状态
+        self._enabled: bool = True
 
         # 注册内部监听器 — 监听开播/下播事件以更新状态
         self._event_bus.register_new_event(self._create_internal_listener())
+
+    # ------------------------------------------------------------------ #
+    # 启停控制
+    # ------------------------------------------------------------------ #
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    def _check_enabled(self) -> None:
+        """检查是否已启用，停用时抛出异常。
+
+        :raises CoreDisabledException: 直播间已停用
+        """
+        if not self._enabled:
+            raise CoreDisabledException("直播间已停用")
 
     # ------------------------------------------------------------------ #
     # 属性
@@ -128,7 +150,9 @@ class MissevanLivestream(Livestream):
 
         :param message: 消息文本
         :param priority: 消息优先级（值越大越优先），默认为 0
+        :raises CoreDisabledException: 直播间已停用
         """
+        self._check_enabled()
         await self._bot.send_livestream_message(
             self._live_id, message, priority
         )
@@ -138,7 +162,9 @@ class MissevanLivestream(Livestream):
 
         :param gift_id: 礼物 ID
         :param num: 礼物数量
+        :raises CoreDisabledException: 直播间已停用
         """
+        self._check_enabled()
         await self._bot.send_livestream_gift(self._live_id, gift_id, num)
 
     async def send_backpack(self, gift_id: int, num: int) -> None:
@@ -146,7 +172,9 @@ class MissevanLivestream(Livestream):
 
         :param gift_id: 礼物 ID
         :param num: 礼物数量
+        :raises CoreDisabledException: 直播间已停用
         """
+        self._check_enabled()
         await self._bot.send_livestream_backpack(self._live_id, gift_id, num)
 
     # ------------------------------------------------------------------ #
@@ -157,7 +185,10 @@ class MissevanLivestream(Livestream):
         """进入直播间。
 
         刷新房间数据并建立 WebSocket 连接。
+
+        :raises CoreDisabledException: 直播间已停用
         """
+        self._check_enabled()
         await self._refresh()
 
         if self._websocket is None:
@@ -171,7 +202,10 @@ class MissevanLivestream(Livestream):
         """退出直播间。
 
         关闭 WebSocket 连接。
+
+        :raises CoreDisabledException: 直播间已停用
         """
+        self._check_enabled()
         if self._websocket:
             await self._websocket.close()
             self._websocket = None

@@ -7,17 +7,14 @@
 - 事件系统: 事件总线
 - 机器人层: :class:`MissevanBot`
 - 直播间层: :class:`MissevanLivestream`
+- 服务器层: :class:`Server`
 
 用法示例::
 
-    from core import MissevanBot, EventBus, MissevanLivestream
+    from core import Server
 
-    bot = MissevanBot(cookie="...")
-    await bot.initialize()
-
-    bus = EventBus()
-    livestream = MissevanLivestream(live_id=12345, bot=bot, event_bus=bus)
-    await livestream.join()
+    server = Server()
+    await server.start()
 """
 
 from .exceptions import (
@@ -25,19 +22,24 @@ from .exceptions import (
     CoreWebSocketException,
     CoreCookieException,
     CoreBrotliException,
+    CoreDisabledException,
     CorePermissionException,
 )
-from .bot.bot import MissevanBot
+from .bot.mis_bot import MissevanBot
 from .events.bus import EventBus
-from .livestream.room import MissevanLivestream
+from .livestream.mis_livestream import MissevanLivestream
+from .server import MissevanServer, DATA_DIR
 
 __all__ = [
     "CoreApiException",
     "CoreWebSocketException",
     "CoreCookieException",
     "CoreBrotliException",
+    "CoreDisabledException",
     "CorePermissionException",
     "MissevanBot",
     "EventBus",
     "MissevanLivestream",
+    "MissevanServer",
+    "DATA_DIR",
 ]
