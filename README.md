@@ -296,7 +296,7 @@ pytest test/ -v
 
 本项目基于 [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html) 开源。
 
-> MisMiss 是 [MIST](https://github.com/MIST) 直播场控标准的一部分。
+> MisMiss 是 [MIST](https://github.com/dikxingmengya/MIST) 直播场控标准的一部分。
 > MIST 定义了跨平台的直播机器人接口规范，MisMiss 作为 Missevan 平台的适配实现，
 > 遵循相同的接口契约。欢迎贡献其他平台的实现。
 
