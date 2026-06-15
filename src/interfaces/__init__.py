@@ -7,6 +7,7 @@
 - 直播间层: :class:`Livestream`, :class:`LivestreamManager`
 - 服务器层: :class:`Server`
 - 机器人层: :class:`Bot`
+- 插件层: :class:`Plugin`, :class:`PluginMetadata`
 - 异常: :class:`RequestFailedException`, :class:`CookieException`
 
 用法示例::
@@ -14,6 +15,7 @@
     from interfaces import Event, Listener, event_handler
     from interfaces.entity import User, LiveUser
     from interfaces.livestream import Livestream
+    from interfaces.plugin import Plugin
 
 .. versionadded:: 1.0
 """
@@ -23,6 +25,8 @@ from .event.listener import Listener
 from .event.event_manager import EventManager
 from .event.event_handler import event_handler, event_handler as EventHandler
 from .exceptions import RequestFailedException
+from .plugin.plugin import Plugin
+from .plugin.plugin_metadata import PluginMetadata
 from .server import Server
 
 __all__ = [
@@ -33,4 +37,6 @@ __all__ = [
     "EventHandler",
     "RequestFailedException",
     "Server",
+    "Plugin",
+    "PluginMetadata",
 ]

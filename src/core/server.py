@@ -13,10 +13,17 @@ from typing import Any
 
 from interfaces.server import Server as ServerInterface
 from interfaces.bot import BotPermission
+from interfaces.plugin.plugin_metadata import PluginMetadata
 from core.bot.mis_bot import MissevanBot
 from core.events.bus import EventBus
 from core.livestream.mis_livestream import MissevanLivestream
-from core.exceptions import CoreApiException, CoreCookieException, CoreBotException
+from core.plugin.plugin_manager import PluginManager
+from core.exceptions import (
+    CoreApiException,
+    CoreCookieException,
+    CoreBotException,
+    CorePluginException,
+)
 from core.logging import get_logger
 
 _log = get_logger(__name__)
@@ -56,7 +63,7 @@ class MissevanServer(ServerInterface):
         self._bot_permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
         self._livestreams: dict[int, MissevanLivestream] = {}
         self._event_bus: EventBus = EventBus()
-        self._plugins: list[Any] = [] # TODO update list[Any] to list[Plugin]
+        self._plugin_manager: PluginManager | None = None
 
     # ------------------------------------------------------------------ #
     # 生命周期
@@ -70,7 +77,7 @@ class MissevanServer(ServerInterface):
         state = self._load_state()
         if not state:
             _log.info("未找到持久化数据，使用空状态启动")
-            return
+            state = {}
 
         # 恢复 Bot
         bot_state = state.get("bot")
@@ -82,15 +89,28 @@ class MissevanServer(ServerInterface):
             if self._bot is not None:
                 self._restore_livestream(live_id)
 
+        # 加载插件
+        disabled_plugins: list[str] = state.get("disabled_plugins", [])
+        self._plugin_manager = PluginManager(
+            plugin_dir="plugins",
+            event_bus=self._event_bus,
+            config_dir=os.path.join(DATA_DIR, "config"),
+            disabled_plugins=disabled_plugins,
+        )
+        await self._plugin_manager.load_all()
+
         _log.info(
-            "服务器启动完成 bot={} livestreams={}",
+            "服务器启动完成 bot={} livestreams={} plugins={}",
             self._bot,
             len(self._livestreams),
+            len(self._plugin_manager.list_plugins()),
         )
 
     async def shutdown(self) -> None:
-        """关闭服务器——停用所有 Livestream 和 Bot。"""
+        """关闭服务器——停用所有插件、Livestream 和 Bot。"""
         _log.info("服务器关闭中 ...")
+        if self._plugin_manager is not None:
+            await self._plugin_manager.shutdown_all()
         for livestream in self._livestreams.values():
             livestream.enabled = False
         if self._bot is not None:
@@ -221,23 +241,90 @@ class MissevanServer(ServerInterface):
         return self._event_bus
 
     # ------------------------------------------------------------------ #
-    # Plugin（后续扩展）
+    # Plugin
     # ------------------------------------------------------------------ #
 
-    def install_plugin(self, plugin: Any) -> None:
-        """安装插件（后续实现）。
+    def _require_plugin_manager(self) -> PluginManager:
+        """获取插件管理器，未初始化时抛出异常。
 
-        :param plugin: 插件实例
+        :return: PluginManager 实例
+        :raises RuntimeError: 服务器尚未启动
         """
-        _log.info("安装插件: {}", plugin)
-        self._plugins.append(plugin)
+        if self._plugin_manager is None:
+            raise RuntimeError("服务器尚未启动，请先调用 start()")
+        return self._plugin_manager
+
+    async def install_plugin(self, plugin_name: str) -> PluginMetadata:
+        """安装并加载插件。
+
+        扫描 ``plugins/`` 目录，加载指定插件。
+
+        :param plugin_name: 插件目录名或 metadata.yaml 中声明的 name
+        :return: 插件元数据
+        :raises CorePluginNotFoundException: 插件不存在
+        :raises CorePluginLoadException: 插件加载失败
+        """
+        pm = self._require_plugin_manager()
+        metadata = await pm.load_plugin(plugin_name)
         self._save_state()
-        # TODO
+        return metadata
+
+    async def enable_plugin(self, plugin_name: str) -> None:
+        """启用一个已加载但被禁用的插件。
+
+        :param plugin_name: 插件名称
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        pm.enable_plugin(plugin_name)
+        self._save_state()
+
+    async def disable_plugin(self, plugin_name: str) -> None:
+        """禁用一个已启用的插件。
+
+        :param plugin_name: 插件名称
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        pm.disable_plugin(plugin_name)
+        self._save_state()
 
     @property
-    def plugins(self) -> list[Any]:
-        """获取已安装插件列表。"""
-        return list(self._plugins) # TODO
+    def plugins(self) -> list[PluginMetadata]:
+        """获取所有已加载插件的元数据列表。"""
+        if self._plugin_manager is None:
+            return []
+        return self._plugin_manager.list_plugins()
+
+    def list_plugin_handlers(self, plugin_name: str) -> dict[str, type]:
+        """查看指定插件注册的所有事件处理器。
+
+        :param plugin_name: 插件名称
+        :return: 方法名到事件类型的映射
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        return pm.get_plugin_handlers(plugin_name)
+
+    def get_plugin_readme(self, plugin_name: str) -> str | None:
+        """获取插件的 README.md 内容。
+
+        :param plugin_name: 插件名称
+        :return: README 文本内容，若不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        return pm.get_plugin_readme(plugin_name)
+
+    def get_plugin_changelog(self, plugin_name: str) -> str | None:
+        """获取插件的 CHANGELOG.md 内容。
+
+        :param plugin_name: 插件名称
+        :return: CHANGELOG 文本内容，若不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        return pm.get_plugin_changelog(plugin_name)
 
     # ------------------------------------------------------------------ #
     # 持久化
@@ -256,7 +343,12 @@ class MissevanServer(ServerInterface):
         """保存当前状态到磁盘。"""
         self._ensure_data_dir()
 
-        state: dict[str, Any] = {"plugins": []}
+        state: dict[str, Any] = {
+            "disabled_plugins": (
+                list(self._plugin_manager.disabled_plugin_names)
+                if self._plugin_manager else []
+            ),
+        }
 
         if self._bot is not None:
             state["bot"] = {

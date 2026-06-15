@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from interfaces.bot.bot import Bot, BotPermission
     from interfaces.event.event_manager import EventManager
     from interfaces.livestream.livestream import Livestream
+    from interfaces.plugin.plugin_metadata import PluginMetadata
 
 
 class Server(ABC):
@@ -120,12 +121,75 @@ class Server(ABC):
     # ------------------------------------------------------------------ #
 
     @abstractmethod
-    def install_plugin(self, plugin: object) -> None:
-        """安装插件（后续扩展）。"""
+    async def install_plugin(self, plugin_name: str) -> "PluginMetadata":
+        """安装并加载插件。
+
+        扫描 ``plugins/`` 目录，加载指定插件模块，注册事件处理器。
+
+        :param plugin_name: 插件目录名或 metadata.yaml 中声明的 name
+        :return: 插件元数据
+        :raises CorePluginNotFoundException: 插件不存在
+        :raises CorePluginLoadException: 插件加载失败
+        """
+        ...
+
+    @abstractmethod
+    async def enable_plugin(self, plugin_name: str) -> None:
+        """启用一个已加载但被禁用的插件。
+
+        将插件重新注册到事件总线并更新持久化状态。
+
+        :param plugin_name: 插件名称
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    async def disable_plugin(self, plugin_name: str) -> None:
+        """禁用一个已启用的插件。
+
+        插件实例保留在内存中，仅取消事件注册并更新持久化状态。
+
+        :param plugin_name: 插件名称
+        :raises CorePluginNotFoundException: 插件不存在
+        """
         ...
 
     @property
     @abstractmethod
-    def plugins(self) -> "list[object]":
-        """获取已安装插件列表。"""
+    def plugins(self) -> "list[PluginMetadata]":
+        """获取所有已加载插件的元数据列表。
+
+        :return: 插件元数据列表（包括已启用和已禁用的插件）
+        """
+        ...
+
+    @abstractmethod
+    def list_plugin_handlers(self, plugin_name: str) -> "dict[str, type]":
+        """查看指定插件注册的所有事件处理器。
+
+        :param plugin_name: 插件名称
+        :return: 方法名到事件类型的映射，如 ``{"on_message": LiveMessageEvent}``
+        :raises CorePluginNotFoundException: 插件不存在或未启用
+        """
+        ...
+
+    @abstractmethod
+    def get_plugin_readme(self, plugin_name: str) -> "str | None":
+        """获取插件的 README.md 内容。
+
+        :param plugin_name: 插件名称
+        :return: README 文本内容，若不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    def get_plugin_changelog(self, plugin_name: str) -> "str | None":
+        """获取插件的 CHANGELOG.md 内容。
+
+        :param plugin_name: 插件名称
+        :return: CHANGELOG 文本内容，若不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
         ...
