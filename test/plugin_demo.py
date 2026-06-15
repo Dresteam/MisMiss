@@ -20,11 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from core.events import EventBus
 from core.plugin import PluginManager
-from core.plugin import PluginConfigManager
 from core.exceptions import (
     CorePluginNotFoundException,
-    CorePluginLoadException,
-    CorePluginMetadataException,
 )
 
 
