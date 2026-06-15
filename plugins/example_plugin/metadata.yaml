@@ -1,0 +1,4 @@
+name: example_plugin
+desc: 示例插件 —— 监听直播间消息和礼物事件
+author: MisMiss
+version: 1.0.0

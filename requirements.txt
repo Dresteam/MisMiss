@@ -7,6 +7,7 @@ httpx >= 0.28.0          # 异步 HTTP 客户端
 websockets >= 14.0        # 异步 WebSocket 客户端
 brotli >= 1.1             # Brotli 压缩/解压
 loguru >= 0.7              # 日志管理（分割/格式化/堆栈美化）
+pyyaml >= 6.0              # YAML 解析（metadata.yaml）
 
 # ---- 开发/测试依赖 ----
 pytest >= 8.0

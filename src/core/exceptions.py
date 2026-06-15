@@ -108,3 +108,79 @@ class CoreDisabledException(MissevanException):
         super().__init__(message)
 
 
+class CorePluginException(MissevanException):
+    """插件异常基类。
+
+    插件相关所有异常的父类。
+
+    :param message: 异常描述
+    """
+
+    def __init__(self, message: str = "插件异常") -> None:
+        super().__init__(message)
+
+
+class CorePluginNotFoundException(CorePluginException):
+    """插件未找到异常。
+
+    当操作一个不存在的插件时抛出。
+
+    :param plugin_name: 插件名称
+    """
+
+    def __init__(self, plugin_name: str) -> None:
+        self.plugin_name = plugin_name
+        super().__init__(f"插件 '{plugin_name}' 未找到")
+
+
+class CorePluginLoadException(CorePluginException):
+    """插件加载失败异常。
+
+    当插件导入、实例化或初始化过程中出现错误时抛出。
+
+    :param plugin_name: 插件名称
+    :param reason: 失败原因
+    """
+
+    def __init__(self, plugin_name: str, reason: str = "") -> None:
+        self.plugin_name = plugin_name
+        msg = f"插件 '{plugin_name}' 加载失败"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+
+
+class CorePluginMetadataException(CorePluginException):
+    """插件元数据异常。
+
+    当 ``metadata.yaml`` 缺失或格式错误时抛出。
+
+    :param plugin_name: 插件名称
+    :param reason: 失败原因
+    """
+
+    def __init__(self, plugin_name: str, reason: str = "") -> None:
+        self.plugin_name = plugin_name
+        msg = f"插件 '{plugin_name}' 元数据错误"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+
+
+class CorePluginConfigException(CorePluginException):
+    """插件配置异常。
+
+    当配置读写或 schema 校验失败时抛出。
+
+    :param plugin_name: 插件名称
+    :param reason: 失败原因
+    """
+
+    def __init__(self, plugin_name: str, reason: str = "") -> None:
+        self.plugin_name = plugin_name
+        msg = f"插件 '{plugin_name}' 配置错误"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+
+
