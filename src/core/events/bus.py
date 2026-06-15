@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-import inspect
 import typing
 from collections import defaultdict
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from interfaces.event.event_manager import EventManager
@@ -34,7 +34,7 @@ class EventBus(EventManager):
 
     def __init__(self) -> None:
         # event_type -> list[(listener, method)]
-        self._handlers: dict[type, list[tuple[Listener, callable]]] = (
+        self._handlers: dict[type, list[tuple[Listener, Callable[..., object]]]] = (
             defaultdict(list)
         )
         self._listeners: list[Listener] = []
@@ -63,6 +63,7 @@ class EventBus(EventManager):
                 continue
 
             # 使用 get_type_hints 正确解析类型（包括字符串前向引用）
+            # noinspection PyBroadException
             try:
                 hints = typing.get_type_hints(method)
             except Exception:
