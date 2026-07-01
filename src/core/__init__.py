@@ -24,10 +24,17 @@ from .exceptions import (
     CoreBrotliException,
     CoreDisabledException,
     CorePermissionException,
+    CorePluginException,
+    CorePluginNotFoundException,
+    CorePluginLoadException,
+    CorePluginMetadataException,
+    CorePluginConfigException,
 )
 from .bot.mis_bot import MissevanBot
 from .events.bus import EventBus
 from .livestream.mis_livestream import MissevanLivestream
+from .plugin.plugin_manager import PluginManager
+from .plugin.config_manager import PluginConfigManager
 from .server import MissevanServer, DATA_DIR
 
 __all__ = [
@@ -37,9 +44,16 @@ __all__ = [
     "CoreBrotliException",
     "CoreDisabledException",
     "CorePermissionException",
+    "CorePluginException",
+    "CorePluginNotFoundException",
+    "CorePluginLoadException",
+    "CorePluginMetadataException",
+    "CorePluginConfigException",
     "MissevanBot",
     "EventBus",
     "MissevanLivestream",
     "MissevanServer",
     "DATA_DIR",
+    "PluginManager",
+    "PluginConfigManager",
 ]
