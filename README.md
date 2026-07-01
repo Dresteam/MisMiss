@@ -23,9 +23,9 @@
 
 - 📐 **MIST 标准兼容** — 严格遵循 MIST 接口规范，跨平台复用业务逻辑
 - 🧩 **清晰的分层架构** — 接口层（`interfaces`）定义契约，核心层（`core`）负责实现
-- 🔌 **插件系统** — 启动/停止/重载/安装/卸载 全生命周期；`_conf_schema.json` 配置自动注入默认值；`_permission.json` 权限配置；`requirements.txt` 自动安装；插件专属 `data/{name}/` 数据目录
+- 🔌 **插件系统** — 启动/停止/重载/安装/卸载 全生命周期；`_conf_schema.json` 配置自动注入默认值；Server 自动分配权限（对标 `BotPermission`）；`requirements.txt` 自动安装；插件专属 `data/{name}/` 数据目录
 - ⚡ **事件驱动模型** — 基于 MRO 的事件分发，支持按事件类型继承树精确路由
-- 🔒 **权限控制** — `BotPermission` Flag 位权限，敏感操作（如获取 Cookie）受 name-mangling 保护；插件级权限 schema 独立管理
+- 🔒 **双层权限控制** — `BotPermission` Flag 位权限，敏感操作（如获取 Cookie）受 name-mangling 保护；插件级权限自动分配、可逐项修改，执行时实时拦截校验
 - 💬 **优先级消息队列** — 消息按优先级排序发送，后台异步消费，自动限流
 - 🔄 **WebSocket 长连接** — Brotli 解压、心跳维持、自动重连（指数退避）
 - 💾 **状态持久化** — Server 启动自动恢复 Bot、直播间和插件状态，修改时自动保存
@@ -41,7 +41,6 @@ plugins/  ──  插件目录
   ├── main.py             # 插件类（继承 Plugin）
   ├── metadata.yaml       # 元数据（必须）
   ├── _conf_schema.json   # 配置 schema（可选）
-  ├── _permission.json    # 权限 schema（可选）
   ├── requirements.txt    # 依赖（可选）
   ├── README.md           # 文档（可选）
   └── CHANGELOG.md        # 更新日志（可选）
@@ -82,7 +81,7 @@ core/  ──  核心实现层 (Missevan 适配)
   ─────────────
   PluginManager            # 全生命周期管理
   PluginConfigManager      # 配置读写 + schema 默认值
-  PluginPermissionManager  # 权限配置管理
+  PluginPermissionManager  # 权限自动分配 + 持久化
 ```
 
 ### 事件继承树
@@ -206,7 +205,7 @@ asyncio.run(main())
 
 ### 4. 编写插件
 
-插件继承 `Plugin`（本质是 `Listener`），使用 `@event_handler` 声明事件处理方法，放在 `plugins/` 目录下即可被 Server 自动加载。插件框架会自动注入配置、创建数据目录。
+插件继承 `Plugin`（本质是 `Listener`），使用 `@event_handler` 声明事件处理方法，放在 `plugins/` 目录下即可被 Server 自动加载。插件框架会自动注入配置、权限和数据目录。
 
 **目录结构：**
 
@@ -216,7 +215,6 @@ plugins/
     ├── metadata.yaml         # 插件元数据（必须）
     ├── main.py               # 插件入口（必须）
     ├── _conf_schema.json     # 配置 schema + 默认值（可选）
-    ├── _permission.json      # 权限 schema（可选）
     └── requirements.txt      # 依赖（可选）
 ```
 
@@ -266,7 +264,7 @@ from interfaces.event import event_handler
 from interfaces.event.livestream import LiveMessageEvent, LiveGiftEvent, LiveJoinEvent
 
 class MyPlugin(Plugin):
-    """我的第一个插件 —— 演示 config / data_dir 用法"""
+    """我的第一个插件 —— 演示 config / permissions / data_dir 用法"""
 
     async def initialize(self) -> None:
         # self.config 已由框架自动注入（包含 schema 默认值）
@@ -274,6 +272,9 @@ class MyPlugin(Plugin):
         if cfg.get("welcome_enabled"):
             print(f"[{self.name}] 插件就绪 (plugin_id={self.plugin_id})")
         print(f"[{self.name}] 配置: {json.dumps(cfg, ensure_ascii=False)}")
+
+        # self.permissions 由 Server 自动分配（对标 BotPermission）
+        print(f"[{self.name}] 权限: {self.permissions}")
 
         # self.data_dir 是插件专属数据目录（自动创建）
         print(f"[{self.name}] 数据目录: {self.data_dir}")
@@ -438,15 +439,38 @@ class MyPlugin(Plugin):
 
 运行时配置文件存储在 `data/config/{plugin_name}_config.json`。
 
-#### 权限配置
+#### 权限管理
 
-插件目录下放置 `_permission.json` 定义插件级权限项（如 `admin_only`、`max_daily_calls`），框架自动生成默认值并与运行时配置合并。权限数据存储在 `data/permissions/{plugin_name}_permissions.json`。
+插件**无需声明权限文件**。Server 自动为每个插件分配默认权限（与 Bot 默认一致，仅 `SEND_LIVESTREAM_MESSAGE`），管理员可通过 Server API 逐项授予或收回：
 
 ```python
-# 通过 Server API 读写权限
-perms = server.get_plugin_permissions("my_plugin")
-server.update_plugin_permission("my_plugin", "admin_only", True)
+# 查看插件权限信息
+info = server.get_plugin_permissions("my_plugin")
+# {
+#     "permissions": {"SEND_LIVESTREAM_MESSAGE": True, "SEND_GIFT": False, ...},
+#     "effective_flag": 1,
+#     "effective_names": ["SEND_LIVESTREAM_MESSAGE"],
+#     "bot_permissions": [...],
+#     "missing_in_bot": [],
+# }
+
+# 逐项修改权限（立即持久化到 data/permissions/{name}_permissions.json）
+server.update_plugin_permission("my_plugin", "SEND_GIFT", True)
 ```
+
+#### 权限拦截
+
+框架通过 `contextvars` 追踪当前执行的插件，在 Bot 的敏感方法（`send_livestream_message`、`send_livestream_gift`、`send_livestream_backpack`、`get_cookie`）中**实时校验**插件是否拥有对应权限：
+
+```python
+# 插件 handler 中调用 bot 方法
+@event_handler
+def on_gift(self, event: LiveGiftEvent) -> None:
+    # 若插件未授予 SEND_LIVESTREAM_MESSAGE，这里会抛出 CorePermissionException
+    event.livestream.send_message("谢谢礼物！")
+```
+
+权限不足时抛出 `CorePermissionException("插件 'xxx' 缺少 SEND_GIFT 权限")`。非插件调用（Server 直接调用）不受影响，向后兼容。插件可通过 `self.permissions` 字典主动查询自身权限。
 
 #### 数据目录
 
@@ -476,10 +500,9 @@ MissMiss/
 │
 ├── plugins/                      # 🔌 插件目录
 │   └── example_plugin/           # 示例插件
-│       ├── main.py               #   插件入口（演示 config / data_dir）
+│       ├── main.py               #   插件入口（演示 config / permissions / data_dir）
 │       ├── metadata.yaml         #   元数据（含可选字段）
 │       ├── _conf_schema.json     #   配置 schema
-│       ├── _permission.json      #   权限 schema
 │       ├── README.md             #   说明文档
 │       └── CHANGELOG.md          #   更新日志
 │
@@ -507,16 +530,17 @@ MissMiss/
 │       ├── plugin/               #    插件系统实现
 │       │   ├── plugin_manager.py #    PluginManager (全生命周期)
 │       │   ├── config_manager.py #    PluginConfigManager (schema 默认值)
-│       │   └── permission_manager.py # PluginPermissionManager (权限配置)
+│       │   └── permission_manager.py # PluginPermissionManager (权限分配 + 拦截)
 │       ├── server.py             #    Server 实现 (持久化)
 │       ├── logging.py            #    日志系统 (loguru)
 │       └── exceptions.py         #    核心层异常
 │
 └── test/                         # 🧪 演示 & 测试
+    ├── interactive_demo.py       #    交互式 REPL 演示 (28+ 命令)
     ├── bot_demo.py               #    Bot 连接演示
     ├── server_demo.py            #    Server 编排演示
     ├── event_demo.py             #    事件总线演示
-    └── plugin_demo.py            #    插件系统演示 (12 项功能测试)
+    └── plugin_demo.py            #    插件系统演示 (13 项功能测试)
 ```
 
 ## 🛠️ 开发

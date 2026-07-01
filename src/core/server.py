@@ -18,12 +18,14 @@ from core.bot.mis_bot import MissevanBot
 from core.events.bus import EventBus
 from core.livestream.mis_livestream import MissevanLivestream
 from core.plugin.plugin_manager import PluginManager
+from core.plugin.permission_manager import PluginPermissionManager
 from core.exceptions import (
     CoreApiException,
     CoreCookieException,
     CoreBotException,
     CorePluginLoadException,
     CorePluginNotFoundException,
+    CorePluginPermissionException,
 )
 from core.logging import get_logger
 
@@ -87,7 +89,7 @@ class MissevanServer(ServerInterface):
 
         # 恢复 Livestream
         for live_id in state.get("livestreams", []):
-            self._restore_livestream(live_id)
+            await self._restore_livestream(live_id)
 
         # 加载插件
         disabled_plugins: list[str] = state.get("disabled_plugins", [])
@@ -208,22 +210,35 @@ class MissevanServer(ServerInterface):
     async def add_livestream(self, live_id: int) -> MissevanLivestream:
         """添加直播间。
 
-        添加前会主动验证 Bot Cookie 是否有效。
+        添加前会主动验证 Bot Cookie 是否有效，
+        创建后立即获取房间信息（名称、主播、热度等），无需先调用 :meth:`join`。
+
+        若直播间已存在且尚未初始化，会补刷新房间数据。
 
         :param live_id: 直播间 ID
         :return: 直播间实例
         :raises CoreBotException: Bot Cookie 已过期
+        :raises CoreApiException: 房间信息获取失败
         """
         if not await self.verify_bot():
             raise CoreBotException("Bot Cookie 已过期，无法添加直播间")
 
         if live_id in self._livestreams:
-            return self._livestreams[live_id]
+            existing = self._livestreams[live_id]
+            # 如果已存在但从未初始化（例如从持久化恢复），补充刷新
+            if existing._creator is None:  # type: ignore[attr-defined]
+                await existing._refresh()  # type: ignore[attr-defined]
+            return existing
 
         livestream = MissevanLivestream(live_id, self._bot, self._event_bus)
+        await livestream._refresh()  # type: ignore[attr-defined]
         self._livestreams[live_id] = livestream
         self._save_state()
-        _log.info("直播间添加成功: live_id={}", live_id)
+        _log.info(
+            "直播间添加成功: live_id={} name={}",
+            live_id,
+            livestream.room_name,
+        )
         return livestream
 
     def enable_livestream(self, live_id: int) -> None:
@@ -393,36 +408,93 @@ class MissevanServer(ServerInterface):
         return pm.get_plugin_changelog(plugin_name)
 
     # ------------------------------------------------------------------ #
-    # Plugin 权限与配置（新增）
+    # Plugin 权限（Server 自动分配默认值，管理员可修改）
     # ------------------------------------------------------------------ #
 
     def get_plugin_permissions(self, plugin_name: str) -> dict[str, Any]:
-        """获取插件的权限配置。
+        """获取插件的权限信息。
 
         :param plugin_name: 插件名称
-        :return: 权限配置字典
+        :return: 权限信息字典：
+                 - ``permissions`` — 合并后的权限字典（key → bool）
+                 - ``effective_flag`` — 生效的 ``BotPermission`` Flag 值
+                 - ``effective_names`` — 生效的权限名列表
+                 - ``bot_permissions`` — Bot 当前拥有的权限名列表
+                 - ``missing_in_bot`` — 插件启用但 Bot 缺失的权限名
         :raises CorePluginNotFoundException: 插件不存在
         """
         pm = self._require_plugin_manager()
-        # 验证插件存在
-        if pm.get_plugin(plugin_name) is None:
+        metadata = pm.get_plugin(plugin_name)
+        if metadata is None:
             raise CorePluginNotFoundException(plugin_name)
-        return pm.permission_manager.load_permissions(plugin_name)
+
+        # 加载合并后的权限
+        perms_dict = metadata.permissions or {}
+        effective_flag = PluginPermissionManager.to_bot_permission(perms_dict)
+
+        # 以 Bot 实际权限为天花板
+        bot = self._bot if self._bot_available else None
+        if bot is not None:
+            effective_flag = BotPermission(
+                effective_flag.value & bot.permissions.value
+            )
+
+        bot_names = (
+            PluginPermissionManager.to_dict(bot.permissions)
+            if bot
+            else {}
+        )
+        missing = PluginPermissionManager.check_bot_permissions(
+            bot, effective_flag, plugin_name
+        ) if bot else []
+
+        return {
+            "permissions": perms_dict,
+            "effective_flag": effective_flag.value,
+            "effective_names": [
+                k for k, v in perms_dict.items() if v
+            ],
+            "bot_permissions": [
+                k for k, v in bot_names.items() if v
+            ],
+            "missing_in_bot": missing,
+        }
 
     def update_plugin_permission(
-        self, plugin_name: str, key: str, value: Any
+        self, plugin_name: str, key: str, value: bool
     ) -> None:
-        """更新插件的单个权限项。
+        """更新插件的单个权限项，立即持久化（对标 ``update_config_value``）。
 
         :param plugin_name: 插件名称
-        :param key: 权限键
-        :param value: 新值
+        :param key: 权限键名（如 ``"SEND_GIFT"``，必须为 ``BotPermission`` 成员名）
+        :param value: 新值（``True`` 启用，``False`` 禁用）
         :raises CorePluginNotFoundException: 插件不存在
+        :raises CorePluginPermissionException: 无效的权限名
         """
         pm = self._require_plugin_manager()
-        if pm.get_plugin(plugin_name) is None:
+        metadata = pm.get_plugin(plugin_name)
+        if metadata is None:
             raise CorePluginNotFoundException(plugin_name)
+
+        # 校验 key 是否为有效的 BotPermission 成员名
+        try:
+            BotPermission[key]
+        except KeyError:
+            raise CorePluginPermissionException(
+                plugin_name=plugin_name,
+                reason=(
+                    f"无效的权限名 '{key}'，"
+                    f"有效值: {[p.name for p in BotPermission]}"
+                ),
+            )
+
         pm.permission_manager.update_permission(plugin_name, key, value)
+        # 同步更新内存中的元数据
+        if metadata.permissions is not None:
+            metadata.permissions[key] = value
+        _log.info(
+            "插件 [{}] 权限已更新: {} = {}", plugin_name, key, value
+        )
 
     def get_plugin_config_schema(self, plugin_name: str) -> dict[str, Any] | None:
         """获取插件的配置 schema。
@@ -536,8 +608,12 @@ class MissevanServer(ServerInterface):
             _log.warning("Cookie 已过期")
             # TODO 处理 Cookie 过期
 
-    def _restore_livestream(self, live_id: int) -> None:
-        """从持久化数据恢复 Livestream。"""
+    async def _restore_livestream(self, live_id: int) -> None:
+        """从持久化数据恢复 Livestream，补刷新房间数据。"""
         livestream = MissevanLivestream(live_id, self._bot, self._event_bus)
+        try:
+            await livestream._refresh()  # type: ignore[attr-defined]
+        except CoreApiException:
+            _log.warning("Livestream 恢复时房间信息获取失败: live_id={}", live_id)
         self._livestreams[live_id] = livestream
         _log.info("Livestream 已恢复: live_id={}", live_id)

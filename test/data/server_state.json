@@ -1,0 +1,11 @@
+{
+  "disabled_plugins": [],
+  "bot": {
+    "cookie": "FM_SESS=20260218|dnhvk36ia40wrh6sq34umzhju;FM_SESS.sig=BaevsgIIVQnSCgQmr8jWzcAUXDc;buvid3=E99C9364-5977-B203-293C-BC04E30E595A12284infoc;b_nut=1771397212;buvid4=4B9DBA28-E2E5-DDB1-4DED-1DC7DD20E20G12284-026021814-srt1QtOTDHNc%2ByeSyZaCdQ%3D%3D;equip_id=a3b3a924-0c95-11f1-879d-41a6839fa7a1;gray_uid=24797403;acw_tc=2f61f27717715729764824228e66043e82d3f2b005361169a0ba2cfbe26df3;MSESSID=j01duq15q4hd029j47b0gckhor;token=699810e8aa45f24f1e647159%7C8dced024d6edc45d8527fe8a22282bc8%7C1771573480%7Caa66b21d8e2ee768;bmg_af_switch=1;bmg_src_def_domain=i2.hdslb.com",
+    "permissions": 1
+  },
+  "livestreams": [
+    869195063,
+    869190157
+  ]
+}
