@@ -95,6 +95,8 @@ class MissevanServer(ServerInterface):
             plugin_dir="plugins",
             event_bus=self._event_bus,
             config_dir=os.path.join(DATA_DIR, "config"),
+            permission_dir=os.path.join(DATA_DIR, "permissions"),
+            plugin_data_dir=DATA_DIR,
             disabled_plugins=disabled_plugins,
         )
         await self._plugin_manager.load_all()
@@ -269,6 +271,59 @@ class MissevanServer(ServerInterface):
         self._save_state()
         return metadata
 
+    async def install_plugin_from_url(self, url: str) -> PluginMetadata:
+        """从远程 URL 下载并安装插件。
+
+        :param url: 插件 zip 包的远程 URL
+        :return: 插件元数据
+        :raises CorePluginInstallException: 安装失败
+        """
+        pm = self._require_plugin_manager()
+        metadata = await pm.install_plugin(url=url)
+        self._save_state()
+        return metadata
+
+    async def install_plugin_from_local(self, path: str) -> PluginMetadata:
+        """从本地路径安装插件。
+
+        :param path: 本地 zip 文件或目录路径
+        :return: 插件元数据
+        :raises CorePluginInstallException: 安装失败
+        """
+        pm = self._require_plugin_manager()
+        metadata = await pm.install_plugin(local_path=path)
+        self._save_state()
+        return metadata
+
+    async def uninstall_plugin(
+        self,
+        plugin_name: str,
+        delete_config: bool = False,
+        delete_data: bool = False,
+    ) -> None:
+        """卸载插件，可选删除配置和插件目录。
+
+        :param plugin_name: 插件名称
+        :param delete_config: 是否删除配置文件
+        :param delete_data: 是否删除插件目录
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        pm.uninstall_plugin(plugin_name, delete_config, delete_data)
+        self._save_state()
+
+    async def reload_plugin(self, plugin_name: str) -> PluginMetadata:
+        """重载插件。
+
+        :param plugin_name: 插件名称
+        :return: 新的插件元数据
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        metadata = await pm.reload_plugin(plugin_name)
+        self._save_state()
+        return metadata
+
     async def enable_plugin(self, plugin_name: str) -> None:
         """启用一个已加载但被禁用的插件。
 
@@ -325,6 +380,81 @@ class MissevanServer(ServerInterface):
         """
         pm = self._require_plugin_manager()
         return pm.get_plugin_changelog(plugin_name)
+
+    # ------------------------------------------------------------------ #
+    # Plugin 权限与配置（新增）
+    # ------------------------------------------------------------------ #
+
+    def get_plugin_permissions(self, plugin_name: str) -> dict[str, Any]:
+        """获取插件的权限配置。
+
+        :param plugin_name: 插件名称
+        :return: 权限配置字典
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        # 验证插件存在
+        pm._get_plugin(plugin_name)
+        return pm.permission_manager.load_permissions(plugin_name)
+
+    def update_plugin_permission(
+        self, plugin_name: str, key: str, value: Any
+    ) -> None:
+        """更新插件的单个权限项。
+
+        :param plugin_name: 插件名称
+        :param key: 权限键
+        :param value: 新值
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        pm._get_plugin(plugin_name)
+        pm.permission_manager.update_permission(plugin_name, key, value)
+
+    def get_plugin_config_schema(self, plugin_name: str) -> dict[str, Any] | None:
+        """获取插件的配置 schema。
+
+        :param plugin_name: 插件名称
+        :return: 配置 schema 字典，不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        metadata = pm._get_plugin(plugin_name)
+        if metadata.config_schema_path:
+            return pm.config_manager.load_schema(metadata.config_schema_path)
+        return None
+
+    def get_failed_plugins(self) -> list[dict[str, Any]]:
+        """获取加载失败的插件信息列表。
+
+        :return: 失败插件信息列表
+        """
+        if self._plugin_manager is None:
+            return []
+        return self._plugin_manager.get_failed_plugins()
+
+    async def retry_failed_plugin(self, dir_name: str) -> PluginMetadata:
+        """重试加载之前失败的插件。
+
+        :param dir_name: 插件目录名
+        :return: 插件元数据
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        metadata = await pm.retry_failed_plugin(dir_name)
+        self._save_state()
+        return metadata
+
+    def get_plugin_data_dir(self, plugin_name: str) -> str:
+        """获取插件的专属数据目录。
+
+        :param plugin_name: 插件名称
+        :return: 数据目录绝对路径
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        pm = self._require_plugin_manager()
+        pm._get_plugin(plugin_name)
+        return pm.get_plugin_data_dir(plugin_name)
 
     # ------------------------------------------------------------------ #
     # 持久化

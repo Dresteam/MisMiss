@@ -18,6 +18,12 @@ class Plugin(Listener, ABC):
     插件可直接使用 :func:`~interfaces.event.event_handler.event_handler`
     装饰器标记事件处理方法，由 :class:`~core.events.bus.EventBus` 自动扫描注册。
 
+    **注入属性**（由 PluginManager 在实例化后设置）：
+
+    - :attr:`name` — 插件名称
+    - :attr:`author` — 插件作者
+    - :attr:`plugin_id` — 插件唯一标识（``{author}/{name}``）
+
     **生命周期钩子**（均可选覆写）：
 
     - :meth:`initialize` — 插件加载、注册到事件总线后调用
@@ -31,7 +37,8 @@ class Plugin(Listener, ABC):
 
         class MyPlugin(Plugin):
             async def initialize(self) -> None:
-                print("插件初始化完成")
+                print(f"插件 {self.name} 初始化完成")
+                # 可通过 self.config 访问配置
 
             @event_handler
             def on_message(self, event: LiveMessageEvent) -> None:
@@ -39,6 +46,39 @@ class Plugin(Listener, ABC):
 
     .. versionadded:: 1.1
     """
+
+    # ------------------------------------------------------------------ #
+    # 注入属性（由 PluginManager 设置）
+    # ------------------------------------------------------------------ #
+
+    name: str = ""
+    """插件名称，由 PluginManager 从 metadata.yaml 注入。"""
+
+    author: str = ""
+    """插件作者，由 PluginManager 从 metadata.yaml 注入。"""
+
+    plugin_id: str = ""
+    """插件唯一标识（``{author}/{name}``），由 PluginManager 注入。"""
+
+    data_dir: str = ""
+    """插件专属数据目录（``data/{plugin_name}/``），由 PluginManager 注入。
+
+    插件可将自定义数据文件（数据库、缓存等）存储在此目录下。
+    目录在插件加载时自动创建，卸载时可通过 ``delete_data=True`` 清理。
+    """
+
+    # ------------------------------------------------------------------ #
+    # 构造
+    # ------------------------------------------------------------------ #
+
+    def __init__(self, config: dict | None = None) -> None:
+        """初始化插件。
+
+        :param config: 插件运行时配置（已合并 ``_conf_schema.json`` 默认值）。
+                       由 PluginManager 在加载时自动传入。
+        """
+        self.config: dict | None = config
+        """插件运行时配置字典。若插件无 ``_conf_schema.json`` 则为 ``None``。"""
 
     # ------------------------------------------------------------------ #
     # 生命周期钩子

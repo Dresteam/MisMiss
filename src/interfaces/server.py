@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from interfaces.bot.bot import Bot, BotPermission
@@ -134,6 +134,52 @@ class Server(ABC):
         ...
 
     @abstractmethod
+    async def install_plugin_from_url(self, url: str) -> "PluginMetadata":
+        """从远程 URL 下载并安装插件。
+
+        :param url: 插件 zip 包的远程 URL
+        :return: 插件元数据
+        :raises CorePluginInstallException: 安装失败
+        """
+        ...
+
+    @abstractmethod
+    async def install_plugin_from_local(self, path: str) -> "PluginMetadata":
+        """从本地路径安装插件。
+
+        :param path: 本地 zip 文件或目录路径
+        :return: 插件元数据
+        :raises CorePluginInstallException: 安装失败
+        """
+        ...
+
+    @abstractmethod
+    async def uninstall_plugin(
+        self,
+        plugin_name: str,
+        delete_config: bool = False,
+        delete_data: bool = False,
+    ) -> None:
+        """卸载插件，可选删除配置和插件目录。
+
+        :param plugin_name: 插件名称
+        :param delete_config: 是否删除配置文件
+        :param delete_data: 是否删除插件目录
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    async def reload_plugin(self, plugin_name: str) -> "PluginMetadata":
+        """重载插件。
+
+        :param plugin_name: 插件名称
+        :return: 新的插件元数据
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
     async def enable_plugin(self, plugin_name: str) -> None:
         """启用一个已加载但被禁用的插件。
 
@@ -190,6 +236,73 @@ class Server(ABC):
 
         :param plugin_name: 插件名称
         :return: CHANGELOG 文本内容，若不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    # ------------------------------------------------------------------ #
+    # Plugin 权限与配置（新增）
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def get_plugin_permissions(self, plugin_name: str) -> "dict[str, Any]":
+        """获取插件的权限配置。
+
+        :param plugin_name: 插件名称
+        :return: 权限配置字典
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    def update_plugin_permission(
+        self, plugin_name: str, key: str, value: Any
+    ) -> None:
+        """更新插件的单个权限项。
+
+        :param plugin_name: 插件名称
+        :param key: 权限键
+        :param value: 新值
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    def get_plugin_config_schema(self, plugin_name: str) -> "dict[str, Any] | None":
+        """获取插件的配置 schema。
+
+        :param plugin_name: 插件名称
+        :return: 配置 schema 字典，不存在则返回 ``None``
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    def get_failed_plugins(self) -> "list[dict[str, Any]]":
+        """获取加载失败的插件信息列表。
+
+        :return: 失败插件信息列表
+        """
+        ...
+
+    @abstractmethod
+    async def retry_failed_plugin(self, dir_name: str) -> "PluginMetadata":
+        """重试加载之前失败的插件。
+
+        :param dir_name: 插件目录名
+        :return: 插件元数据
+        :raises CorePluginNotFoundException: 插件不存在
+        """
+        ...
+
+    @abstractmethod
+    def get_plugin_data_dir(self, plugin_name: str) -> str:
+        """获取插件的专属数据目录。
+
+        目录自动创建，插件可将自定义数据文件存储在此。
+
+        :param plugin_name: 插件名称
+        :return: 数据目录绝对路径
         :raises CorePluginNotFoundException: 插件不存在
         """
         ...

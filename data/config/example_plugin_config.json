@@ -1,4 +1,6 @@
 {
   "greeting_enabled": true,
-  "max_message_length": 500
+  "max_message_length": 500,
+  "gift_threshold": 100.0,
+  "allowed_rooms": []
 }

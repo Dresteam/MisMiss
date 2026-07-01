@@ -110,6 +110,23 @@ class EventBus(EventManager):
                     handler(event)
 
     # ------------------------------------------------------------------ #
+    # 查询
+    # ------------------------------------------------------------------ #
+
+    def get_listener_handlers(self, listener: Listener) -> dict[str, type]:
+        """查询指定监听器注册的所有事件处理器。
+
+        :param listener: 监听器实例
+        :return: 方法名 → 事件类型的映射
+        """
+        result: dict[str, type] = {}
+        for event_type, handlers in self._handlers.items():
+            for _listener, method in handlers:
+                if _listener is listener:
+                    result[method.__name__] = event_type
+        return result
+
+    # ------------------------------------------------------------------ #
     # 内部方法
     # ------------------------------------------------------------------ #
 
