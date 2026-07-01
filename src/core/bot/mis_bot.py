@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 
 from interfaces.bot.bot import Bot, BotPermission
 from interfaces.entity.gift import Gift
+from interfaces.plugin.plugin import current_plugin
 from ..logging import get_logger
 from ..exceptions import (
     CoreApiException,
@@ -123,6 +124,26 @@ class MissevanBot(Bot):
                 required=str(perm.name),
             )
 
+    def _check_plugin_permission(self, perm: BotPermission) -> None:
+        """校验当前插件是否拥有指定权限。
+
+        通过 :data:`current_plugin` 上下文变量获取正在执行事件处理器
+        的插件实例。若非插件调用（如 Server 直接调用），静默通过。
+
+        :param perm: 所需权限
+        :raises CorePermissionException: 插件缺乏该权限
+        """
+        plugin = current_plugin.get()
+        if plugin is None or plugin.permissions is None:
+            return  # 非插件调用或插件无权限配置，静默通过
+
+        perm_name = perm.name
+        if not plugin.permissions.get(perm_name, False):
+            raise CorePermissionException(
+                f"插件 '{plugin.name}' 缺少 {perm_name} 权限",
+                required=perm_name,
+            )
+
     # ------------------------------------------------------------------ #
     # User 属性
     # ------------------------------------------------------------------ #
@@ -212,6 +233,7 @@ class MissevanBot(Bot):
         """
         self._check_enabled()
         self._check_permission(BotPermission.SEND_LIVESTREAM_MESSAGE)
+        self._check_plugin_permission(BotPermission.SEND_LIVESTREAM_MESSAGE)
         await self._ensure_initialized()
 
         async with self._queue_lock:
@@ -222,8 +244,20 @@ class MissevanBot(Bot):
             self._message_queue.sort(key=lambda x: x.priority, reverse=True)
 
             # 如果消费者未运行则启动
-            if self._consumer_task is None or self._consumer_task.done():
+            consumer_idle = (
+                self._consumer_task is None or self._consumer_task.done()
+            )
+            if consumer_idle:
                 self._consumer_task = asyncio.create_task(self._consume_queue())
+                _log.debug(
+                    "消费者已启动 直播间={} 队列长度={}", live_id, len(self._message_queue)
+                )
+            else:
+                _log.debug(
+                    "消息已入队 直播间={} 队列长度={}（消费者运行中）",
+                    live_id,
+                    len(self._message_queue),
+                )
 
     # ------------------------------------------------------------------ #
     # 消息队列消费者
@@ -239,34 +273,55 @@ class MissevanBot(Bot):
         调用方（:meth:`send_livestream_message`）仅在消费者
         未运行时才会启动新的消费任务。
         """
-        # 取一条消息
-        async with self._queue_lock:
-            if not self._message_queue:
-                return
-            item = self._message_queue.pop(0)
-
-        # 发送（失败不阻塞后续消息，包内自动检查 Cookie）
         try:
-            await self._safe_call(
-                lambda: MessageSendAPI(self.__cookie).api(
-                    item.live_id, item.message
+            # 取一条消息
+            async with self._queue_lock:
+                if not self._message_queue:
+                    _log.debug("消费者退出：队列为空")
+                    return
+                item = self._message_queue.pop(0)
+                _log.info(
+                    "发送消息 直播间={} 内容={} 优先级={} 剩余={}",
+                    item.live_id,
+                    item.message,
+                    item.priority,
+                    len(self._message_queue),
                 )
-            )
-        except CoreApiException:
-            _log.warning("消息发送失败 直播间={} 内容={}", item.live_id, item.message)
-        except CoreCookieException:
-            _log.error("Cookie 已过期，清空消息队列")
-            self._message_queue.clear()
 
-        # 发送间隔，防止请求过于频繁
-        await asyncio.sleep(0.1)
+            # 发送（失败不阻塞后续消息，包内自动检查 Cookie）
+            try:
+                await self._safe_call(
+                    lambda: MessageSendAPI(self.__cookie).api(
+                        item.live_id, item.message
+                    )
+                )
+            except CoreApiException as e:
+                _log.warning(
+                    "消息发送失败 直播间={} 内容={} 原因={}",
+                    item.live_id,
+                    item.message,
+                    e,
+                )
+            except CoreCookieException:
+                _log.error("Cookie 已过期，清空消息队列（{} 条）",
+                           len(self._message_queue) + 1)
+                async with self._queue_lock:
+                    self._message_queue.clear()
+                return  # Cookie 过期后不再续调
 
-        # 判断队列是否还有剩余，有则续调自身
-        async with self._queue_lock:
-            has_more = bool(self._message_queue)
+            # 发送间隔，防止请求过于频繁
+            await asyncio.sleep(0.1)
 
-        if has_more:
-            self._consumer_task = asyncio.create_task(self._consume_queue())
+            # 判断队列是否还有剩余，有则续调自身
+            async with self._queue_lock:
+                has_more = bool(self._message_queue)
+
+            if has_more:
+                self._consumer_task = asyncio.create_task(self._consume_queue())
+            else:
+                _log.debug("消费者退出：队列已清空")
+        except Exception:
+            _log.exception("消费者发生未预期异常，任务终止")
 
     async def send_private_message(self, user_id: int, message: str) -> None:
         """向指定用户发送私信（后续扩展）。
@@ -279,6 +334,7 @@ class MissevanBot(Bot):
         """
         self._check_enabled()
         self._check_permission(BotPermission.SEND_PRIVATE_MESSAGE)
+        self._check_plugin_permission(BotPermission.SEND_PRIVATE_MESSAGE)
         await self._ensure_initialized()
         # TODO: 后续接入私信 API
         raise NotImplementedError("私信功能尚未实现")
@@ -332,6 +388,7 @@ class MissevanBot(Bot):
         """
         self._check_enabled()
         self._check_permission(BotPermission.SEND_GIFT)
+        self._check_plugin_permission(BotPermission.SEND_GIFT)
         await self._ensure_initialized()
         await self._safe_call(
             lambda: GiftSendAPI(self.__cookie).api(live_id, gift_id, num)
@@ -349,6 +406,7 @@ class MissevanBot(Bot):
         """
         self._check_enabled()
         self._check_permission(BotPermission.SEND_BACKPACK_GIFT)
+        self._check_plugin_permission(BotPermission.SEND_BACKPACK_GIFT)
         await self._ensure_initialized()
         await self._safe_call(
             lambda: BackpackSendAPI(self.__cookie).api(live_id, gift_id, num)
@@ -365,6 +423,7 @@ class MissevanBot(Bot):
         """
         self._check_enabled()
         self._check_permission(BotPermission.EXPOSE_COOKIE)
+        self._check_plugin_permission(BotPermission.EXPOSE_COOKIE)
         return self.__cookie
 
     # ------------------------------------------------------------------ #

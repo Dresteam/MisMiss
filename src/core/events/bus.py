@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from interfaces.event.event_manager import EventManager
+from interfaces.plugin.plugin import Plugin, current_plugin
 
 if TYPE_CHECKING:
     from interfaces.event.event import Event
@@ -97,6 +98,8 @@ class EventBus(EventManager):
         """触发事件。
 
         按事件实例的类型以及其所有父类型匹配处理函数并依次调用。
+        若 handler 属于某个 ``Plugin``，自动设置 :data:`current_plugin`
+        上下文变量，以便 Bot 方法校验插件级权限。
 
         :param event: 事件实例
         :param clazz: 指定分发的事件类型；若为 ``None`` 则按 ``type(event)`` 分发
@@ -107,7 +110,15 @@ class EventBus(EventManager):
         for base_type in target_type.__mro__:
             if base_type in self._handlers:
                 for _listener, handler in self._handlers[base_type]:
-                    handler(event)
+                    # 若监听器是 Plugin 实例，设置插件上下文
+                    token = None
+                    if isinstance(_listener, Plugin):
+                        token = current_plugin.set(_listener)
+                    try:
+                        handler(event)
+                    finally:
+                        if token is not None:
+                            current_plugin.reset(token)
 
     # ------------------------------------------------------------------ #
     # 查询

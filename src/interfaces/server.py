@@ -259,24 +259,34 @@ class Server(ABC):
 
     @abstractmethod
     def get_plugin_permissions(self, plugin_name: str) -> "dict[str, Any]":
-        """获取插件的权限配置。
+        """获取插件的权限信息。
+
+        返回字典包含：
+        - ``permissions`` — 合并后的权限字典（key → bool）
+        - ``effective_flag`` — 生效的 ``BotPermission`` Flag 值
+        - ``effective_names`` — 生效的权限名列表
+        - ``bot_permissions`` — Bot 当前拥有的权限名列表
+        - ``missing_in_bot`` — 插件启用但 Bot 缺失的权限名
 
         :param plugin_name: 插件名称
-        :return: 权限配置字典
+        :return: 权限信息字典
         :raises CorePluginNotFoundException: 插件不存在
         """
         ...
 
     @abstractmethod
     def update_plugin_permission(
-        self, plugin_name: str, key: str, value: Any
+        self, plugin_name: str, key: str, value: bool
     ) -> None:
-        """更新插件的单个权限项。
+        """更新插件的单个权限项，立即持久化。
+
+        对标 :meth:`PluginConfigManager.update_config_value` 模式。
 
         :param plugin_name: 插件名称
-        :param key: 权限键
-        :param value: 新值
+        :param key: 权限键名（如 ``"SEND_GIFT"``，必须为 ``BotPermission`` 成员名）
+        :param value: 新值（``True`` 启用，``False`` 禁用）
         :raises CorePluginNotFoundException: 插件不存在
+        :raises CorePluginPermissionException: 无效的权限名
         """
         ...
 

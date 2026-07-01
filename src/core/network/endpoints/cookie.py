@@ -29,16 +29,8 @@ class DefaultCookieAPI(API):
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(Urls.DEFAULT_COOKIE)
-
                 if resp.status_code != 200:
                     return ""
-
-                cookie_headers = resp.headers.get_all("set-cookie")
-                parts: list[str] = []
-                for header in cookie_headers:
-                    parts.append(header.split(";")[0])
-
-                return ";".join(parts)
-
+                return resp.headers.get("set-cookie")
         except Exception:
             return ""

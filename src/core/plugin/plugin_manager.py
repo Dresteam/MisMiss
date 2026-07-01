@@ -47,9 +47,6 @@ _log = get_logger(__name__)
 _METADATA_FILENAMES = ("metadata.yaml", "metadata.yml")
 """元数据文件名（按优先级排序）。"""
 
-_PERMISSION_FILENAME = "_permission.json"
-"""权限 schema 文件名。"""
-
 _CONF_SCHEMA_FILENAME = "_conf_schema.json"
 """配置 schema 文件名。"""
 
@@ -449,33 +446,28 @@ class PluginManager:
             except CorePluginConfigException as e:
                 _log.warning("插件 [{}] 配置加载失败: {}", metadata.name, e)
 
-        # 7. 加载权限配置（_permission.json）
-        perm_schema = PluginPermissionManager.load_permission_schema(
-            plugin_path
+        # 7. 加载权限（Server 自动分配默认权限，对标 Bot 默认值）
+        plugin_permissions: dict[str, bool] = (
+            self._permission_mgr.ensure_permissions(metadata.name)
         )
-        if perm_schema:
-            permission_config = (
-                self._permission_mgr.load_permissions_with_defaults(
-                    metadata.name,
-                    perm_schema,
-                )
-            )
-            metadata.permission_config = permission_config
-            _log.debug(
-                "插件 [{}] 权限配置已加载 ({} 项)",
-                metadata.name,
-                len(permission_config),
-            )
+        _log.debug(
+            "插件 [{}] 权限已加载 ({} 项): {}",
+            metadata.name,
+            len(plugin_permissions),
+            [k for k, v in plugin_permissions.items() if v],
+        )
 
         # 8. 判断是否被禁用
         is_disabled = metadata.name in self._disabled_plugins
 
-        # 9. 实例化插件
+        # 9. 实例化插件（传入 config 和 permissions）
         try:
+            kwargs: dict = {}
             if plugin_config is not None:
-                instance = plugin_cls(config=plugin_config)
-            else:
-                instance = plugin_cls()
+                kwargs["config"] = plugin_config
+            if plugin_permissions is not None:
+                kwargs["permissions"] = plugin_permissions
+            instance = plugin_cls(**kwargs)
         except Exception as e:
             raise CorePluginLoadException(
                 dir_name,
@@ -496,6 +488,7 @@ class PluginManager:
         metadata.module = module
         metadata.module_path = import_path
         metadata.config = plugin_config
+        metadata.permissions = plugin_permissions
         metadata.enabled = not is_disabled
 
         # 10. 加载 README

@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from core.events import EventBus
 from core.plugin import PluginManager, PluginConfigManager, PluginPermissionManager
+from interfaces.plugin import Plugin
 from core.exceptions import (
     CorePluginNotFoundException,
 )
@@ -154,34 +155,171 @@ def main() -> None:
         cfg.update_config_value(p.name, "greeting_enabled", True)
 
     # ================================================================ #
-    # 6. 权限管理
+    # 6. 权限管理（Server 自动分配默认值，可逐项修改 + 持久化）
     # ================================================================ #
-    banner("[6] Permission management (_permission.json)")
+    banner("[6] Permission management (Server defaults, modifiable, persisted)")
     ppm = pm.permission_manager
+
+    from interfaces.bot import BotPermission
 
     for p in plugins:
         print(f"  --- {p.name} ---")
-        perm_schema = PluginPermissionManager.load_permission_schema(
-            str(Path(plugin_dir) / (p.root_dir_name or ""))
-        )
-        if perm_schema:
-            print(f"    Permission schema: {perm_schema}")
-            defaults = ppm.generate_default_permissions(perm_schema)
-            print(f"    Generated defaults: {defaults}")
-            merged = ppm.load_permissions_with_defaults(p.name, perm_schema)
-            print(f"    Merged permissions: {merged}")
+
+        # 6a. 默认权限（Server 自动分配）
+        defaults = PluginPermissionManager.default_permissions()
+        print(f"    Default permissions (server-assigned): {defaults}")
+
+        # 6b. 加载当前权限（首次自动分配默认值）
+        perms = ppm.ensure_permissions(p.name)
+        print(f"    Current permissions: {perms}")
+
+        # 6c. 插件实例注入的 permissions
+        if p.plugin_instance:
+            print(f"    Instance permissions: {p.plugin_instance.permissions}")
+
+        # 6d. 转 BotPermission Flag
+        flag = PluginPermissionManager.to_bot_permission(perms)
+        print(f"    → BotPermission Flag: {flag} (value={flag.value})")
+        assert flag & BotPermission.SEND_LIVESTREAM_MESSAGE
+        assert not (flag & BotPermission.EXPOSE_COOKIE)
+
+        # 6e. Round-trip
+        d2 = PluginPermissionManager.to_dict(flag)
+        print(f"    → Round-trip: {d2}")
+
+        # 6f. 修改权限 — 授予 SEND_GIFT
+        ppm.update_permission(p.name, "SEND_GIFT", True)
+        val = ppm.load_permissions(p.name)
+        print(f"    After granting SEND_GIFT: {val}")
+        assert val is not None and val["SEND_GIFT"] is True
+
+        # 6g. 验证持久化 — 从磁盘重新加载
+        reloaded = ppm.load_permissions(p.name)
+        print(f"    Reloaded from disk: SEND_GIFT = {reloaded['SEND_GIFT'] if reloaded else 'N/A'}")
+
+        # 6h. 恢复
+        ppm.update_permission(p.name, "SEND_GIFT", False)
+        print("    Restored SEND_GIFT to False")
+
+    # ================================================================ #
+    # 6.5. 插件权限拦截验证（current_plugin ContextVar + Bot 校验）
+    # ================================================================ #
+    banner("[6.5] Permission enforcement (Plugin -> Bot gate)")
+    from interfaces.bot import BotPermission as BP
+    from interfaces.plugin.plugin import current_plugin
+    from core.bot.mis_bot import MissevanBot
+    from core.exceptions import CorePermissionException
+
+    # 创建一个拥有全部权限的模拟 Bot
+    all_perms = BP(0)
+    for p in BP:
+        all_perms |= p
+    mock_bot = MissevanBot("mock_cookie", permissions=all_perms)
+    mock_bot._initialized = True
+
+    # 创建一个权限受限的模拟插件
+    restricted_plugin = Plugin(
+        config={},
+        permissions={
+            "SEND_LIVESTREAM_MESSAGE": True,   # 有此权限
+            "SEND_GIFT": False,                 # 无此权限
+            "EXPOSE_COOKIE": False,             # 无此权限（敏感）
+        },
+    )
+    restricted_plugin.name = "restricted_demo"
+
+    # 创建一个无 permissions 的插件（向后兼容 — 静默通过）
+    legacy_plugin = Plugin(config={}, permissions=None)
+    legacy_plugin.name = "legacy_demo"
+
+    print("  --- Scenario 1: 插件有权限 → 通过 ---")
+    token = current_plugin.set(restricted_plugin)
+    try:
+        mock_bot._check_plugin_permission(BP.SEND_LIVESTREAM_MESSAGE)
+        print("    [PASS] SEND_LIVESTREAM_MESSAGE 已授予，校验通过")
+    except CorePermissionException as e:
+        print(f"    [FAIL] {e}")
+    finally:
+        current_plugin.reset(token)
+
+    print("  --- Scenario 2: 插件无权限 → 拒绝 ---")
+    token = current_plugin.set(restricted_plugin)
+    try:
+        mock_bot._check_plugin_permission(BP.SEND_GIFT)
+        print("    [FAIL] 应拒绝但通过了")
+    except CorePermissionException as e:
+        if "restricted_demo" in str(e) and "SEND_GIFT" in str(e):
+            print(f"    [PASS] 正确拒绝: {e}")
         else:
-            print("    (no _permission.json)")
+            print(f"    [FAIL] 异常内容不符: {e}")
+    finally:
+        current_plugin.reset(token)
 
-        # 读写测试
-        ppm.update_permission(p.name, "admin_only", True)
-        val = ppm.get_permission(p.name, "admin_only")
-        print(f"    update_permission test: admin_only = {val}")
-        ppm.update_permission(p.name, "admin_only", False)
+    print("  --- Scenario 3: 插件无 EXPOSE_COOKIE → 拒绝 ---")
+    token = current_plugin.set(restricted_plugin)
+    try:
+        mock_bot._check_plugin_permission(BP.EXPOSE_COOKIE)
+        print("    [FAIL] 应拒绝但通过了")
+    except CorePermissionException as e:
+        print(f"    [PASS] 正确拒绝: {e}")
+    finally:
+        current_plugin.reset(token)
 
-    # ================================================================ #
-    # 7. 插件数据目录
-    # ================================================================ #
+    print("  --- Scenario 4: 非插件调用 → 静默通过 ---")
+    # 确保 current_plugin 为 None（普通调用）
+    try:
+        mock_bot._check_plugin_permission(BP.SEND_GIFT)
+        print("    [PASS] 非插件调用，直接通过（Bot 自身权限检查另有保障）")
+    except CorePermissionException as e:
+        print(f"    [FAIL] {e}")
+
+    print("  --- Scenario 5: 旧插件无 permissions dict → 向后兼容 ---")
+    token = current_plugin.set(legacy_plugin)
+    try:
+        mock_bot._check_plugin_permission(BP.EXPOSE_COOKIE)
+        print("    [PASS] 无 permissions 配置的插件静默通过（向后兼容）")
+    except CorePermissionException as e:
+        print(f"    [FAIL] {e}")
+    finally:
+        current_plugin.reset(token)
+
+    print("  --- Scenario 6: 运行时调整权限后立即生效 ---")
+    # 先拒绝
+    token = current_plugin.set(restricted_plugin)
+    try:
+        mock_bot._check_plugin_permission(BP.SEND_GIFT)
+        print("    [FAIL] 调整前已通过（不应该）")
+    except CorePermissionException:
+        pass  # expected
+    finally:
+        current_plugin.reset(token)
+    # 修改权限为 True
+    restricted_plugin.permissions["SEND_GIFT"] = True  # type: ignore[index]
+    # 再次校验 — 应通过
+    token = current_plugin.set(restricted_plugin)
+    try:
+        mock_bot._check_plugin_permission(BP.SEND_GIFT)
+        print("    [PASS] SEND_GIFT 改为 True 后校验通过（运行时生效）")
+    except CorePermissionException as e:
+        print(f"    [FAIL] {e}")
+    finally:
+        current_plugin.reset(token)
+    # 恢复
+    restricted_plugin.permissions["SEND_GIFT"] = False  # type: ignore[index]
+
+    print("  --- Scenario 7: 完整发送链路（send_livestream_message 入口）---")
+    token = current_plugin.set(restricted_plugin)
+    try:
+        # 模拟 send_livestream_message 的权限检查顺序：
+        # ① Bot 启用检查 → ② Bot 权限检查 → ③ 插件权限检查 ★
+        mock_bot._check_enabled()
+        mock_bot._check_permission(BP.SEND_LIVESTREAM_MESSAGE)
+        mock_bot._check_plugin_permission(BP.SEND_LIVESTREAM_MESSAGE)
+        print("    [PASS] 三级检查全部通过：启用→Bot权限→插件权限")
+    except CorePermissionException as e:
+        print(f"    [FAIL] {e}")
+    finally:
+        current_plugin.reset(token)
     banner("[7] Plugin data directory (data_dir)")
     for p in plugins:
         print(f"  --- {p.name} ---")

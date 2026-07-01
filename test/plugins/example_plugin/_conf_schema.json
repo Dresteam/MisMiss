@@ -1,0 +1,22 @@
+{
+    "greeting_enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否在插件初始化时输出问候语"
+    },
+    "max_message_length": {
+        "type": "int",
+        "default": 500,
+        "description": "弹幕消息最大显示长度，超过则截断"
+    },
+    "gift_threshold": {
+        "type": "float",
+        "default": 100.0,
+        "description": "礼物价值阈值（电池），低于此值的礼物不记录"
+    },
+    "allowed_rooms": {
+        "type": "array",
+        "default": [],
+        "description": "允许监听的直播间 ID 列表，为空表示监听全部"
+    }
+}
