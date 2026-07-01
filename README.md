@@ -23,9 +23,9 @@
 
 - 📐 **MIST 标准兼容** — 严格遵循 MIST 接口规范，跨平台复用业务逻辑
 - 🧩 **清晰的分层架构** — 接口层（`interfaces`）定义契约，核心层（`core`）负责实现
-- 🔌 **插件系统** — 支持加载/卸载/启用/禁用插件，配置管理，独立元数据
+- 🔌 **插件系统** — 启动/停止/重载/安装/卸载 全生命周期；`_conf_schema.json` 配置自动注入默认值；`_permission.json` 权限配置；`requirements.txt` 自动安装；插件专属 `data/{name}/` 数据目录
 - ⚡ **事件驱动模型** — 基于 MRO 的事件分发，支持按事件类型继承树精确路由
-- 🔒 **权限控制** — `BotPermission` Flag 位权限，敏感操作（如获取 Cookie）受 name-mangling 保护
+- 🔒 **权限控制** — `BotPermission` Flag 位权限，敏感操作（如获取 Cookie）受 name-mangling 保护；插件级权限 schema 独立管理
 - 💬 **优先级消息队列** — 消息按优先级排序发送，后台异步消费，自动限流
 - 🔄 **WebSocket 长连接** — Brotli 解压、心跳维持、自动重连（指数退避）
 - 💾 **状态持久化** — Server 启动自动恢复 Bot、直播间和插件状态，修改时自动保存
@@ -41,7 +41,10 @@ plugins/  ──  插件目录
   ├── main.py             # 插件类（继承 Plugin）
   ├── metadata.yaml       # 元数据（必须）
   ├── _conf_schema.json   # 配置 schema（可选）
-  └── README.md           # 文档（可选）
+  ├── _permission.json    # 权限 schema（可选）
+  ├── requirements.txt    # 依赖（可选）
+  ├── README.md           # 文档（可选）
+  └── CHANGELOG.md        # 更新日志（可选）
 
 test/  ──  演示程序
 ═══════════════════════════════════════════════════════
@@ -57,7 +60,7 @@ interfaces/  ──  抽象接口层 (MIST 标准)
   Gift                 │  └─ EventBus       Server
   Medal                └─ @event_handler    BotPermission
   Question
-                       Plugin (新增)
+                       Plugin
                        ├─ Plugin (ABC)
                        └─ PluginMetadata
 
@@ -75,10 +78,11 @@ core/  ──  核心实现层 (Missevan 适配)
   用户·礼物·勋章       EventBus              持久化调度器
   6 种事件数据类       (MRO 分发)
 
-  plugin/ (新增)       logging.py · exceptions.py
+  plugin/
   ─────────────
-  PluginManager          # 全生命周期管理
-  PluginConfigManager    # 配置读写
+  PluginManager            # 全生命周期管理
+  PluginConfigManager      # 配置读写 + schema 默认值
+  PluginPermissionManager  # 权限配置管理
 ```
 
 ### 事件继承树
@@ -202,15 +206,18 @@ asyncio.run(main())
 
 ### 4. 编写插件
 
-插件继承 `Plugin`（本质是 `Listener`），使用 `@event_handler` 声明事件处理方法，放在 `plugins/` 目录下即可被 Server 自动加载。
+插件继承 `Plugin`（本质是 `Listener`），使用 `@event_handler` 声明事件处理方法，放在 `plugins/` 目录下即可被 Server 自动加载。插件框架会自动注入配置、创建数据目录。
 
 **目录结构：**
 
 ```
 plugins/
 └── my_plugin/
-    ├── metadata.yaml       # 插件元数据（必须）
-    └── main.py             # 插件入口（必须）
+    ├── metadata.yaml         # 插件元数据（必须）
+    ├── main.py               # 插件入口（必须）
+    ├── _conf_schema.json     # 配置 schema + 默认值（可选）
+    ├── _permission.json      # 权限 schema（可选）
+    └── requirements.txt      # 依赖（可选）
 ```
 
 **metadata.yaml：**
@@ -220,33 +227,94 @@ name: my_plugin
 desc: 我的第一个插件
 author: YourName
 version: 1.0.0
+
+# 可选字段
+short_desc: 监听弹幕和礼物的示例插件
+repo: https://github.com/YourName/my-plugin
+display_name: 我的插件
+```
+
+**_conf_schema.json（可选）：**
+
+```json
+{
+    "welcome_enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否在新用户进入时发送欢迎消息"
+    },
+    "max_message_length": {
+        "type": "int",
+        "default": 500,
+        "description": "弹幕最大显示长度"
+    },
+    "gift_threshold": {
+        "type": "float",
+        "default": 100.0,
+        "description": "礼物价值过滤阈值"
+    }
+}
 ```
 
 **main.py：**
 
 ```python
+import json
+import os
 from interfaces.plugin import Plugin
 from interfaces.event import event_handler
-from interfaces.event.livestream import LiveMessageEvent, LiveGiftEvent
+from interfaces.event.livestream import LiveMessageEvent, LiveGiftEvent, LiveJoinEvent
 
 class MyPlugin(Plugin):
-    """我的第一个插件"""
+    """我的第一个插件 —— 演示 config / data_dir 用法"""
 
     async def initialize(self) -> None:
-        """插件加载后调用"""
-        print("插件初始化完成！")
+        # self.config 已由框架自动注入（包含 schema 默认值）
+        cfg = self.config or {}
+        if cfg.get("welcome_enabled"):
+            print(f"[{self.name}] 插件就绪 (plugin_id={self.plugin_id})")
+        print(f"[{self.name}] 配置: {json.dumps(cfg, ensure_ascii=False)}")
+
+        # self.data_dir 是插件专属数据目录（自动创建）
+        print(f"[{self.name}] 数据目录: {self.data_dir}")
+        self._load_stats()
 
     async def terminate(self) -> None:
-        """插件卸载前调用"""
-        print("插件已终止。")
+        # 保存数据到 data_dir
+        self._save_stats()
 
     @event_handler
     def on_message(self, event: LiveMessageEvent) -> None:
-        print(f"💬 {event.user.name}: {event.message}")
+        cfg = self.config or {}
+        max_len = cfg.get("max_message_length", 500)
+        msg = event.message[:max_len]
+        print(f"[MSG] {event.user.name}: {msg}")
+        self._stats["messages"] += 1
 
     @event_handler
     def on_gift(self, event: LiveGiftEvent) -> None:
-        print(f"🎁 {event.user.name} 赠送了 {event.gift.num} 个 {event.gift.name}")
+        total = event.gift.price * event.gift.num
+        threshold = (self.config or {}).get("gift_threshold", 100.0)
+        if total >= threshold:
+            print(f"[GIFT] {event.user.name} 赠送 {event.gift.name} x{event.gift.num}")
+        self._stats["gifts"] += 1
+
+    @event_handler
+    def on_join(self, event: LiveJoinEvent) -> None:
+        self._stats["joins"] += 1
+
+    def _load_stats(self):
+        path = os.path.join(self.data_dir, "stats.json")
+        try:
+            with open(path) as f:
+                self._stats = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._stats = {"messages": 0, "gifts": 0, "joins": 0}
+
+    def _save_stats(self):
+        path = os.path.join(self.data_dir, "stats.json")
+        with open(path, "w") as f:
+            json.dump(self._stats, f)
 ```
 
 Server 启动时会自动扫描 `plugins/` 并加载所有插件。你也可以通过 API 手动管理：
@@ -255,16 +323,28 @@ Server 启动时会自动扫描 `plugins/` 并加载所有插件。你也可以�
 # 查看所有插件
 for p in server.plugins:
     print(f"{p.name} v{p.version} by {p.author}")
+    print(f"  plugin_id: {p.plugin_id}")
+    print(f"  display_name: {p.display_name}")
 
 # 查看插件的事件处理器
 handlers = server.list_plugin_handlers("my_plugin")
-# {"on_message": LiveMessageEvent, "on_gift": LiveGiftEvent}
+# {"on_message": LiveMessageEvent, "on_gift": LiveGiftEvent, "on_join": LiveJoinEvent}
 
-# 禁用插件（取消事件注册，保留实例）
+# 禁用插件（取消事件注册，保留实例和文件）
 await server.disable_plugin("my_plugin")
 
 # 重新启用
 await server.enable_plugin("my_plugin")
+
+# 重载插件（代码更新后热加载）
+await server.reload_plugin("my_plugin")
+
+# 安装插件（从 URL 或本地路径）
+await server.install_plugin_from_url("https://example.com/plugin.zip")
+await server.install_plugin_from_local("./my_local_plugin/")
+
+# 卸载插件（可选删除配置和数据目录）
+await server.uninstall_plugin("my_plugin", delete_config=True, delete_data=True)
 
 # 查看插件文档
 readme = server.get_plugin_readme("my_plugin")
@@ -326,30 +406,66 @@ await bot.send_livestream_message(12345, "普通消息", priority=0)
 
 ### 🔌 插件系统
 
-插件系统提供完整的生命周期管理：
+插件系统提供完整的生命周期管理和配置能力：
+
+#### 生命周期
 
 | 功能 | 方法 | 说明 |
 |------|------|------|
-| 加载 | `PluginManager.load_all()` | Server 启动时自动扫描 `plugins/` |
-| 禁用 | `server.disable_plugin(name)` | 取消事件注册，调用 `terminate()`，持久化禁用状态 |
-| 启用 | `server.enable_plugin(name)` | 重新注册事件，移除禁用标记 |
-| 卸载 | `PluginManager.uninstall_plugin(name)` | 终止并移除插件实例 |
-| 重载 | `PluginManager.reload_plugin(name)` | 终止 → 清除缓存 → 重新导入加载 |
-| 配置 | `PluginConfigManager` | 基于 `_conf_schema.json` 的持久化配置读写 |
-| 查询 | `server.list_plugin_handlers(name)` | 查看插件注册的全部事件处理器 |
-| 文档 | `server.get_plugin_readme(name)` | 读取插件的 README.md |
+| 加载 | `PluginManager.load_all()` | Server 启动时自动扫描 `plugins/`，注入 config 和 data_dir |
+| 启动 | `start_plugin(name)` / `enable_plugin(name)` | 注册到事件总线，移除禁用标记 |
+| 停止 | `stop_plugin(name)` / `disable_plugin(name)` | 取消事件注册，调用 `terminate()`，保留实例和文件 |
+| 重载 | `reload_plugin(name)` | 终止 → 清除模块缓存 → 重新检测依赖 → 重新加载 |
+| 安装 | `install_plugin(url=...)` / `install_plugin(local_path=...)` | 从 URL 或本地路径安装，自动解压、安装依赖、加载 |
+| 卸载 | `uninstall_plugin(name, delete_config, delete_data)` | 终止插件，可选删除配置文件、数据目录和插件目录 |
 
-**插件配置（可选）：**
+#### 配置管理
 
-在插件目录下放置 `_conf_schema.json` 定义配置项，运行时值存储在 `data/config/{plugin_name}_config.json`：
+插件在目录下放置 `_conf_schema.json` 定义配置项，框架自动：
+
+1. **解析 schema** → 提取每个字段的 `type` 和 `default`
+2. **生成默认值** → `string→""`, `int→0`, `float→0.0`, `bool→false`, `array→[]`
+3. **合并已保存的值** → 深度合并，已保存的值覆盖默认值
+4. **注入插件实例** → 通过 `Plugin.__init__(config=...)` 传入，`self.config` 即可访问
+5. **自动补充新字段** → schema 新增字段时自动写回配置文件，用户修改的值永不丢失
 
 ```python
-from core.plugin import PluginConfigManager
-
-cfg = PluginConfigManager("data/config")
-cfg.update_config_value("my_plugin", "welcome_message", "欢迎进入直播间！")
-value = cfg.get_config_value("my_plugin", "welcome_message")
+class MyPlugin(Plugin):
+    async def initialize(self) -> None:
+        # self.config 即合并后的完整配置（含默认值）
+        greeting = (self.config or {}).get("greeting_enabled", True)
 ```
+
+运行时配置文件存储在 `data/config/{plugin_name}_config.json`。
+
+#### 权限配置
+
+插件目录下放置 `_permission.json` 定义插件级权限项（如 `admin_only`、`max_daily_calls`），框架自动生成默认值并与运行时配置合并。权限数据存储在 `data/permissions/{plugin_name}_permissions.json`。
+
+```python
+# 通过 Server API 读写权限
+perms = server.get_plugin_permissions("my_plugin")
+server.update_plugin_permission("my_plugin", "admin_only", True)
+```
+
+#### 数据目录
+
+每个插件有专属数据目录 `data/{plugin_name}/`，在加载时自动创建。插件可通过 `self.data_dir` 直接使用，存储数据库、缓存等自定义文件。卸载时可通过 `delete_data=True` 清理。
+
+```python
+class MyPlugin(Plugin):
+    async def initialize(self) -> None:
+        # self.data_dir → "data/my_plugin/"
+        db_path = os.path.join(self.data_dir, "cache.db")
+```
+
+#### 依赖管理
+
+插件目录下放置 `requirements.txt` 声明 Python 依赖，框架在加载前自动安装缺失的包（使用 `pip install`）。
+
+#### 失败插件追踪
+
+加载失败的插件会被记录（含错误信息和部分元数据），可通过 `server.get_failed_plugins()` 查看和 `server.retry_failed_plugin(dir_name)` 重试。
 
 ## 📂 项目结构
 
@@ -360,8 +476,10 @@ MissMiss/
 │
 ├── plugins/                      # 🔌 插件目录
 │   └── example_plugin/           # 示例插件
-│       ├── main.py               #   插件入口
-│       ├── metadata.yaml         #   元数据
+│       ├── main.py               #   插件入口（演示 config / data_dir）
+│       ├── metadata.yaml         #   元数据（含可选字段）
+│       ├── _conf_schema.json     #   配置 schema
+│       ├── _permission.json      #   权限 schema
 │       ├── README.md             #   说明文档
 │       └── CHANGELOG.md          #   更新日志
 │
@@ -388,7 +506,8 @@ MissMiss/
 │       │   └── urls.py           #    端点常量
 │       ├── plugin/               #    插件系统实现
 │       │   ├── plugin_manager.py #    PluginManager (全生命周期)
-│       │   └── config_manager.py #    PluginConfigManager (配置读写)
+│       │   ├── config_manager.py #    PluginConfigManager (schema 默认值)
+│       │   └── permission_manager.py # PluginPermissionManager (权限配置)
 │       ├── server.py             #    Server 实现 (持久化)
 │       ├── logging.py            #    日志系统 (loguru)
 │       └── exceptions.py         #    核心层异常
@@ -397,7 +516,7 @@ MissMiss/
     ├── bot_demo.py               #    Bot 连接演示
     ├── server_demo.py            #    Server 编排演示
     ├── event_demo.py             #    事件总线演示
-    └── plugin_demo.py            #    插件系统演示
+    └── plugin_demo.py            #    插件系统演示 (12 项功能测试)
 ```
 
 ## 🛠️ 开发
