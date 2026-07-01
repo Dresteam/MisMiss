@@ -78,7 +78,7 @@ class MissevanBot(Bot):
         self._consumer_task: asyncio.Task[None] | None = None
 
         # 权限：创建后不可修改
-        self._permissions: BotPermission = permissions
+        self.__permissions: BotPermission = permissions
         # 启用状态
         self._enabled: bool = True
 
@@ -109,7 +109,7 @@ class MissevanBot(Bot):
     @property
     def permissions(self) -> BotPermission:
         """权限集合（只读——创建后不可修改）。"""
-        return self._permissions
+        return self.__permissions
 
     def _check_permission(self, perm: BotPermission) -> None:
         """检查是否拥有指定权限，不足则抛出异常。
@@ -117,7 +117,7 @@ class MissevanBot(Bot):
         :param perm: 所需权限
         :raises CorePermissionException: 权限不足
         """
-        if not (self._permissions & perm):
+        if not (self.__permissions & perm):
             raise CorePermissionException(
                 f"权限不足：缺少 {perm.name}",
                 required=str(perm.name),

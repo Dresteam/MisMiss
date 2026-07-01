@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import yaml
 
@@ -87,11 +87,13 @@ class PluginManager:
         permission_dir: str | None = None,
         plugin_data_dir: str | None = None,
         disabled_plugins: list[str] | None = None,
+        on_state_changed: Callable[[], None] | None = None,
     ) -> None:
         self._plugin_dir = plugin_dir
         self._event_bus = event_bus
         self._config_dir = config_dir
         self._disabled_plugins: set[str] = set(disabled_plugins or [])
+        self._on_state_changed = on_state_changed
 
         # 权限目录默认与 config 同级
         if permission_dir is None:
@@ -521,6 +523,7 @@ class PluginManager:
         # 从失败列表移除（如果有重试）
         self._failed_plugins.pop(dir_name, None)
 
+        self._notify_state_changed()
         return metadata
 
     @staticmethod
@@ -630,6 +633,7 @@ class PluginManager:
         del self._plugins[plugin_name]
         self._disabled_plugins.discard(plugin_name)
         self._failed_plugins.pop(root_dir, None)  # type: ignore[arg-type]
+        self._notify_state_changed()
         _log.info("插件已卸载: {}", plugin_name)
 
     # ------------------------------------------------------------------ #
@@ -1093,6 +1097,11 @@ class PluginManager:
     # ------------------------------------------------------------------ #
     # 内部辅助
     # ------------------------------------------------------------------ #
+
+    def _notify_state_changed(self) -> None:
+        """通知外部（如 Server）插件状态已变更，需要持久化。"""
+        if self._on_state_changed is not None:
+            self._on_state_changed()
 
     def _unload_plugin_instance(self, metadata: PluginMetadata) -> None:
         """终止并取消注册一个插件实例。

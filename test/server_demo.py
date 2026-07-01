@@ -6,18 +6,19 @@
 import asyncio
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from core import MissevanBot, MissevanServer
 from interfaces.bot import BotPermission
 
 def _load_cookie() -> str:
     """从文件中加载 Cookie。"""
-    cookie_path = os.path.join(os.path.dirname(__file__), "bot_demo_cookie.txt")
+    cookie_path = str(Path(__file__).resolve().parent / "cookie.txt")
     if not os.path.exists(cookie_path):
         print(f"Cookie 文件不存在: {cookie_path}")
-        print("请创建 bot_demo_cookie.txt 并写入 Cookie 字符串")
+        print("请创建 cookie.txt 并写入 Cookie 字符串")
         return ""
     with open(cookie_path, "r", encoding="utf-8") as f:
         return "".join(line.strip() for line in f)

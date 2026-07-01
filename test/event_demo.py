@@ -4,11 +4,10 @@
 """
 
 import sys
-import os
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from abc import ABC
 from dataclasses import dataclass
 
 from interfaces.event import Event, Listener, event_handler
@@ -19,12 +18,15 @@ from core.events import EventBus
 # 事件类: A, B(继承A), C
 # ================================================================ #
 
-class A(Event, ABC):
+@dataclass
+class A(Event):
     """顶层事件 A。"""
+
+    _label: str = "A"
 
     @property
     def label(self) -> str:
-        return "A"
+        return self._label
 
 
 @dataclass
