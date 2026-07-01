@@ -15,7 +15,7 @@
 
 ## 📖 简介
 
-**MisMiss** 是 [MIST](https://github.com/dikxingmengya/MIST) 直播场控机器人标准在 **Missevan（猫耳FM）** 平台的参考实现。MIST 定义了一套完整的抽象接口规范——包括实体模型、事件系统、直播间管理和机器人操作——MisMiss 在此基础上提供了高性能的异步实现。
+**MisMiss** 是 [MIST](https://github.com/dikxingmengya/MIST) 直播场控机器人标准在 **Missevan（猫耳FM）** 平台的参考实现。MIST 定义了一套完整的抽象接口规范——包括实体模型、事件系统、直播间管理、机器人操作和插件框架——MisMiss 在此基础上提供了高性能的异步实现。
 
 核心设计理念：**面向接口，事件驱动**。你只需实现一个监听器类，就能响应开播、下播、弹幕、礼物、关注等直播事件；同时通过统一 API 发送消息和赠送礼物。更换直播平台时，只需替换实现层，业务代码无需修改。
 
@@ -23,17 +23,29 @@
 
 - 📐 **MIST 标准兼容** — 严格遵循 MIST 接口规范，跨平台复用业务逻辑
 - 🧩 **清晰的分层架构** — 接口层（`interfaces`）定义契约，核心层（`core`）负责实现
+- 🔌 **插件系统** — 启动/停止/重载/安装/卸载 全生命周期；`_conf_schema.json` 配置自动注入默认值；`_permission.json` 权限配置；`requirements.txt` 自动安装；插件专属 `data/{name}/` 数据目录
 - ⚡ **事件驱动模型** — 基于 MRO 的事件分发，支持按事件类型继承树精确路由
-- 🔒 **权限控制** — `BotPermission` Flag 位权限，敏感操作（如获取 Cookie）受 name-mangling 保护
+- 🔒 **权限控制** — `BotPermission` Flag 位权限，敏感操作（如获取 Cookie）受 name-mangling 保护；插件级权限 schema 独立管理
 - 💬 **优先级消息队列** — 消息按优先级排序发送，后台异步消费，自动限流
 - 🔄 **WebSocket 长连接** — Brotli 解压、心跳维持、自动重连（指数退避）
-- 💾 **状态持久化** — Server 启动自动恢复 Bot 和直播间，修改时自动保存
+- 💾 **状态持久化** — Server 启动自动恢复 Bot、直播间和插件状态，修改时自动保存
 - 📝 **日志系统** — 基于 loguru，自动提取调用类名/方法名，支持多维度过滤
 - 🧪 **完整类型标注** — mypy 严格模式，所有接口均有完善的 docstring
 
 ## 🏗️ 架构
 
 ```
+plugins/  ──  插件目录
+═══════════════════════════════════════════════════════
+  example_plugin/
+  ├── main.py             # 插件类（继承 Plugin）
+  ├── metadata.yaml       # 元数据（必须）
+  ├── _conf_schema.json   # 配置 schema（可选）
+  ├── _permission.json    # 权限 schema（可选）
+  ├── requirements.txt    # 依赖（可选）
+  ├── README.md           # 文档（可选）
+  └── CHANGELOG.md        # 更新日志（可选）
+
 test/  ──  演示程序
 ═══════════════════════════════════════════════════════
 
@@ -48,6 +60,9 @@ interfaces/  ──  抽象接口层 (MIST 标准)
   Gift                 │  └─ EventBus       Server
   Medal                └─ @event_handler    BotPermission
   Question
+                       Plugin
+                       ├─ Plugin (ABC)
+                       └─ PluginMetadata
 
 core/  ──  核心实现层 (Missevan 适配)
 ───────────────────────────────────────────────────────
@@ -63,7 +78,11 @@ core/  ──  核心实现层 (Missevan 适配)
   用户·礼物·勋章       EventBus              持久化调度器
   6 种事件数据类       (MRO 分发)
 
-  logging.py · exceptions.py
+  plugin/
+  ─────────────
+  PluginManager            # 全生命周期管理
+  PluginConfigManager      # 配置读写 + schema 默认值
+  PluginPermissionManager  # 权限配置管理
 ```
 
 ### 事件继承树
@@ -87,7 +106,7 @@ Event (ABC, 标记)
 ### 环境要求
 
 - **Python** ≥ 3.13
-- **依赖**：httpx · websockets · brotli · loguru
+- **依赖**：httpx · websockets · brotli · loguru · pyyaml
 
 ```bash
 git clone https://github.com/MIST/MissMiss.git
@@ -176,13 +195,160 @@ async def main():
     # 注册监听器
     live.register_new_event(MyListener())
 
-    # 进入直播间 (开始接收事件)
+    # 进入直播间（开始接收事件）
     await live.join()
 
     # 发送消息
     await live.send_message("大家好！")
 
 asyncio.run(main())
+```
+
+### 4. 编写插件
+
+插件继承 `Plugin`（本质是 `Listener`），使用 `@event_handler` 声明事件处理方法，放在 `plugins/` 目录下即可被 Server 自动加载。插件框架会自动注入配置、创建数据目录。
+
+**目录结构：**
+
+```
+plugins/
+└── my_plugin/
+    ├── metadata.yaml         # 插件元数据（必须）
+    ├── main.py               # 插件入口（必须）
+    ├── _conf_schema.json     # 配置 schema + 默认值（可选）
+    ├── _permission.json      # 权限 schema（可选）
+    └── requirements.txt      # 依赖（可选）
+```
+
+**metadata.yaml：**
+
+```yaml
+name: my_plugin
+desc: 我的第一个插件
+author: YourName
+version: 1.0.0
+
+# 可选字段
+short_desc: 监听弹幕和礼物的示例插件
+repo: https://github.com/YourName/my-plugin
+display_name: 我的插件
+```
+
+**_conf_schema.json（可选）：**
+
+```json
+{
+    "welcome_enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否在新用户进入时发送欢迎消息"
+    },
+    "max_message_length": {
+        "type": "int",
+        "default": 500,
+        "description": "弹幕最大显示长度"
+    },
+    "gift_threshold": {
+        "type": "float",
+        "default": 100.0,
+        "description": "礼物价值过滤阈值"
+    }
+}
+```
+
+**main.py：**
+
+```python
+import json
+import os
+from interfaces.plugin import Plugin
+from interfaces.event import event_handler
+from interfaces.event.livestream import LiveMessageEvent, LiveGiftEvent, LiveJoinEvent
+
+class MyPlugin(Plugin):
+    """我的第一个插件 —— 演示 config / data_dir 用法"""
+
+    async def initialize(self) -> None:
+        # self.config 已由框架自动注入（包含 schema 默认值）
+        cfg = self.config or {}
+        if cfg.get("welcome_enabled"):
+            print(f"[{self.name}] 插件就绪 (plugin_id={self.plugin_id})")
+        print(f"[{self.name}] 配置: {json.dumps(cfg, ensure_ascii=False)}")
+
+        # self.data_dir 是插件专属数据目录（自动创建）
+        print(f"[{self.name}] 数据目录: {self.data_dir}")
+        self._load_stats()
+
+    async def terminate(self) -> None:
+        # 保存数据到 data_dir
+        self._save_stats()
+
+    @event_handler
+    def on_message(self, event: LiveMessageEvent) -> None:
+        cfg = self.config or {}
+        max_len = cfg.get("max_message_length", 500)
+        msg = event.message[:max_len]
+        print(f"[MSG] {event.user.name}: {msg}")
+        self._stats["messages"] += 1
+
+    @event_handler
+    def on_gift(self, event: LiveGiftEvent) -> None:
+        total = event.gift.price * event.gift.num
+        threshold = (self.config or {}).get("gift_threshold", 100.0)
+        if total >= threshold:
+            print(f"[GIFT] {event.user.name} 赠送 {event.gift.name} x{event.gift.num}")
+        self._stats["gifts"] += 1
+
+    @event_handler
+    def on_join(self, event: LiveJoinEvent) -> None:
+        self._stats["joins"] += 1
+
+    def _load_stats(self):
+        path = os.path.join(self.data_dir, "stats.json")
+        try:
+            with open(path) as f:
+                self._stats = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._stats = {"messages": 0, "gifts": 0, "joins": 0}
+
+    def _save_stats(self):
+        path = os.path.join(self.data_dir, "stats.json")
+        with open(path, "w") as f:
+            json.dump(self._stats, f)
+```
+
+Server 启动时会自动扫描 `plugins/` 并加载所有插件。你也可以通过 API 手动管理：
+
+```python
+# 查看所有插件
+for p in server.plugins:
+    print(f"{p.name} v{p.version} by {p.author}")
+    print(f"  plugin_id: {p.plugin_id}")
+    print(f"  display_name: {p.display_name}")
+
+# 查看插件的事件处理器
+handlers = server.list_plugin_handlers("my_plugin")
+# {"on_message": LiveMessageEvent, "on_gift": LiveGiftEvent, "on_join": LiveJoinEvent}
+
+# 禁用插件（取消事件注册，保留实例和文件）
+await server.disable_plugin("my_plugin")
+
+# 重新启用
+await server.enable_plugin("my_plugin")
+
+# 重载插件（代码更新后热加载）
+await server.reload_plugin("my_plugin")
+
+# 安装插件（从 URL 或本地路径）
+await server.install_plugin_from_url("https://example.com/plugin.zip")
+await server.install_plugin_from_local("./my_local_plugin/")
+
+# 卸载插件（可选删除配置和数据目录）
+await server.uninstall_plugin("my_plugin", delete_config=True, delete_data=True)
+
+# 查看插件文档
+readme = server.get_plugin_readme("my_plugin")
+changelog = server.get_plugin_changelog("my_plugin")
 ```
 
 ## 📚 核心概念
@@ -236,7 +402,70 @@ await bot.send_livestream_message(12345, "VIP 消息", priority=100)
 await bot.send_livestream_message(12345, "普通消息", priority=0)
 ```
 
-后台异步消费，每条间隔 100ms 防限流。Cookie 过期自动清空队列。
+后台异步消费，每条消息发送间隔 100ms 防止被平台限流。Cookie 过期时自动清空队列。
+
+### 🔌 插件系统
+
+插件系统提供完整的生命周期管理和配置能力：
+
+#### 生命周期
+
+| 功能 | 方法 | 说明 |
+|------|------|------|
+| 加载 | `PluginManager.load_all()` | Server 启动时自动扫描 `plugins/`，注入 config 和 data_dir |
+| 启动 | `start_plugin(name)` / `enable_plugin(name)` | 注册到事件总线，移除禁用标记 |
+| 停止 | `stop_plugin(name)` / `disable_plugin(name)` | 取消事件注册，调用 `terminate()`，保留实例和文件 |
+| 重载 | `reload_plugin(name)` | 终止 → 清除模块缓存 → 重新检测依赖 → 重新加载 |
+| 安装 | `install_plugin(url=...)` / `install_plugin(local_path=...)` | 从 URL 或本地路径安装，自动解压、安装依赖、加载 |
+| 卸载 | `uninstall_plugin(name, delete_config, delete_data)` | 终止插件，可选删除配置文件、数据目录和插件目录 |
+
+#### 配置管理
+
+插件在目录下放置 `_conf_schema.json` 定义配置项，框架自动：
+
+1. **解析 schema** → 提取每个字段的 `type` 和 `default`
+2. **生成默认值** → `string→""`, `int→0`, `float→0.0`, `bool→false`, `array→[]`
+3. **合并已保存的值** → 深度合并，已保存的值覆盖默认值
+4. **注入插件实例** → 通过 `Plugin.__init__(config=...)` 传入，`self.config` 即可访问
+5. **自动补充新字段** → schema 新增字段时自动写回配置文件，用户修改的值永不丢失
+
+```python
+class MyPlugin(Plugin):
+    async def initialize(self) -> None:
+        # self.config 即合并后的完整配置（含默认值）
+        greeting = (self.config or {}).get("greeting_enabled", True)
+```
+
+运行时配置文件存储在 `data/config/{plugin_name}_config.json`。
+
+#### 权限配置
+
+插件目录下放置 `_permission.json` 定义插件级权限项（如 `admin_only`、`max_daily_calls`），框架自动生成默认值并与运行时配置合并。权限数据存储在 `data/permissions/{plugin_name}_permissions.json`。
+
+```python
+# 通过 Server API 读写权限
+perms = server.get_plugin_permissions("my_plugin")
+server.update_plugin_permission("my_plugin", "admin_only", True)
+```
+
+#### 数据目录
+
+每个插件有专属数据目录 `data/{plugin_name}/`，在加载时自动创建。插件可通过 `self.data_dir` 直接使用，存储数据库、缓存等自定义文件。卸载时可通过 `delete_data=True` 清理。
+
+```python
+class MyPlugin(Plugin):
+    async def initialize(self) -> None:
+        # self.data_dir → "data/my_plugin/"
+        db_path = os.path.join(self.data_dir, "cache.db")
+```
+
+#### 依赖管理
+
+插件目录下放置 `requirements.txt` 声明 Python 依赖，框架在加载前自动安装缺失的包（使用 `pip install`）。
+
+#### 失败插件追踪
+
+加载失败的插件会被记录（含错误信息和部分元数据），可通过 `server.get_failed_plugins()` 查看和 `server.retry_failed_plugin(dir_name)` 重试。
 
 ## 📂 项目结构
 
@@ -245,6 +474,15 @@ MissMiss/
 ├── requirements.txt              # 依赖清单
 ├── README.md                     # 本文件
 │
+├── plugins/                      # 🔌 插件目录
+│   └── example_plugin/           # 示例插件
+│       ├── main.py               #   插件入口（演示 config / data_dir）
+│       ├── metadata.yaml         #   元数据（含可选字段）
+│       ├── _conf_schema.json     #   配置 schema
+│       ├── _permission.json      #   权限 schema
+│       ├── README.md             #   说明文档
+│       └── CHANGELOG.md          #   更新日志
+│
 ├── src/
 │   ├── interfaces/               # 📋 抽象接口层 (MIST 标准)
 │   │   ├── entity/               #    实体接口 (User, Gift, Medal, …)
@@ -252,9 +490,9 @@ MissMiss/
 │   │   │   └── livestream/       #    直播间事件 (6 种具体事件)
 │   │   ├── livestream/           #    直播间接口
 │   │   ├── bot/                  #    机器人接口 + 权限 Flag
+│   │   ├── plugin/               #    插件接口 (Plugin, PluginMetadata)
 │   │   ├── server.py             #    Server 接口
-│   │   ├── exceptions.py         #    接口层异常
-│   │   └── interface.md          #    MIST 接口规范文档
+│   │   └── exceptions.py         #    接口层异常
 │   │
 │   └── core/                     # ⚙️ 核心实现层 (Missevan 适配)
 │       ├── bot/mis_bot.py        #    机器人实现 (优先级队列)
@@ -266,6 +504,10 @@ MissMiss/
 │       │   ├── websocket.py      #    WebSocket 客户端 (Brotli + 心跳)
 │       │   ├── endpoints/        #    各 API 实现
 │       │   └── urls.py           #    端点常量
+│       ├── plugin/               #    插件系统实现
+│       │   ├── plugin_manager.py #    PluginManager (全生命周期)
+│       │   ├── config_manager.py #    PluginConfigManager (schema 默认值)
+│       │   └── permission_manager.py # PluginPermissionManager (权限配置)
 │       ├── server.py             #    Server 实现 (持久化)
 │       ├── logging.py            #    日志系统 (loguru)
 │       └── exceptions.py         #    核心层异常
@@ -273,7 +515,8 @@ MissMiss/
 └── test/                         # 🧪 演示 & 测试
     ├── bot_demo.py               #    Bot 连接演示
     ├── server_demo.py            #    Server 编排演示
-    └── event_demo.py             #    事件总线演示
+    ├── event_demo.py             #    事件总线演示
+    └── plugin_demo.py            #    插件系统演示 (12 项功能测试)
 ```
 
 ## 🛠️ 开发
