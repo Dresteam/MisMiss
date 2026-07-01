@@ -184,3 +184,54 @@ class CorePluginConfigException(CorePluginException):
         super().__init__(msg)
 
 
+class CorePluginInstallException(CorePluginException):
+    """插件安装失败异常。
+
+    当插件下载、解压或安装过程中出现错误时抛出。
+
+    :param plugin_name: 插件名称
+    :param reason: 失败原因
+    """
+
+    def __init__(self, plugin_name: str, reason: str = "") -> None:
+        self.plugin_name = plugin_name
+        msg = f"插件 '{plugin_name}' 安装失败"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+
+
+class CorePluginPermissionException(CorePluginException):
+    """插件权限配置异常。
+
+    当权限配置读写或 schema 校验失败时抛出。
+
+    :param plugin_name: 插件名称
+    :param reason: 失败原因
+    """
+
+    def __init__(self, plugin_name: str, reason: str = "") -> None:
+        self.plugin_name = plugin_name
+        msg = f"插件 '{plugin_name}' 权限配置错误"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+
+
+class CorePluginDependencyException(CorePluginException):
+    """插件依赖安装失败异常。
+
+    当 requirements.txt 中的依赖安装失败时抛出。
+
+    :param plugin_name: 插件名称
+    :param reason: 失败原因
+    """
+
+    def __init__(self, plugin_name: str, reason: str = "") -> None:
+        self.plugin_name = plugin_name
+        msg = f"插件 '{plugin_name}' 依赖安装失败"
+        if reason:
+            msg += f": {reason}"
+        super().__init__(msg)
+
+

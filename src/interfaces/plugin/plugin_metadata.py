@@ -40,6 +40,19 @@ class PluginMetadata:
     """插件版本号。"""
 
     # ---------------------------------------------------------------- #
+    # 可选声明字段（来自 metadata.yaml）
+    # ---------------------------------------------------------------- #
+
+    short_desc: str | None = None
+    """插件简短描述。"""
+
+    repo: str | None = None
+    """插件仓库 URL（如 GitHub 地址）。"""
+
+    display_name: str | None = None
+    """插件显示名称（用于 UI 展示）。"""
+
+    # ---------------------------------------------------------------- #
     # 运行时字段（由 PluginManager 填充）
     # ---------------------------------------------------------------- #
 
@@ -63,8 +76,38 @@ class PluginMetadata:
     config_schema_path: str | None = None
     """``_conf_schema.json`` 的绝对路径，若不存在则为 ``None``。"""
 
+    config: dict | None = field(default=None, compare=False)
+    """插件运行时配置（已合并默认值）。"""
+
+    permission_config: dict | None = field(default=None, compare=False)
+    """插件权限配置。"""
+
     readme_path: str | None = None
     """``README.md`` 的绝对路径，若不存在则为 ``None``。"""
+
+    requirements_path: str | None = None
+    """``requirements.txt`` 的绝对路径，若不存在则为 ``None``。"""
+
+    data_dir: str | None = None
+    """插件专属数据目录（``data/{plugin_name}/``），插件加载时自动创建。"""
+
+    # ---------------------------------------------------------------- #
+    # 计算属性
+    # ---------------------------------------------------------------- #
+
+    @property
+    def plugin_id(self) -> str:
+        """返回 ``{author}/{name}`` 格式的唯一标识。
+
+        与 AstrBot 兼容的插件 ID 格式，用于跨项目引用。
+        """
+        author_lower = self.author.lower().strip()
+        name_lower = self.name.lower().strip()
+        return f"{author_lower}/{name_lower}"
+
+    # ---------------------------------------------------------------- #
+    # dunder
+    # ---------------------------------------------------------------- #
 
     def __str__(self) -> str:
         return f"{self.name} v{self.version} by {self.author}"

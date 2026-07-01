@@ -1,13 +1,16 @@
 """插件系统演示。
 
-展示 PluginManager 的核心功能：
+展示 PluginManager 的全部功能：
 1. 扫描并加载插件
-2. 查看插件列表和元数据
+2. 查看插件列表和元数据（含 plugin_id / short_desc / repo / display_name）
 3. 查看插件事件处理器
 4. 查看插件 README / CHANGELOG
-5. 禁用和启用插件
-6. 卸载插件
-7. 配置管理
+5. 禁用和启用插件（start / stop 别名）
+6. 重载插件
+7. 配置管理（_conf_schema.json 默认值 + 读写）
+8. 权限管理（_permission.json 默认值 + 读写）
+9. 插件数据目录（data_dir 创建 / 写入 / 清理）
+10. 模拟事件触发验证
 """
 
 from __future__ import annotations
@@ -19,40 +22,51 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from core.events import EventBus
-from core.plugin import PluginManager
+from core.plugin import PluginManager, PluginConfigManager, PluginPermissionManager
 from core.exceptions import (
     CorePluginNotFoundException,
 )
 
 
+def banner(title: str) -> None:
+    """打印分隔标题。"""
+    print()
+    print("=" * 60)
+    print(f"  {title}")
+    print("=" * 60)
+
+
 def main() -> None:
-    print("=" * 60)
-    print("MisMiss 插件系统演示")
-    print("=" * 60)
+    banner("MisMiss Plugin System Demo")
 
     # 项目根目录
     project_root = os.path.dirname(os.path.dirname(__file__))
     plugin_dir = os.path.join(project_root, "plugins")
     config_dir = os.path.join(project_root, "data", "config")
+    perm_dir = os.path.join(project_root, "data", "permissions")
+    data_dir = os.path.join(project_root, "data")
 
     # ================================================================ #
     # 1. 初始化
     # ================================================================ #
-    print("\n[1] 初始化 PluginManager ...")
+    banner("[1] Initialize PluginManager")
     event_bus = EventBus()
     pm = PluginManager(
         plugin_dir=plugin_dir,
         event_bus=event_bus,
         config_dir=config_dir,
-        disabled_plugins=[],
+        permission_dir=perm_dir,
+        plugin_data_dir=data_dir,
     )
-    print(f"    插件目录: {plugin_dir}")
-    print(f"    配置目录: {config_dir}")
+    print(f"    plugin_dir : {plugin_dir}")
+    print(f"    config_dir : {config_dir}")
+    print(f"    perm_dir   : {perm_dir}")
+    print(f"    data_dir   : {data_dir}")
 
     # ================================================================ #
     # 2. 加载所有插件
     # ================================================================ #
-    print("\n[2] 加载插件 ...")
+    banner("[2] Load all plugins")
     import asyncio
 
     async def _load():
@@ -61,139 +75,227 @@ def main() -> None:
     asyncio.run(_load())
 
     # ================================================================ #
-    # 3. 查看插件列表
+    # 3. 查看插件列表（含新 metadata 字段）
     # ================================================================ #
-    print("\n[3] 已加载插件列表:")
+    banner("[3] Plugin list (with new metadata fields)")
     plugins = pm.list_plugins()
     if not plugins:
-        print("    (无插件)")
-        print("\n⚠ 提示: 请确保 plugins/example_plugin/ 目录存在且包含 main.py 和 metadata.yaml")
+        print("    (no plugins)")
+        print()
+        print("[!] Hint: ensure plugins/example_plugin/ exists with main.py and metadata.yaml")
         return
 
     for p in plugins:
-        print(f"    📦 {p.name} v{p.version} by {p.author}")
-        print(f"       描述: {p.desc}")
-        print(f"       目录: {p.root_dir_name}")
-        print(f"       启用: {'✅ 是' if p.enabled else '❌ 否'}")
-        print(f"       模块: {p.module_path}")
+        print(f"    [Plugin] {p.name} v{p.version}")
+        print(f"        author       : {p.author}")
+        print(f"        plugin_id    : {p.plugin_id}")
+        print(f"        desc         : {p.desc}")
+        print(f"        short_desc   : {p.short_desc}")
+        print(f"        display_name : {p.display_name}")
+        print(f"        repo         : {p.repo}")
+        print(f"        root_dir     : {p.root_dir_name}")
+        print(f"        enabled      : {'yes' if p.enabled else 'no'}")
+        print(f"        module_path  : {p.module_path}")
+        print(f"        config_schema: {'yes' if p.config_schema_path else 'no'}")
+        print(f"        data_dir     : {p.data_dir}")
 
     # ================================================================ #
     # 4. 查看事件处理器
     # ================================================================ #
-    print("\n[4] 查看插件事件处理器:")
+    banner("[4] Event handlers")
     for p in plugins:
         if not p.enabled:
-            print(f"    {p.name}: 已禁用，跳过")
+            print(f"    {p.name}: disabled, skip")
             continue
         try:
             handlers = pm.get_plugin_handlers(p.name)
-            print(f"    {p.name}:")
+            print(f"    {p.name}: {len(handlers)} handlers")
             for method_name, event_type in handlers.items():
                 print(f"        {method_name} -> {event_type.__name__}")
         except CorePluginNotFoundException as e:
             print(f"    {p.name}: {e}")
 
     # ================================================================ #
-    # 5. 查看 README
+    # 5. 配置管理（_conf_schema.json 默认值）
     # ================================================================ #
-    print("\n[5] 查看插件 README:")
+    banner("[5] Config management (_conf_schema.json defaults)")
+    cfg = pm.config_manager
+
+    for p in plugins:
+        print(f"  --- {p.name} ---")
+
+        # 5a. 查看 schema
+        if p.config_schema_path:
+            schema = PluginConfigManager.load_schema(p.config_schema_path)
+            print(f"    Schema keys: {list(schema.keys())}")
+            print(f"    Schema details:")
+            for key, defn in schema.items():
+                print(f"        {key}: type={defn.get('type')}, default={defn.get('default')}")
+
+            # 5b. 默认值生成
+            defaults = cfg.generate_default_config(schema)
+            print(f"    Generated defaults: {defaults}")
+
+            # 5c. 合并后配置
+            merged = cfg.load_config_with_defaults(p.name, schema)
+            print(f"    Merged config: {merged}")
+
+            # 5d. 插件实例的 config
+            if p.plugin_instance:
+                print(f"    Instance config: {p.plugin_instance.config}")
+        else:
+            print(f"    (no _conf_schema.json)")
+
+        # 5e. 读写测试
+        cfg.update_config_value(p.name, "greeting_enabled", False)
+        val = cfg.get_config_value(p.name, "greeting_enabled")
+        print(f"    update_config_value test: greeting_enabled = {val}")
+        # 恢复
+        cfg.update_config_value(p.name, "greeting_enabled", True)
+
+    # ================================================================ #
+    # 6. 权限管理
+    # ================================================================ #
+    banner("[6] Permission management (_permission.json)")
+    ppm = pm.permission_manager
+
+    for p in plugins:
+        print(f"  --- {p.name} ---")
+        perm_schema = PluginPermissionManager.load_permission_schema(
+            os.path.join(plugin_dir, p.root_dir_name or "")
+        )
+        if perm_schema:
+            print(f"    Permission schema: {perm_schema}")
+            defaults = ppm.generate_default_permissions(perm_schema)
+            print(f"    Generated defaults: {defaults}")
+            merged = ppm.load_permissions_with_defaults(p.name, perm_schema)
+            print(f"    Merged permissions: {merged}")
+        else:
+            print(f"    (no _permission.json)")
+
+        # 读写测试
+        ppm.update_permission(p.name, "admin_only", True)
+        val = ppm.get_permission(p.name, "admin_only")
+        print(f"    update_permission test: admin_only = {val}")
+        ppm.update_permission(p.name, "admin_only", False)
+
+    # ================================================================ #
+    # 7. 插件数据目录
+    # ================================================================ #
+    banner("[7] Plugin data directory (data_dir)")
+    for p in plugins:
+        print(f"  --- {p.name} ---")
+        d = pm.get_plugin_data_dir(p.name)
+        print(f"    data_dir path : {d}")
+        print(f"    data_dir exists: {'yes' if os.path.isdir(d) else 'no'}")
+
+        # 检查 stats 文件（由插件在 terminate 时写入）
+        stats_file = os.path.join(d, "stats.json")
+        if os.path.exists(stats_file):
+            import json
+            with open(stats_file, "r") as f:
+                stats = json.load(f)
+            print(f"    stats.json    : {stats}")
+        else:
+            print(f"    stats.json    : (not yet written — created on terminate)")
+
+    # ================================================================ #
+    # 8. 查看 README / CHANGELOG
+    # ================================================================ #
+    banner("[8] README & CHANGELOG")
     for p in plugins:
         readme = pm.get_plugin_readme(p.name)
         if readme:
             first_line = readme.strip().split("\n")[0]
-            print(f"    {p.name}: {first_line}...")
+            print(f"    {p.name} README: {first_line}...")
         else:
-            print(f"    {p.name}: (无 README.md)")
+            print(f"    {p.name} README: (none)")
 
-    # ================================================================ #
-    # 6. 查看 CHANGELOG
-    # ================================================================ #
-    print("\n[6] 查看插件 CHANGELOG:")
-    for p in plugins:
         changelog = pm.get_plugin_changelog(p.name)
         if changelog:
             first_line = changelog.strip().split("\n")[0]
-            print(f"    {p.name}: {first_line}")
+            print(f"    {p.name} CHANGELOG: {first_line}")
         else:
-            print(f"    {p.name}: (无 CHANGELOG.md)")
+            print(f"    {p.name} CHANGELOG: (none)")
 
     # ================================================================ #
-    # 7. 禁用插件
-    # ================================================================ #
-    if plugins:
-        target = plugins[0].name
-        print(f"\n[7] 禁用插件: {target}")
-        pm.disable_plugin(target)
-        p = pm.get_plugin(target)
-        if p:
-            print(f"    启用状态: {'✅ 是' if p.enabled else '❌ 否'}")
-            print(f"    禁用列表: {pm.disabled_plugin_names}")
-
-            # 验证事件处理器已被取消注册
-            try:
-                handlers = pm.get_plugin_handlers(target)
-                print(f"    事件处理器: {handlers}（应为空）")
-            except CorePluginNotFoundException:
-                print(f"    事件处理器: (已取消注册 ✅)")
-
-    # ================================================================ #
-    # 8. 启用插件
+    # 9. 禁用 / 启用 / 重载 测试
     # ================================================================ #
     if plugins:
         target = plugins[0].name
-        print(f"\n[8] 启用插件: {target}")
-        pm.enable_plugin(target)
-        p = pm.get_plugin(target)
-        if p:
-            print(f"    启用状态: {'✅ 是' if p.enabled else '❌ 否'}")
-            print(f"    禁用列表: {pm.disabled_plugin_names}")
 
-            # 验证事件处理器已重新注册
+        # 9a. 停止 (stop_plugin alias)
+        banner("[9a] Stop plugin (disable)")
+        pm.stop_plugin(target)
+        p = pm.get_plugin(target)
+        print(f"    {target} enabled: {'yes' if p.enabled else 'no'}")
+        print(f"    disabled list: {pm.disabled_plugin_names}")
+
+        # 验证事件处理器已取消注册
+        try:
             handlers = pm.get_plugin_handlers(target)
-            print(f"    事件处理器: {len(handlers)} 个")
-            for method_name, event_type in handlers.items():
-                print(f"        {method_name} -> {event_type.__name__}")
+            print(f"    handlers after stop: {len(handlers)} (should be 0 or raise)")
+        except CorePluginNotFoundException:
+            print(f"    handlers after stop: (unregistered, as expected)")
+
+        # 9b. 启动 (start_plugin alias)
+        banner("[9b] Start plugin (enable)")
+        pm.start_plugin(target)
+        p = pm.get_plugin(target)
+        print(f"    {target} enabled: {'yes' if p.enabled else 'no'}")
+        handlers = pm.get_plugin_handlers(target)
+        print(f"    handlers after start: {len(handlers)}")
+
+        # 9c. 重载
+        banner("[9c] Reload plugin")
+        async def _reload():
+            return await pm.reload_plugin(target)
+        new_meta = asyncio.run(_reload())
+        print(f"    reloaded: {new_meta.name} v{new_meta.version}")
+        print(f"    config preserved: {new_meta.config is not None}")
 
     # ================================================================ #
-    # 9. 配置管理
+    # 10. 失败插件追踪
     # ================================================================ #
-    print("\n[9] 配置管理演示:")
-    cfg = pm.config_manager
-
-    # 设置配置
-    cfg.update_config_value("example_plugin", "greeting_enabled", True)
-    cfg.update_config_value("example_plugin", "max_message_length", 500)
-    print(f"    已设置配置: greeting_enabled=True, max_message_length=500")
-
-    # 读取配置
-    config = cfg.load_config("example_plugin")
-    print(f"    读取配置: {config}")
-
-    # 读取单个值
-    val = cfg.get_config_value("example_plugin", "greeting_enabled")
-    print(f"    读取 greeting_enabled: {val}")
-    val = cfg.get_config_value("example_plugin", "nonexistent", default="N/A")
-    print(f"    读取 nonexistent (带默认值): {val}")
+    banner("[10] Failed plugin tracking")
+    failed = pm.get_failed_plugins()
+    print(f"    Failed plugins: {len(failed)}")
+    for f in failed:
+        print(f"        {f.get('dir_name')}: {f.get('error')}")
 
     # ================================================================ #
-    # 10. 自定义事件触发 —— 验证处理器被调用
+    # 11. 模拟事件触发
     # ================================================================ #
-    print("\n[10] 模拟事件触发 —— 验证插件处理器:")
-    # 使用 EventBus 直接触发一个事件
-    # 注意：这里仅演示事件总线机制，实际使用中事件由 WebSocket 路径触发
-    print("    事件总线中已注册的处理器数: ", sum(
-        len(h) for h in event_bus._handlers.values()
-    ))
+    banner("[11] EventBus handler count")
+    total_handlers = sum(len(h) for h in event_bus._handlers.values())
+    print(f"    Registered handler entries: {total_handlers}")
+    print(f"    Event types with handlers: {len(event_bus._handlers)}")
 
     # ================================================================ #
-    # 总结
+    # 12. 关闭
     # ================================================================ #
-    print("\n" + "=" * 60)
-    print("演示完成！")
-    print("=" * 60)
-    print(f"  已加载插件: {len(plugins)} 个")
-    print(f"  已禁用插件: {pm.disabled_plugin_names}")
-    print(f"  事件总线处理器组数: {len(event_bus._handlers)}")
+    banner("[12] Shutdown all plugins")
+    asyncio.run(pm.shutdown_all())
+
+    # 验证 stats.json 已被写入
+    for p in plugins:
+        stats_file = os.path.join(p.data_dir or "", "stats.json")
+        if os.path.exists(stats_file):
+            import json
+            with open(stats_file, "r") as f:
+                stats = json.load(f)
+            print(f"    {p.name} stats.json written: {stats}")
+        else:
+            print(f"    {p.name} stats.json: (not found)")
+
+    # ================================================================ #
+    # Summary
+    # ================================================================ #
+    banner("Demo Complete!")
+    print(f"  Plugins loaded    : {len(plugins)}")
+    print(f"  Plugins disabled  : {pm.disabled_plugin_names}")
+    print(f"  Failed plugins    : {len(failed)}")
+    print(f"  EventBus entries  : {total_handlers}")
 
 
 if __name__ == "__main__":
