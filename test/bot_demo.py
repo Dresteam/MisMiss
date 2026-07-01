@@ -6,8 +6,9 @@
 import asyncio
 import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from core import MissevanBot
 from core.exceptions import CoreCookieException, CorePermissionException
@@ -16,10 +17,10 @@ from interfaces.bot import BotPermission
 
 def _load_cookie() -> str:
     """从文件中加载 Cookie。"""
-    cookie_path = os.path.join(os.path.dirname(__file__), "bot_demo_cookie.txt")
+    cookie_path = str(Path(__file__).resolve().parent / "cookie.txt")
     if not os.path.exists(cookie_path):
         print(f"Cookie 文件不存在: {cookie_path}")
-        print("请创建 bot_demo_cookie.txt 并写入 Cookie 字符串")
+        print("请创建 cookie.txt 并写入 Cookie 字符串")
         return ""
     with open(cookie_path, "r", encoding="utf-8") as f:
         return "".join(line.strip() for line in f)
@@ -70,10 +71,10 @@ async def main():
     # 权限仅在构造时设置，创建后不可修改
     print()
     print("[4] 创建带 EXPOSE_COOKIE 权限的机器人...")
-    bot2 = MissevanBot(
-        cookie,
-        permissions=BotPermission.SEND_LIVESTREAM_MESSAGE | BotPermission.EXPOSE_COOKIE,
+    perms: BotPermission = (
+        BotPermission.SEND_LIVESTREAM_MESSAGE | BotPermission.EXPOSE_COOKIE # type: ignore[arg-type]
     )
+    bot2 = MissevanBot(cookie, permissions=perms)
     await bot2.refresh()
     c = bot2.get_cookie()
     print(f"  Cookie: {c[:20]}...")
@@ -82,10 +83,12 @@ async def main():
     print()
     print("[5] 验证 permissions 为只读...")
     try:
-        bot2.permissions = BotPermission.SEND_LIVESTREAM_MESSAGE  # type: ignore
-        print("  WARN: 权限被修改了（不应该发生）")
+        bot.__permissions = BotPermission.SEND_LIVESTREAM_MESSAGE  # type: ignore
+        print(bot.get_cookie())
     except AttributeError:
         print("  权限不可修改（AttributeError——符合预期）")
+    except CorePermissionException:
+        print("  无权限")
 
     print()
     print("=" * 50)

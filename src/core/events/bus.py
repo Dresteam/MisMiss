@@ -90,7 +90,7 @@ class EventBus(EventManager):
 
         for handlers in self._handlers.values():
             handlers[:] = [
-                (l, m) for l, m in handlers if l is not listener
+                (l, m) for l, m in handlers if l is not listener  # noqa: E741
             ]
 
     def call_event(self, event: Event, clazz: type | None = None) -> None:
@@ -112,6 +112,16 @@ class EventBus(EventManager):
     # ------------------------------------------------------------------ #
     # 查询
     # ------------------------------------------------------------------ #
+
+    @property
+    def handler_count(self) -> int:
+        """已注册的事件处理器总数。"""
+        return sum(len(h) for h in self._handlers.values())
+
+    @property
+    def event_type_count(self) -> int:
+        """已注册的事件类型数量。"""
+        return len(self._handlers)
 
     def get_listener_handlers(self, listener: Listener) -> dict[str, type]:
         """查询指定监听器注册的所有事件处理器。

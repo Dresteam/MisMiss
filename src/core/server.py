@@ -22,7 +22,8 @@ from core.exceptions import (
     CoreApiException,
     CoreCookieException,
     CoreBotException,
-    CorePluginException,
+    CorePluginLoadException,
+    CorePluginNotFoundException,
 )
 from core.logging import get_logger
 
@@ -57,13 +58,13 @@ class MissevanServer(ServerInterface):
     """
 
     def __init__(self) -> None:
-        self._bot: MissevanBot | None = None
+        self._bot: MissevanBot = MissevanBot("")
         self._bot_available: bool = False
         self._bot_cookie: str = ""
         self._bot_permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
         self._livestreams: dict[int, MissevanLivestream] = {}
         self._event_bus: EventBus = EventBus()
-        self._plugin_manager: PluginManager | None = None
+        self._plugin_manager: PluginManager = PluginManager("", EventBus(), "")
 
     # ------------------------------------------------------------------ #
     # 生命周期
@@ -80,14 +81,13 @@ class MissevanServer(ServerInterface):
             state = {}
 
         # 恢复 Bot
-        bot_state = state.get("bot")
+        bot_state = state.get("bot", {})
         if bot_state:
             await self._restore_bot(bot_state)
 
         # 恢复 Livestream
         for live_id in state.get("livestreams", []):
-            if self._bot is not None:
-                self._restore_livestream(live_id)
+            self._restore_livestream(live_id)
 
         # 加载插件
         disabled_plugins: list[str] = state.get("disabled_plugins", [])
@@ -111,12 +111,10 @@ class MissevanServer(ServerInterface):
     async def shutdown(self) -> None:
         """关闭服务器——停用所有插件、Livestream 和 Bot。"""
         _log.info("服务器关闭中 ...")
-        if self._plugin_manager is not None:
-            await self._plugin_manager.shutdown_all()
+        await self._plugin_manager.shutdown_all()
         for livestream in self._livestreams.values():
             livestream.enabled = False
-        if self._bot is not None:
-            self._bot.enabled = False
+        self._bot.enabled = False
         _log.info("服务器已关闭")
 
     # ------------------------------------------------------------------ #
@@ -141,9 +139,8 @@ class MissevanServer(ServerInterface):
         _log.info("创建 Bot ...")
 
         # 停用旧 Bot
-        if self._bot is not None:
-            self._bot.enabled = False
-            _log.info("已停用旧 Bot: {}", self._bot)
+        self._bot.enabled = False
+        _log.info("已停用旧 Bot: {}", self._bot)
 
         bot = MissevanBot(cookie, permissions=permissions)
         await bot.refresh()
@@ -165,16 +162,14 @@ class MissevanServer(ServerInterface):
         :return: 新创建的 Bot 实例
         :raises CoreCookieException: 新 Cookie 无效
         """
-        old_perms = (
-            self._bot.permissions if self._bot
-            else BotPermission.SEND_LIVESTREAM_MESSAGE
-        )
+        old_perms = self._bot.permissions
+
         _log.info("更新 Bot Cookie ...")
         return await self.create_bot(new_cookie, permissions=old_perms)
 
     @property
-    def bot(self) -> MissevanBot | None:
-        """获取当前 Bot（可能为 None）。"""
+    def bot(self) -> MissevanBot:
+        """获取当前 Bot。"""
         return self._bot
 
     @property
@@ -182,26 +177,45 @@ class MissevanServer(ServerInterface):
         """Bot 是否已初始化并可正常使用。
 
         返回 ``True`` 表示 Bot 已创建、已通过刷新验证且处于启用状态。
+
+        .. note::
+           此属性仅读取缓存状态，不发起网络请求。
+           如需主动验证 Cookie 是否过期，请调用 :meth:`verify_bot`。
+        """
+        return self._bot_available and self._bot.enabled
+
+    async def verify_bot(self) -> bool:
+        """主动验证 Bot Cookie 是否有效（发起网络请求）。
+
+        :return: Cookie 有效返回 ``True``，过期返回 ``False``
         """
         try:
-            self._bot.refresh()
+            await self._bot.refresh()
+            self._bot_available = True
+            return True
         except CoreCookieException:
+            self._bot_available = False
+            _log.warning("Cookie 已过期")
             return False
-        return self._bot_available and self._bot is not None and self._bot.enabled
+        except CoreApiException as e:
+            _log.error("验证 Bot 时发生 API 错误: {}", e)
+            return False
 
     # ------------------------------------------------------------------ #
     # Livestream
     # ------------------------------------------------------------------ #
 
-    def add_livestream(self, live_id: int) -> MissevanLivestream:
+    async def add_livestream(self, live_id: int) -> MissevanLivestream:
         """添加直播间。
+
+        添加前会主动验证 Bot Cookie 是否有效。
 
         :param live_id: 直播间 ID
         :return: 直播间实例
-        :raises RuntimeError: Bot 尚未创建
+        :raises CoreBotException: Bot Cookie 已过期
         """
-        if not self.bot_available:
-            raise CoreBotException("Bot 不存在或 Cookie 过期")
+        if not await self.verify_bot():
+            raise CoreBotException("Bot Cookie 已过期，无法添加直播间")
 
         if live_id in self._livestreams:
             return self._livestreams[live_id]
@@ -247,13 +261,10 @@ class MissevanServer(ServerInterface):
     # ------------------------------------------------------------------ #
 
     def _require_plugin_manager(self) -> PluginManager:
-        """获取插件管理器，未初始化时抛出异常。
+        """获取插件管理器。
 
         :return: PluginManager 实例
-        :raises RuntimeError: 服务器尚未启动
         """
-        if self._plugin_manager is None:
-            raise RuntimeError("服务器尚未启动，请先调用 start()")
         return self._plugin_manager
 
     async def install_plugin(self, plugin_name: str) -> PluginMetadata:
@@ -268,6 +279,8 @@ class MissevanServer(ServerInterface):
         """
         pm = self._require_plugin_manager()
         metadata = await pm.load_plugin(plugin_name)
+        if metadata is None:
+            raise CorePluginLoadException(plugin_name, "插件加载失败")
         self._save_state()
         return metadata
 
@@ -347,8 +360,6 @@ class MissevanServer(ServerInterface):
     @property
     def plugins(self) -> list[PluginMetadata]:
         """获取所有已加载插件的元数据列表。"""
-        if self._plugin_manager is None:
-            return []
         return self._plugin_manager.list_plugins()
 
     def list_plugin_handlers(self, plugin_name: str) -> dict[str, type]:
@@ -394,7 +405,8 @@ class MissevanServer(ServerInterface):
         """
         pm = self._require_plugin_manager()
         # 验证插件存在
-        pm._get_plugin(plugin_name)
+        if pm.get_plugin(plugin_name) is None:
+            raise CorePluginNotFoundException(plugin_name)
         return pm.permission_manager.load_permissions(plugin_name)
 
     def update_plugin_permission(
@@ -408,7 +420,8 @@ class MissevanServer(ServerInterface):
         :raises CorePluginNotFoundException: 插件不存在
         """
         pm = self._require_plugin_manager()
-        pm._get_plugin(plugin_name)
+        if pm.get_plugin(plugin_name) is None:
+            raise CorePluginNotFoundException(plugin_name)
         pm.permission_manager.update_permission(plugin_name, key, value)
 
     def get_plugin_config_schema(self, plugin_name: str) -> dict[str, Any] | None:
@@ -419,7 +432,9 @@ class MissevanServer(ServerInterface):
         :raises CorePluginNotFoundException: 插件不存在
         """
         pm = self._require_plugin_manager()
-        metadata = pm._get_plugin(plugin_name)
+        metadata = pm.get_plugin(plugin_name)
+        if metadata is None:
+            raise CorePluginNotFoundException(plugin_name)
         if metadata.config_schema_path:
             return pm.config_manager.load_schema(metadata.config_schema_path)
         return None
@@ -429,8 +444,6 @@ class MissevanServer(ServerInterface):
 
         :return: 失败插件信息列表
         """
-        if self._plugin_manager is None:
-            return []
         return self._plugin_manager.get_failed_plugins()
 
     async def retry_failed_plugin(self, dir_name: str) -> PluginMetadata:
@@ -453,7 +466,8 @@ class MissevanServer(ServerInterface):
         :raises CorePluginNotFoundException: 插件不存在
         """
         pm = self._require_plugin_manager()
-        pm._get_plugin(plugin_name)
+        if pm.get_plugin(plugin_name) is None:
+            raise CorePluginNotFoundException(plugin_name)
         return pm.get_plugin_data_dir(plugin_name)
 
     # ------------------------------------------------------------------ #
@@ -474,13 +488,10 @@ class MissevanServer(ServerInterface):
         self._ensure_data_dir()
 
         state: dict[str, Any] = {
-            "disabled_plugins": (
-                list(self._plugin_manager.disabled_plugin_names)
-                if self._plugin_manager else []
-            ),
+            "disabled_plugins": list(self._plugin_manager.disabled_plugin_names),
         }
 
-        if self._bot is not None:
+        if self._bot_available:
             state["bot"] = {
                 "cookie": self._bot_cookie,
                 "permissions": self._bot_permissions.value,
@@ -527,8 +538,6 @@ class MissevanServer(ServerInterface):
 
     def _restore_livestream(self, live_id: int) -> None:
         """从持久化数据恢复 Livestream。"""
-        if self._bot is None:
-            return
         livestream = MissevanLivestream(live_id, self._bot, self._event_bus)
         self._livestreams[live_id] = livestream
         _log.info("Livestream 已恢复: live_id={}", live_id)

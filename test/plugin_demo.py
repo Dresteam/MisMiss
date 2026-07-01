@@ -15,11 +15,11 @@
 
 from __future__ import annotations
 
-import os
 import sys
+from pathlib import Path
 
 # 确保 src/ 在路径中
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from core.events import EventBus
 from core.plugin import PluginManager, PluginConfigManager, PluginPermissionManager
@@ -40,11 +40,11 @@ def main() -> None:
     banner("MisMiss Plugin System Demo")
 
     # 项目根目录
-    project_root = os.path.dirname(os.path.dirname(__file__))
-    plugin_dir = os.path.join(project_root, "plugins")
-    config_dir = os.path.join(project_root, "data", "config")
-    perm_dir = os.path.join(project_root, "data", "permissions")
-    data_dir = os.path.join(project_root, "data")
+    project_root = Path(__file__).resolve().parent.parent
+    plugin_dir = str(project_root / "plugins")
+    config_dir = str(project_root / "data" / "config")
+    perm_dir = str(project_root / "data" / "permissions")
+    data_dir = str(project_root / "data")
 
     # ================================================================ #
     # 1. 初始化
@@ -128,7 +128,7 @@ def main() -> None:
         if p.config_schema_path:
             schema = PluginConfigManager.load_schema(p.config_schema_path)
             print(f"    Schema keys: {list(schema.keys())}")
-            print(f"    Schema details:")
+            print("    Schema details:")
             for key, defn in schema.items():
                 print(f"        {key}: type={defn.get('type')}, default={defn.get('default')}")
 
@@ -144,7 +144,7 @@ def main() -> None:
             if p.plugin_instance:
                 print(f"    Instance config: {p.plugin_instance.config}")
         else:
-            print(f"    (no _conf_schema.json)")
+            print("    (no _conf_schema.json)")
 
         # 5e. 读写测试
         cfg.update_config_value(p.name, "greeting_enabled", False)
@@ -162,7 +162,7 @@ def main() -> None:
     for p in plugins:
         print(f"  --- {p.name} ---")
         perm_schema = PluginPermissionManager.load_permission_schema(
-            os.path.join(plugin_dir, p.root_dir_name or "")
+            str(Path(plugin_dir) / (p.root_dir_name or ""))
         )
         if perm_schema:
             print(f"    Permission schema: {perm_schema}")
@@ -171,7 +171,7 @@ def main() -> None:
             merged = ppm.load_permissions_with_defaults(p.name, perm_schema)
             print(f"    Merged permissions: {merged}")
         else:
-            print(f"    (no _permission.json)")
+            print("    (no _permission.json)")
 
         # 读写测试
         ppm.update_permission(p.name, "admin_only", True)
@@ -187,17 +187,17 @@ def main() -> None:
         print(f"  --- {p.name} ---")
         d = pm.get_plugin_data_dir(p.name)
         print(f"    data_dir path : {d}")
-        print(f"    data_dir exists: {'yes' if os.path.isdir(d) else 'no'}")
+        print(f"    data_dir exists: {'yes' if Path(d).is_dir() else 'no'}")
 
         # 检查 stats 文件（由插件在 terminate 时写入）
-        stats_file = os.path.join(d, "stats.json")
-        if os.path.exists(stats_file):
+        stats_file = str(Path(d) / "stats.json")
+        if Path(stats_file).exists():
             import json
             with open(stats_file, "r") as f:
                 stats = json.load(f)
             print(f"    stats.json    : {stats}")
         else:
-            print(f"    stats.json    : (not yet written — created on terminate)")
+            print("    stats.json    : (not yet written — created on terminate)")
 
     # ================================================================ #
     # 8. 查看 README / CHANGELOG
@@ -228,7 +228,8 @@ def main() -> None:
         banner("[9a] Stop plugin (disable)")
         pm.stop_plugin(target)
         p = pm.get_plugin(target)
-        print(f"    {target} enabled: {'yes' if p.enabled else 'no'}")
+        if p is not None:
+            print(f"    {target} enabled: {'yes' if p.enabled else 'no'}")
         print(f"    disabled list: {pm.disabled_plugin_names}")
 
         # 验证事件处理器已取消注册
@@ -236,13 +237,14 @@ def main() -> None:
             handlers = pm.get_plugin_handlers(target)
             print(f"    handlers after stop: {len(handlers)} (should be 0 or raise)")
         except CorePluginNotFoundException:
-            print(f"    handlers after stop: (unregistered, as expected)")
+            print("    handlers after stop: (unregistered, as expected)")
 
         # 9b. 启动 (start_plugin alias)
         banner("[9b] Start plugin (enable)")
         pm.start_plugin(target)
         p = pm.get_plugin(target)
-        print(f"    {target} enabled: {'yes' if p.enabled else 'no'}")
+        if p is not None:
+            print(f"    {target} enabled: {'yes' if p.enabled else 'no'}")
         handlers = pm.get_plugin_handlers(target)
         print(f"    handlers after start: {len(handlers)}")
 
@@ -267,9 +269,9 @@ def main() -> None:
     # 11. 模拟事件触发
     # ================================================================ #
     banner("[11] EventBus handler count")
-    total_handlers = sum(len(h) for h in event_bus._handlers.values())
+    total_handlers = event_bus.handler_count
     print(f"    Registered handler entries: {total_handlers}")
-    print(f"    Event types with handlers: {len(event_bus._handlers)}")
+    print(f"    Event types with handlers: {event_bus.event_type_count}")
 
     # ================================================================ #
     # 12. 关闭
@@ -279,8 +281,8 @@ def main() -> None:
 
     # 验证 stats.json 已被写入
     for p in plugins:
-        stats_file = os.path.join(p.data_dir or "", "stats.json")
-        if os.path.exists(stats_file):
+        stats_file = str(Path(p.data_dir or "") / "stats.json")
+        if Path(stats_file).exists():
             import json
             with open(stats_file, "r") as f:
                 stats = json.load(f)

@@ -81,13 +81,26 @@ class Server(ABC):
         """
         ...
 
+    @abstractmethod
+    async def verify_bot(self) -> bool:
+        """主动验证 Bot Cookie 是否有效（发起网络请求）。
+
+        与 :meth:`bot_available` 不同，此方法会发起实际的 API 请求
+        来验证当前 Cookie 是否仍然有效。
+
+        :return: Cookie 有效返回 ``True``，过期或网络错误返回 ``False``
+        """
+        ...
+
     # ------------------------------------------------------------------ #
     # Livestream
     # ------------------------------------------------------------------ #
 
     @abstractmethod
-    def add_livestream(self, live_id: int) -> "Livestream":
+    async def add_livestream(self, live_id: int) -> "Livestream":
         """添加直播间。
+
+        添加前会主动验证 Bot Cookie 是否有效。
 
         :param live_id: 直播间 ID
         :return: 直播间实例
