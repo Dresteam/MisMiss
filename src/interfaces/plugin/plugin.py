@@ -5,9 +5,36 @@
 
 from __future__ import annotations
 
+import contextvars
 from abc import ABC
+from typing import TYPE_CHECKING
 
 from interfaces.event.listener import Listener
+
+if TYPE_CHECKING:
+    from interfaces.plugin.plugin import Plugin as _Plugin
+
+# ------------------------------------------------------------------ #
+# 插件上下文 —— 用于在执行事件处理器时追踪当前插件，
+# 以便 Bot 方法校验插件级权限
+# ------------------------------------------------------------------ #
+
+current_plugin: contextvars.ContextVar["_Plugin | None"] = contextvars.ContextVar(
+    "current_plugin", default=None
+)
+"""当前正在执行事件处理器的插件实例。
+
+由 :class:`~core.events.bus.EventBus` 在调用 handler 前设置、
+调用后清除。Bot 方法通过此变量判断调用是否来自某个插件，
+并据此校验插件级权限。
+
+用法（内部）::
+
+    plugin = current_plugin.get()
+    if plugin is not None:
+        # 来自插件调用，校验 plugin.permissions
+        ...
+"""
 
 
 class Plugin(Listener, ABC):
@@ -71,14 +98,27 @@ class Plugin(Listener, ABC):
     # 构造
     # ------------------------------------------------------------------ #
 
-    def __init__(self, config: dict | None = None) -> None:
+    def __init__(
+        self,
+        config: dict | None = None,
+        permissions: dict | None = None,
+    ) -> None:
         """初始化插件。
 
         :param config: 插件运行时配置（已合并 ``_conf_schema.json`` 默认值）。
                        由 PluginManager 在加载时自动传入。
+        :param permissions: 插件运行时权限（已合并 ``_permission.json`` 默认值）。
+                            由 PluginManager 在加载时自动传入。
         """
         self.config: dict | None = config
         """插件运行时配置字典。若插件无 ``_conf_schema.json`` 则为 ``None``。"""
+
+        self.permissions: dict | None = permissions
+        """插件运行时权限字典（key → bool）。若插件无 ``_permission.json`` 则为 ``None``。
+
+        对标 :class:`~interfaces.bot.bot.BotPermission` Flag，
+        每项权限可独立开关，最终生效权限还需取 Bot 实际权限的交集。
+        """
 
     # ------------------------------------------------------------------ #
     # 生命周期钩子

@@ -79,8 +79,13 @@ class PluginMetadata:
     config: dict | None = field(default=None, compare=False)
     """插件运行时配置（已合并默认值）。"""
 
-    permission_config: dict | None = field(default=None, compare=False)
-    """插件权限配置。"""
+    permissions: dict | None = field(default=None, compare=False)
+    """插件运行时权限字典。
+
+    Server 自动分配默认权限（与 Bot 默认一致），管理员可通过 API 修改。
+    每项权限可独立开关（key → bool），持久化到本地。
+    最终生效权限以 Bot 实际权限为天花板取交集。
+    """
 
     readme_path: str | None = None
     """``README.md`` 的绝对路径，若不存在则为 ``None``。"""

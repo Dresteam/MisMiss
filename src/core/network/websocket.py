@@ -25,7 +25,10 @@ class LiveWebSocket:
     """Missevan 直播弹幕 WebSocket 客户端。
 
     连接时自动获取默认 Cookie，无需外部传入。
-    子类需要实现 :meth:`on_message` 方法来处理解析后的 JSON 数据。
+
+    :meth:`connect` 建立连接后立即返回，消息循环在后台异步运行。
+    断连时自动重连（指数退避），重连成功后会重新调用 :meth:`on_open`。
+    子类需要实现 :meth:`on_message` 来处理解析后的 JSON 数据。
 
     :param live_id: 直播间 ID
     """
@@ -38,41 +41,51 @@ class LiveWebSocket:
         self._ws: ClientConnection | None = None
         self._retry_count = 0
         self._heartbeat_task: asyncio.Task[Any] | None = None
+        self._loop_task: asyncio.Task[Any] | None = None
+        self._closing: bool = False
 
     # ------------------------------------------------------------------ #
     # 公共接口
     # ------------------------------------------------------------------ #
 
     async def connect(self) -> None:
-        """建立 WebSocket 连接并开始接收消息。
+        """建立 WebSocket 连接并启动后台消息循环，立即返回。
 
         内部自动获取默认 Cookie 构造请求头。
+        消息循环作为后台任务运行，断连时自动重连。
 
-        :raises CoreWebSocketException: 连接失败或达到最大重试次数时
+        :raises CoreWebSocketException: 首次连接失败
         """
-        cookie = await DefaultCookieAPI().api()
-        headers = self._build_headers(cookie)
+        self._closing = False
+        self._retry_count = 0
 
-        try:
-            self._ws = await websockets.connect(
-                f"{Urls.LIVE_WEBSOCKET}{self._live_id}",
-                additional_headers=headers,
-            )
-        except (WebSocketException, OSError) as e:
-            raise CoreWebSocketException(f"WebSocket 连接失败: {e}")
-
-        # 启动心跳
+        await self._do_connect()
         self._start_heartbeat()
 
-        # 进入消息循环
-        try:
-            await self._message_loop()
-        except ConnectionClosed:
-            await self._handle_disconnect()
+        # 子类钩子 —— 连接成功后发送加入房间等初始化消息
+        await self.on_open()
+
+        # 消息循环作为后台任务运行，不阻塞调用方
+        self._loop_task = asyncio.create_task(self._run_message_loop())
 
     async def close(self) -> None:
-        """正常关闭 WebSocket 连接。"""
+        """正常关闭 WebSocket 连接。
+
+        取消心跳和消息循环后台任务，关闭底层连接。
+        """
+        self._closing = True
         await self._stop_heartbeat()
+
+        # 取消消息循环任务
+        if self._loop_task is not None:
+            self._loop_task.cancel()
+            try:
+                await self._loop_task
+            except asyncio.CancelledError:
+                pass
+            self._loop_task = None
+
+        # 关闭底层连接
         if self._ws is not None:
             try:
                 await self._ws.close()
@@ -81,8 +94,14 @@ class LiveWebSocket:
             self._ws = None
 
     # ------------------------------------------------------------------ #
-    # 子类需实现
+    # 子类钩子
     # ------------------------------------------------------------------ #
+
+    async def on_open(self) -> None:
+        """WebSocket 连接成功后的钩子（首次连接和每次重连成功后均会调用）。
+
+        子类可覆写此方法发送初始化消息（如加入房间）。
+        """
 
     async def on_message(self, data: dict[str, Any]) -> None:
         """处理解析后的 JSON 消息。
@@ -94,11 +113,49 @@ class LiveWebSocket:
         raise NotImplementedError
 
     # ------------------------------------------------------------------ #
-    # 内部：消息循环
+    # 内部：连接建立
     # ------------------------------------------------------------------ #
 
+    async def _do_connect(self) -> None:
+        """实际建立 WebSocket 连接（获取 Cookie + 握手）。"""
+        cookie = await DefaultCookieAPI().api()
+        headers = self._build_headers(cookie)
+
+        try:
+            self._ws = await websockets.connect(
+                f"{Urls.LIVE_WEBSOCKET}{self._live_id}",
+                additional_headers=headers,
+            )
+        except (WebSocketException, OSError) as e:
+            raise CoreWebSocketException(f"WebSocket 连接失败: {e}")
+
+    # ------------------------------------------------------------------ #
+    # 内部：消息循环（后台任务）
+    # ------------------------------------------------------------------ #
+
+    async def _run_message_loop(self) -> None:
+        """后台消息循环 —— 自动处理断连与重连。
+
+        作为 ``asyncio.Task`` 运行，不阻塞调用方。
+        通过 ``self._closing`` 标志控制退出。
+        """
+        while not self._closing:
+            try:
+                await self._message_loop()
+            except ConnectionClosed:
+                if self._closing:
+                    return
+                # 断连 → 尝试自动重连
+                try:
+                    await self._reconnect()
+                except CoreWebSocketException:
+                    return  # 超过最大重试次数，退出
+            except (WebSocketException, asyncio.CancelledError):
+                if self._closing:
+                    return
+
     async def _message_loop(self) -> None:
-        """消息接收循环。"""
+        """单次消息接收循环。"""
         if self._ws is None:
             return
 
@@ -111,6 +168,34 @@ class LiveWebSocket:
                 data = self._parse_brotli(raw)
                 if data:
                     await self.on_message(data)
+
+    # ------------------------------------------------------------------ #
+    # 内部：重连
+    # ------------------------------------------------------------------ #
+
+    async def _reconnect(self) -> None:
+        """断连后自动重连（指数退避，循环重试，无递归）。"""
+        await self._stop_heartbeat()
+
+        while self._retry_count <= self._MAX_RETRIES:
+            if self._closing:
+                return
+
+            self._retry_count += 1
+            delay = 2.0 * self._retry_count
+            await asyncio.sleep(delay)
+
+            try:
+                await self._do_connect()
+                # 重连成功 — 重置计数，恢复心跳，通知子类
+                self._retry_count = 0
+                self._start_heartbeat()
+                await self.on_open()
+                return
+            except CoreWebSocketException:
+                continue  # 重试
+
+        raise CoreWebSocketException("重连失败，已达到最大重试次数")
 
     # ------------------------------------------------------------------ #
     # 内部：心跳
@@ -141,26 +226,6 @@ class LiveWebSocket:
                     await self._ws.send(self.HEARTBEAT)
             except (asyncio.CancelledError, WebSocketException):
                 break
-
-    # ------------------------------------------------------------------ #
-    # 内部：重连
-    # ------------------------------------------------------------------ #
-
-    async def _handle_disconnect(self) -> None:
-        """处理异常断开，尝试自动重连。"""
-        await self._stop_heartbeat()
-        self._retry_count += 1
-
-        if self._retry_count > self._MAX_RETRIES:
-            raise CoreWebSocketException("重连失败，已达到最大重试次数")
-
-        delay = 2.0 * self._retry_count
-        await asyncio.sleep(delay)
-
-        try:
-            await self.connect()
-        except CoreWebSocketException:
-            await self._handle_disconnect()
 
     # ------------------------------------------------------------------ #
     # 内部：Brotli
