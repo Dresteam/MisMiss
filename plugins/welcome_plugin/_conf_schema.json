@@ -1,0 +1,26 @@
+{
+    "pinyin_enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否在欢迎消息前附加用户名拼音"
+    },
+    "pinyin_prefix": {
+        "type": "string",
+        "default": "✐[拼音] ",
+        "description": "拼音行前缀装饰符"
+    },
+    "welcome_phrases": {
+        "type": "template_list",
+        "default": [
+            "欢迎 @{user} 来到直播间～",
+            "@{user} 你来啦！",
+            "欢迎新朋友 @{user} ！",
+            "有请 @{user} 闪亮登场！",
+            "@{user} 进入了直播间，大家欢迎~",
+            "哇！@{user} 来了！",
+            "@{user} 你好呀～欢迎欢迎",
+            "捕捉一只 @{user} ！"
+        ],
+        "description": "随机欢迎语模板（@{user} 会被替换为 @用户名）"
+    }
+}

@@ -152,7 +152,7 @@ class Livestream(EventManager, ABC):
         ...
 
     @abstractmethod
-    def send_message(self, message: str, priority: int = 0) -> None:
+    async def send_message(self, message: str, priority: int = 0) -> None:
         """向直播间发送信息。
 
         等价于 ``self.bot.send_livestream_message(self.live_id, message, priority)``。
@@ -164,7 +164,7 @@ class Livestream(EventManager, ABC):
         ...
 
     @abstractmethod
-    def send_gift(self, gift_id: int, num: int) -> None:
+    async def send_gift(self, gift_id: int, num: int) -> None:
         """向直播间赠送礼物。
 
         等价于 ``self.bot.send_livestream_gift(self.live_id, gift_id, num)``。
@@ -176,7 +176,7 @@ class Livestream(EventManager, ABC):
         ...
 
     @abstractmethod
-    def send_backpack(self, gift_id: int, num: int) -> None:
+    async def send_backpack(self, gift_id: int, num: int) -> None:
         """向直播间赠送背包内礼物。
 
         等价于 ``self.bot.send_livestream_backpack(self.live_id, gift_id, num)``。
