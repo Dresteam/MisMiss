@@ -38,6 +38,16 @@ class Server(ABC):
         """关闭服务器——停用所有组件。"""
         ...
 
+    @abstractmethod
+    async def reload(self) -> None:
+        """重载服务器（shutdown + start）。"""
+        ...
+
+    @abstractmethod
+    async def refresh_plugins(self) -> None:
+        """重新扫描插件目录，加载新插件（不重载已加载的）。"""
+        ...
+
     # ------------------------------------------------------------------ #
     # Bot
     # ------------------------------------------------------------------ #
@@ -108,13 +118,26 @@ class Server(ABC):
         ...
 
     @abstractmethod
-    def enable_livestream(self, live_id: int) -> None:
-        """启用直播间（不销毁实例）。"""
+    async def remove_livestream(self, live_id: int) -> None:
+        """移除直播间（退出 + 从列表删除 + 持久化）。
+
+        :param live_id: 直播间 ID
+        :raises KeyError: 直播间不存在
+        """
+        ...
+
+    @abstractmethod
+    async def enable_livestream(self, live_id: int) -> None:
+        """启用直播间并自动连接 WebSocket（等价于 join）。
+
+        :param live_id: 直播间 ID
+        :raises KeyError: 直播间不存在
+        """
         ...
 
     @abstractmethod
     def disable_livestream(self, live_id: int) -> None:
-        """停用直播间（不销毁实例）。"""
+        """停用直播间并断开连接（不销毁实例）。"""
         ...
 
     @property

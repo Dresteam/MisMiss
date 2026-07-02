@@ -37,6 +37,7 @@ from interfaces.plugin.plugin_metadata import PluginMetadata
 
 if TYPE_CHECKING:
     from core.events.bus import EventBus
+    from core.command.router import CommandRouter
 
 _log = get_logger(__name__)
 
@@ -85,12 +86,14 @@ class PluginManager:
         plugin_data_dir: str | None = None,
         disabled_plugins: list[str] | None = None,
         on_state_changed: Callable[[], None] | None = None,
+        command_router: "CommandRouter | None" = None,
     ) -> None:
         self._plugin_dir = plugin_dir
         self._event_bus = event_bus
         self._config_dir = config_dir
         self._disabled_plugins: set[str] = set(disabled_plugins or [])
         self._on_state_changed = on_state_changed
+        self._command_router = command_router
 
         # 权限目录默认与 config 同级
         if permission_dir is None:
@@ -387,128 +390,27 @@ class PluginManager:
             _log.warning("插件已加载，跳过: {}", metadata.name)
             return self._plugins[metadata.name]
 
-        # 2. 安装依赖
-        requirements_path = self._find_requirements(plugin_path)
-        if requirements_path:
-            metadata.requirements_path = requirements_path
-            self._install_requirements(requirements_path, metadata.name)
-
-        # 3. 找主模块
-        module_file = self._find_main_module(plugin_path)
-        if module_file is None:
-            raise CorePluginLoadException(dir_name, "未找到 main.py")
-
-        # 4. 构建导入路径并导入
-        import_path = f"plugins.{dir_name}.{module_file}"
-
-        # 确保 plugins/ 在 sys.path 中
-        project_root = (
-            os.path.dirname(self._plugin_dir)
-            if os.path.isabs(self._plugin_dir)
-            else os.path.abspath(self._plugin_dir)
-        )
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-
-        try:
-            module = importlib.import_module(import_path)
-        except ImportError as e:
-            raise CorePluginLoadException(
-                dir_name,
-                f"模块导入失败 ({import_path}): {e}",
-            ) from e
-        except Exception as e:
-            raise CorePluginLoadException(
-                dir_name,
-                f"导入异常: {e}",
-            ) from e
-
-        # 5. 查找 Plugin 子类
-        plugin_cls = self._find_plugin_class(module, dir_name)
-
-        # 6. 加载配置（_conf_schema.json）
-        plugin_config: dict = {}
+        # 2. 检查是否存在 _conf_schema.json（仅记录路径，不加载内容）
         schema_path = os.path.join(plugin_path, _CONF_SCHEMA_FILENAME)
         if os.path.exists(schema_path):
             metadata.config_schema_path = schema_path
-            try:
-                schema = PluginConfigManager.load_schema(schema_path)
-                if schema:
-                    plugin_config = self._config_mgr.load_config_with_defaults(
-                        metadata.name,
-                        schema,
-                    )
-                    _log.debug(
-                        "插件 [{}] 配置已加载 ({} 项)",
-                        metadata.name,
-                        len(plugin_config),
-                    )
-            except CorePluginConfigException as e:
-                _log.warning("插件 [{}] 配置加载失败: {}", metadata.name, e)
 
-        # 7. 加载权限（Server 自动分配默认权限，对标 Bot 默认值）
-        plugin_permissions: dict[str, bool] = (
-            self._permission_mgr.ensure_permissions(metadata.name)
-        )
-        _log.debug(
-            "插件 [{}] 权限已加载 ({} 项): {}",
-            metadata.name,
-            len(plugin_permissions),
-            [k for k, v in plugin_permissions.items() if v],
-        )
-
-        # 8. 判断是否被禁用
-        is_disabled = metadata.name in self._disabled_plugins
-
-        # 9. 实例化插件（传入 config 和 permissions）
-        try:
-            kwargs: dict = {}
-            if plugin_config is not None:
-                kwargs["config"] = plugin_config
-            if plugin_permissions is not None:
-                kwargs["permissions"] = plugin_permissions
-            instance = plugin_cls(**kwargs)
-        except Exception as e:
-            raise CorePluginLoadException(
-                dir_name,
-                f"插件实例化失败: {e}",
-            ) from e
-
-        # 注入元数据属性
-        instance.name = metadata.name
-        instance.author = metadata.author
-        instance.plugin_id = metadata.plugin_id
-
-        # 创建并注入数据目录
-        data_dir = self.get_plugin_data_dir(metadata.name)
-        instance.data_dir = data_dir
-        metadata.data_dir = data_dir
-
-        metadata.plugin_instance = instance
-        metadata.module = module
-        metadata.module_path = import_path
-        metadata.config = plugin_config
-        metadata.permissions = plugin_permissions
-        metadata.enabled = not is_disabled
-
-        # 10. 加载 README
+        # 3. 记录 README 路径
         readme_path = os.path.join(plugin_path, "README.md")
         if os.path.exists(readme_path):
             metadata.readme_path = readme_path
 
-        # 11. 初始化并注册
-        if not is_disabled:
-            try:
-                await instance.initialize()
-            except Exception as e:
-                _log.warning("插件 {} 初始化异常: {}", metadata.name, e)
+        # 4. 记录路径信息用于后续完整加载
+        metadata.module_path = None  # 尚未导入
+        metadata.plugin_instance = None
+        metadata.enabled = False  # 新插件默认禁用
 
-            self._event_bus.register_new_event(instance)
-            _log.info("插件已注册到事件总线: {}", metadata.name)
-        else:
-            _log.info(
-                "插件 {} 当前处于禁用状态，跳过注册", metadata.name
-            )
+        # 5. 存入内部字典（仅元数据，不加载代码）
+        self._plugins[metadata.name] = metadata
+        self._failed_plugins.pop(dir_name, None)
+        self._notify_state_changed()
+        _log.info("插件已发现（禁用状态）: {}", metadata)
+        return metadata
 
         # 12. 存入内部字典
         self._plugins[metadata.name] = metadata
@@ -663,25 +565,106 @@ class PluginManager:
     # 启用 / 禁用（启动 / 停止）
     # ------------------------------------------------------------------ #
 
+    async def _activate_plugin(self, metadata: PluginMetadata) -> None:
+        """完整加载一个尚未激活的插件（导入、实例化、初始化、注册）。"""
+        dir_name = metadata.root_dir_name
+        if dir_name is None:
+            raise CorePluginLoadException(metadata.name, "root_dir_name 为空")
+        plugin_path = os.path.join(self._plugin_dir, dir_name)
+
+        # 安装依赖
+        req = self._find_requirements(plugin_path)
+        if req:
+            self._install_requirements(req, metadata.name)
+
+        # 导入模块
+        module_file = self._find_main_module(plugin_path)
+        if module_file is None:
+            raise CorePluginLoadException(dir_name, "未找到 main.py")
+        import_path = f"plugins.{dir_name}.{module_file}"
+        project_root = (
+            os.path.dirname(self._plugin_dir)
+            if os.path.isabs(self._plugin_dir)
+            else os.path.abspath(self._plugin_dir)
+        )
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        module = importlib.import_module(import_path)
+
+        # 查找 Plugin 子类
+        plugin_cls = self._find_plugin_class(module, dir_name)
+
+        # 加载配置
+        plugin_config: dict = {}
+        if metadata.config_schema_path and os.path.exists(metadata.config_schema_path):
+            try:
+                schema = PluginConfigManager.load_schema(metadata.config_schema_path)
+                if schema:
+                    plugin_config = self._config_mgr.load_config_with_defaults(
+                        metadata.name, schema)
+            except CorePluginConfigException as e:
+                _log.warning("插件 [{}] 配置加载失败: {}", metadata.name, e)
+
+        # 加载权限
+        plugin_permissions = self._permission_mgr.ensure_permissions(metadata.name)
+
+        # 实例化
+        kwargs: dict = {}
+        if plugin_config:
+            kwargs["config"] = plugin_config
+        if plugin_permissions:
+            kwargs["permissions"] = plugin_permissions
+        instance = plugin_cls(**kwargs)
+
+        # 注入属性
+        instance.name = metadata.name
+        instance.author = metadata.author
+        instance.plugin_id = metadata.plugin_id
+        data_dir = self.get_plugin_data_dir(metadata.name)
+        instance.data_dir = data_dir
+
+        # 更新元数据
+        metadata.plugin_instance = instance
+        metadata.module = module
+        metadata.module_path = import_path
+        metadata.config = plugin_config
+        metadata.permissions = plugin_permissions
+        metadata.data_dir = data_dir
+        metadata.enabled = True
+
+        # 初始化 + 注册
+        await instance.initialize()
+        self._event_bus.register_new_event(instance)
+        _log.info("插件已激活并注册到事件总线: {}", metadata.name)
+
+        # 注册 @command 指令
+        if self._command_router is not None:
+            self._command_router.register_plugin(instance)
+            cmds = self._command_router.list_commands()
+            names = cmds.get(metadata.name, [])
+            if names:
+                _log.info("插件已注册 {} 个指令: {}", len(names), names)
+
     def enable_plugin(self, plugin_name: str) -> None:
-        """启用插件。
-
-        将插件实例注册到事件总线，并更新禁用列表。
-
-        :param plugin_name: 插件名称
-        :raises CorePluginNotFoundException: 插件不存在
-        """
+        """启用插件——若尚未激活则完整加载。"""
         metadata = self._get_plugin(plugin_name)
         if metadata.enabled:
             _log.info("插件已处于启用状态: {}", plugin_name)
             return
 
         if metadata.plugin_instance is None:
-            raise CorePluginLoadException(plugin_name, "插件实例为空")
-
-        metadata.enabled = True
-        self._disabled_plugins.discard(plugin_name)
-        self._event_bus.register_new_event(metadata.plugin_instance)
+            # 尚未激活——通过事件循环调度完整加载
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._activate_plugin(metadata))
+            except RuntimeError:
+                raise CorePluginLoadException(
+                    plugin_name, "无法在非异步上下文中激活插件"
+                )
+        else:
+            metadata.enabled = True
+            self._disabled_plugins.discard(plugin_name)
+            self._event_bus.register_new_event(metadata.plugin_instance)
         _log.info("插件已启用: {}", plugin_name)
 
     def disable_plugin(self, plugin_name: str) -> None:
@@ -1099,18 +1082,18 @@ class PluginManager:
     def _unload_plugin_instance(self, metadata: PluginMetadata) -> None:
         """终止并取消注册一个插件实例。
 
-        1. 从事件总线取消注册
-        2. 调用插件的 ``terminate()`` 钩子
-        3. 清空实例引用
-
         :param metadata: 插件元数据
         """
         instance = metadata.plugin_instance
         if instance is None:
-            return
+            return  # 未激活的插件无需卸载
 
         # 从事件总线取消注册
         self._event_bus.unregister_event(instance)
+
+        # 从命令路由器取消注册
+        if self._command_router is not None:
+            self._command_router.unregister_plugin(instance)
 
         # 调用 terminate（尝试异步，失败则同步）
         try:

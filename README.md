@@ -507,6 +507,7 @@ MissMiss/
 │       └── CHANGELOG.md          #   更新日志
 │
 ├── src/
+│   ├── cli.py                    # 🖥️ 命令行前端 (Command 类路由)
 │   ├── interfaces/               # 📋 抽象接口层 (MIST 标准)
 │   │   ├── entity/               #    实体接口 (User, Gift, Medal, …)
 │   │   ├── event/                #    事件接口 (Event, Listener, EventManager)

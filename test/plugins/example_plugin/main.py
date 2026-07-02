@@ -2,8 +2,9 @@
 
 演示插件系统的完整功能：
 - 事件监听（开播/下播/消息/礼物/用户进入）
+- @command 指令注解（自动解析消息为指令调用）
 - 配置管理（``_conf_schema.json`` → config 注入）
-- 权限配置（``_permission.json`` → permission_config）
+- 权限管理（``self.permissions`` BotPermission 字典）
 - 数据目录（``self.data_dir`` 专属存储空间）
 """
 
@@ -15,6 +16,7 @@ import os
 from core.logging import get_logger
 from interfaces.plugin import Plugin
 from interfaces.event import event_handler
+from interfaces.command import command, Scope
 from interfaces.event.livestream import (
     LiveMessageEvent,
     LiveGiftEvent,
@@ -151,6 +153,53 @@ class ExamplePlugin(Plugin):
             return
         _log.info("[ExamplePlugin] [JOIN] {} 进入了直播间", event.user.name)
         self._stats["joins"] += 1
+
+    # ------------------------------------------------------------------ #
+    # @command 指令（自动解析消息为结构化指令调用）
+    # ------------------------------------------------------------------ #
+
+    @command("echo", alias=["say"], scope=Scope.LIVEMESSAGE)
+    def cmd_echo(self, text: str = ""):
+        """复读指令 —— ``echo <内容>`` 或 ``say <内容>``。
+
+        演示无类型转换的纯文本参数。
+        """
+        reply = text if text else "你想让我说什么？"
+        _log.info("[ExamplePlugin] [CMD:echo] {}", reply)
+
+    @command("add", scope=Scope.LIVEMESSAGE)
+    def cmd_add(self, a: int, b: int):
+        """加法指令 —— ``add <a> <b>``。
+
+        演示 ``int`` 类型自动转换。
+        """
+        result = a + b
+        _log.info("[ExamplePlugin] [CMD:add] {} + {} = {}", a, b, result)
+
+    @command("greet", alias=["hello", "hi"], scope=Scope.LIVEMESSAGE)
+    def cmd_greet(self, target: str = "世界", repeat: int = 1):
+        """问候指令 —— ``greet [目标] [次数]``。
+
+        演示多参数 + 默认值 + int 转换。
+        """
+        for _ in range(repeat):
+            _log.info("[ExamplePlugin] [CMD:greet] 你好，{}！", target)
+        self._stats["messages"] += repeat  # 计入统计
+
+    @command("stats", scope=Scope.LIVEMESSAGE)
+    def cmd_stats(self):
+        """统计指令 —— ``stats``。
+
+        演示无参数指令，输出插件运行统计。
+        """
+        _log.info(
+            "[ExamplePlugin] [CMD:stats] 消息={} 礼物={} 开播={} 下播={} 进入={}",
+            self._stats.get("messages", 0),
+            self._stats.get("gifts", 0),
+            self._stats.get("opens", 0),
+            self._stats.get("closes", 0),
+            self._stats.get("joins", 0),
+        )
 
     # ------------------------------------------------------------------ #
     # 内部：房间过滤 & 统计
