@@ -1,0 +1,6 @@
+name: welcome_plugin
+desc: 新用户进入直播间时自动发送个性化欢迎消息，支持拼音模式
+author: MisMiss
+version: 1.0.0
+short_desc: 新用户欢迎插件（随机欢迎语 + 拼音模式）
+display_name: 欢迎插件

@@ -112,6 +112,7 @@ def cmd_help(_args: list[str] | None = None) -> None:
 |   live disable <id>             停用直播间                        |
 |   live join <id>                进入直播间（连 WebSocket）         |
 |   live quit <id>                退出直播间                        |
+|   live remove <id>              移除直播间（退出+删除+持久化）      |
 |   live msg <id> <text>          发送弹幕                          |
 |   live msg -p <n> <id> <text>   发送弹幕（指定优先级）             |
 +==================================================================+
@@ -371,6 +372,24 @@ async def cmd_live_quit(args: list[str]) -> None:
         print(f"[成功] 已退出直播间 {live_id}")
     except CoreDisabledException as e:
         print(f"[已停用] {e}")
+
+
+async def cmd_live_remove(args: list[str]) -> None:
+    """移除直播间。"""
+    if not args:
+        print("用法: live remove <id>")
+        return
+    try:
+        live_id = int(args[0])
+    except ValueError:
+        print(f"[错误] 无效的直播间 ID: {args[0]}")
+        return
+
+    try:
+        await server.remove_livestream(live_id)
+        print(f"[成功] 直播间 {live_id} 已移除")
+    except KeyError:
+        print(f"[错误] 直播间 {live_id} 不存在")
 
 
 async def cmd_live_msg(args: list[str]) -> None:
@@ -700,6 +719,7 @@ COMMAND_MAP: dict[str, callable] = {  # type: ignore[type-arg]
     "live disable": cmd_live_disable,
     "live join": cmd_live_join,
     "live quit": cmd_live_quit,
+    "live remove": cmd_live_remove,
     "live msg": cmd_live_msg,
     # plugin
     "plugin list": cmd_plugin_list,

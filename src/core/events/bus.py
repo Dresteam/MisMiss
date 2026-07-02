@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing
 from collections import defaultdict
 from collections.abc import Callable
@@ -101,6 +102,10 @@ class EventBus(EventManager):
         若 handler 属于某个 ``Plugin``，自动设置 :data:`current_plugin`
         上下文变量，以便 Bot 方法校验插件级权限。
 
+        **同步与异步**：handler 可以是同步或异步函数。
+        若为异步（``async def``），自动通过 ``create_task`` 调度到事件循环，
+        ``current_plugin`` 上下文会随 Task 传播。
+
         :param event: 事件实例
         :param clazz: 指定分发的事件类型；若为 ``None`` 则按 ``type(event)`` 分发
         """
@@ -115,7 +120,10 @@ class EventBus(EventManager):
                     if isinstance(_listener, Plugin):
                         token = current_plugin.set(_listener)
                     try:
-                        handler(event)
+                        result = handler(event)
+                        # 若 handler 是异步函数，调度到事件循环
+                        if asyncio.iscoroutine(result):
+                            asyncio.get_running_loop().create_task(result)
                     finally:
                         if token is not None:
                             current_plugin.reset(token)
