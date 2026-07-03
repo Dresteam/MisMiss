@@ -14,7 +14,7 @@ import json
 import os
 
 from core.logging import get_logger
-from interfaces.plugin import Plugin
+from interfaces.plugin import Plugin, MissConfig
 from interfaces.event import event_handler
 from interfaces.command import command, Scope
 from interfaces.event.livestream import (
@@ -53,12 +53,12 @@ class ExamplePlugin(Plugin):
     # 生命周期
     # ------------------------------------------------------------------ #
 
-    async def initialize(self) -> None:
+    async def initialize(self, config: MissConfig) -> None:
         """插件初始化 —— 演示 config 读取和 data_dir 写入。"""
-        cfg = self.config or {}
+        self._config = config
 
         # -- 使用配置 --
-        if cfg.get("greeting_enabled", True):
+        if config.get("greeting_enabled", True):
             _log.info(
                 "[ExamplePlugin] 你好！插件 v{} 已就绪 (plugin_id={})",
                 "1.1.0",
@@ -67,7 +67,7 @@ class ExamplePlugin(Plugin):
         else:
             _log.info("[ExamplePlugin] 插件已加载（问候语已关闭）")
 
-        _log.info("[ExamplePlugin] 配置: {}", json.dumps(cfg, ensure_ascii=False))
+        _log.info("[ExamplePlugin] 配置: {}", json.dumps(config.raw, ensure_ascii=False))
         _log.info("[ExamplePlugin] 数据目录: {}", self.data_dir)
 
         # -- 使用数据目录保存状态 --
@@ -106,7 +106,7 @@ class ExamplePlugin(Plugin):
         if not self._is_room_allowed(event.livestream.live_id):
             return
 
-        cfg = self.config or {}
+        cfg = self._config
         max_len = cfg.get("max_message_length", 500)
         msg = event.message
         if len(msg) > max_len:
@@ -127,7 +127,7 @@ class ExamplePlugin(Plugin):
 
         gift = event.gift
         total_value = gift.price * gift.num
-        cfg = self.config or {}
+        cfg = self._config
         threshold = cfg.get("gift_threshold", 100.0)
 
         if total_value < threshold:
@@ -207,7 +207,7 @@ class ExamplePlugin(Plugin):
 
     def _is_room_allowed(self, live_id: int) -> bool:
         """检查直播间是否在允许列表中。"""
-        cfg = self.config or {}
+        cfg = self._config
         allowed: list[int] = cfg.get("allowed_rooms", [])
         if not allowed:
             return True  # 空列表 = 全部允许

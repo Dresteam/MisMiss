@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ..bot.bot import Bot
     from ..entity.creator import Creator
     from ..entity.medal import Medal
+    from ..entity.user import User
 
 
 class Livestream(EventManager, ABC):
@@ -184,5 +185,20 @@ class Livestream(EventManager, ABC):
         :param gift_id: 礼物 ID
         :param num: 礼物数量
         :raises RequestFailedException: 当请求失败时
+        """
+        ...
+
+    # ------------------------------------------------------------------ #
+    # 管理
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def get_admin_list(self) -> list[User]:
+        """获取直播间管理员列表。
+
+        在创建直播间实例时通过 Meta API 获取并缓存，
+        后续调用直接返回 ``User`` 对象列表。
+
+        :return: 管理员 User 列表
         """
         ...

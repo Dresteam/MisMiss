@@ -259,19 +259,21 @@ display_name: 我的插件
 ```python
 import json
 import os
-from interfaces.plugin import Plugin
+from interfaces.plugin import Plugin, MissConfig
 from interfaces.event import event_handler
 from interfaces.event.livestream import LiveMessageEvent, LiveGiftEvent, LiveJoinEvent
 
 class MyPlugin(Plugin):
     """我的第一个插件 —— 演示 config / permissions / data_dir 用法"""
 
-    async def initialize(self) -> None:
-        # self.config 已由框架自动注入（包含 schema 默认值）
-        cfg = self.config or {}
-        if cfg.get("welcome_enabled"):
+    async def initialize(self, config: MissConfig) -> None:
+        # config 通过参数传入 — 框架自动注入（包含 schema 默认值）
+        if config.get("welcome_enabled"):
             print(f"[{self.name}] 插件就绪 (plugin_id={self.plugin_id})")
-        print(f"[{self.name}] 配置: {json.dumps(cfg, ensure_ascii=False)}")
+        print(f"[{self.name}] 配置: {json.dumps(config.raw, ensure_ascii=False)}")
+
+        # 若事件处理器中也需要配置，自行保存为实例属性
+        self._config = config
 
         # self.permissions 由 Server 自动分配（对标 BotPermission）
         print(f"[{self.name}] 权限: {self.permissions}")
@@ -286,8 +288,7 @@ class MyPlugin(Plugin):
 
     @event_handler
     def on_message(self, event: LiveMessageEvent) -> None:
-        cfg = self.config or {}
-        max_len = cfg.get("max_message_length", 500)
+        max_len = self._config.get("max_message_length", 500)
         msg = event.message[:max_len]
         print(f"[MSG] {event.user.name}: {msg}")
         self._stats["messages"] += 1
@@ -295,7 +296,7 @@ class MyPlugin(Plugin):
     @event_handler
     def on_gift(self, event: LiveGiftEvent) -> None:
         total = event.gift.price * event.gift.num
-        threshold = (self.config or {}).get("gift_threshold", 100.0)
+        threshold = self._config.get("gift_threshold", 100.0)
         if total >= threshold:
             print(f"[GIFT] {event.user.name} 赠送 {event.gift.name} x{event.gift.num}")
         self._stats["gifts"] += 1
@@ -427,14 +428,15 @@ await bot.send_livestream_message(12345, "普通消息", priority=0)
 1. **解析 schema** → 提取每个字段的 `type` 和 `default`
 2. **生成默认值** → `string→""`, `int→0`, `float→0.0`, `bool→false`, `array→[]`
 3. **合并已保存的值** → 深度合并，已保存的值覆盖默认值
-4. **注入插件实例** → 通过 `Plugin.__init__(config=...)` 传入，`self.config` 即可访问
-5. **自动补充新字段** → schema 新增字段时自动写回配置文件，用户修改的值永不丢失
+4. **注入插件** → 通过 `initialize(config)` 参数传入 `MissConfig` 实例
 
 ```python
 class MyPlugin(Plugin):
-    async def initialize(self) -> None:
-        # self.config 即合并后的完整配置（含默认值）
-        greeting = (self.config or {}).get("greeting_enabled", True)
+    async def initialize(self, config: MissConfig) -> None:
+        # config 即合并后的完整配置（含默认值）
+        greeting = config.get("greeting_enabled", True)
+        # 若事件处理器中需要，自行保存
+        self._config = config
 ```
 
 运行时配置文件存储在 `data/config/{plugin_name}_config.json`。

@@ -10,17 +10,20 @@ from typing import Optional
 
 from interfaces.bot.bot import Bot
 from interfaces.entity.creator import Creator
+from interfaces.entity.user import User
 from interfaces.entity.medal import Medal
 from interfaces.event import event_handler, Listener
 from interfaces.event.event import Event
 from interfaces.event.livestream import LiveOpenEvent, LiveCloseEvent
 from interfaces.livestream.livestream import Livestream
 
+from ..network.endpoints.meta import MetaAPI
 from ..network.endpoints.room import RoomInfoAPI
 from ..events.bus import EventBus
 from ..models.creator import LiveCreator
-from .handler import Live
 from ..models.medal import RoomMedal
+from ..models.user import MissevanUser
+from .handler import Live
 from ..exceptions import CoreApiException, CoreDisabledException
 
 
@@ -53,6 +56,8 @@ class MissevanLivestream(Livestream):
         self._websocket: Live | None = None
         # 启用状态
         self._enabled: bool = True
+        # 管理员列表缓存（在 _refresh() 中通过 Meta API 获取）
+        self._admin_list: list[User] = []
 
         # 注册内部监听器 — 监听开播/下播事件以更新状态
         self._event_bus.register_new_event(self._create_internal_listener())
@@ -254,6 +259,35 @@ class MissevanLivestream(Livestream):
         # 热度
         statistics = room.get("statistics", {})
         self._score = statistics.get("score", -1)
+
+        # 管理员列表（Meta API，仅调用一次）
+        try:
+            meta = await MetaAPI().api(self._live_id)
+            if meta.get("code") == 0:
+                members = meta.get("info", {}).get("members", {})
+                raw = members.get("admin", [])
+                self._admin_list = [
+                    MissevanUser(
+                        user_id=a.get("user_id", 0),
+                        username=a.get("username", ""),
+                        user_intro="",
+                        user_icon=a.get("iconurl", ""),
+                    )
+                    for a in raw
+                    if isinstance(a, dict)
+                ]
+        except Exception:
+            self._admin_list = []
+
+    def get_admin_list(self) -> list[User]:
+        """获取直播间管理员列表。
+
+        在 :meth:`_refresh` 中通过 Meta API 获取并缓存，
+        返回 ``User`` 对象列表。
+
+        :return: 管理员 User 列表
+        """
+        return list(self._admin_list)
 
     def _create_websocket(self) -> Live:
         """创建 WebSocket 实例。

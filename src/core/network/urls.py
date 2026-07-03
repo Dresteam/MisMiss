@@ -22,6 +22,8 @@ class Urls:
     ONLINE_API: str = "https://fm.missevan.com/api/v2/chatroom/online"
     # 房间信息
     ROOM_INFO: str = "https://fm.missevan.com/api/v2/live/"
+    # 聊天室元数据（管理员列表等）
+    CHATROOM_META: str = "https://fm.missevan.com/api/v2/chatroom/meta?room_id="
     # 默认 Cookie 获取
     DEFAULT_COOKIE: str = "https://fm.missevan.com/api/user/info"
     # WebSocket 直播弹幕
