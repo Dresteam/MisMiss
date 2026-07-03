@@ -195,3 +195,47 @@ class Bot(User, ABC):
         :raises PermissionError: 权限不足
         """
         ...
+
+    # ------------------------------------------------------------------ #
+    # 定时消息
+    # ------------------------------------------------------------------ #
+
+    @abstractmethod
+    def register_timer_message(self, live_id: int, message: str) -> str:
+        """注册一条定时消息。
+
+        消息被加入 Bot 的定时循环队列，每 ``timer_interval`` 秒
+        按顺序发送一条，确保不同插件的定时消息不会同时发送。
+
+        :param live_id: 目标直播间 ID
+        :param message: 消息文本
+        :return: 唯一消息 ID（用于取消注册）
+        """
+        ...
+
+    @abstractmethod
+    def unregister_timer_message(self, message_id: str) -> None:
+        """取消注册的定时消息。
+
+        :param message_id: :meth:`register_timer_message` 返回的消息 ID
+        """
+        ...
+
+    @abstractmethod
+    def register_timer_messages(
+        self, entries: list[tuple[int, str]]
+    ) -> list[str]:
+        """批量注册定时消息。
+
+        :param entries: ``[(live_id, message), ...]`` 列表
+        :return: 对应的消息 ID 列表
+        """
+        ...
+
+    @abstractmethod
+    def unregister_timer_messages(self, message_ids: list[str]) -> None:
+        """批量取消定时消息。
+
+        :param message_ids: 消息 ID 列表
+        """
+        ...

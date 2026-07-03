@@ -3,22 +3,24 @@
 封装 Missevan 平台各业务 API 的请求逻辑。
 """
 
-from .cookie import DefaultCookieAPI
-from .room import RoomInfoAPI
+from .backpack import BackpackSendAPI
 from .bot_info import BotInfoAPI
 from .bot_status import BotStatusAPI
-from .online import OnlineAPI
-from .message import MessageSendAPI
+from .cookie import DefaultCookieAPI
+from .meta import MetaAPI
 from .gift import GiftSendAPI
-from .backpack import BackpackSendAPI
+from .message import MessageSendAPI
+from .online import OnlineAPI
+from .room import RoomInfoAPI
 
 __all__ = [
-    "DefaultCookieAPI",
-    "RoomInfoAPI",
+    "BackpackSendAPI",
     "BotInfoAPI",
     "BotStatusAPI",
-    "OnlineAPI",
-    "MessageSendAPI",
+    "MetaAPI",
+    "DefaultCookieAPI",
     "GiftSendAPI",
-    "BackpackSendAPI",
+    "MessageSendAPI",
+    "OnlineAPI",
+    "RoomInfoAPI",
 ]

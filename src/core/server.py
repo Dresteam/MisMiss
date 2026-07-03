@@ -27,23 +27,29 @@ from core.exceptions import (
     CorePluginNotFoundException,
     CorePluginPermissionException,
 )
+from core.config import ServerConfig
 from core.logging import get_logger
 
 _log = get_logger(__name__)
-
-DATA_DIR: str = "data"
-_STATE_FILE: str = "server_state.json"
 
 
 class MissevanServer(ServerInterface):
     """Missevan 服务器——管理 Bot、Livestream、Plugin 的中央调度器。
 
-    启动时从 ``{DATA_DIR}/server_state.json`` 加载持久化数据。
+    启动时从 ``config.yml`` 加载服务器配置，
+    从 ``{data_dir}/{state_file}`` 加载持久化数据。
     Bot、插件、直播间默认均为**禁用**状态，需显式启用。
     """
 
-    def __init__(self) -> None:
-        self._bot: MissevanBot = MissevanBot("")
+    def __init__(self, config: ServerConfig | None = None) -> None:
+        self._config = config or ServerConfig.load()
+        self._data_dir: str = self._config.get_str("server.data_dir", "data")
+        self._state_file: str = self._config.get_str("server.state_file", "server_state.json")
+
+        self._bot: MissevanBot = MissevanBot(
+            "",
+            timer_interval=self._config.get_float("bot.timer_interval", 60.0),
+        )
         self._bot_available: bool = False
         self._bot_cookie: str = ""
         self._bot_permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
@@ -94,11 +100,12 @@ class MissevanServer(ServerInterface):
         self._plugin_manager = PluginManager(
             plugin_dir="plugins",
             event_bus=self._event_bus,
-            config_dir=os.path.join(DATA_DIR, "config"),
-            permission_dir=os.path.join(DATA_DIR, "permissions"),
-            plugin_data_dir=DATA_DIR,
+            config_dir=os.path.join(self._data_dir, "config"),
+            permission_dir=os.path.join(self._data_dir, "permissions"),
+            plugin_data_dir=os.path.join(self._data_dir, "plugins"),
             disabled_plugins=[],  # 初始全部禁用，由 enabled_plugins 决定
             command_router=command_router,
+            pip_mirror=self._config.get_str("plugin.pip_mirror"),
         )
         await self._plugin_manager.load_all()
         # 仅启用 state 中记录的已启用插件
@@ -150,7 +157,11 @@ class MissevanServer(ServerInterface):
     ) -> MissevanBot:
         _log.info("创建 Bot ...")
         self._bot.enabled = False
-        bot = MissevanBot(cookie, permissions=permissions)
+        bot = MissevanBot(
+            cookie,
+            permissions=permissions,
+            timer_interval=self._config.get_float("bot.timer_interval", 60.0),
+        )
         await bot.refresh()
         self._bot = bot
         self._bot_available = True
@@ -200,13 +211,24 @@ class MissevanServer(ServerInterface):
     # ================================================================== #
 
     async def add_livestream(self, live_id: int) -> MissevanLivestream:
-        """添加直播间（仅注册，不连接）。"""
+        """添加直播间——获取房间信息并注册（不连接 WebSocket）。
+
+        添加时通过 API 获取房间元信息（名称、简介、主播等），
+        但不建立 WebSocket 连接。调用 :meth:`enable_livestream` 来连接。
+
+        :param live_id: 直播间 ID
+        :return: 已填充元信息的直播间实例
+        :raises CoreApiException: 房间信息获取失败
+        """
         if live_id in self._livestreams:
             return self._livestreams[live_id]
         livestream = MissevanLivestream(live_id, self._bot, self._event_bus)
+        await livestream._refresh()  # type: ignore[attr-defined]
         self._livestreams[live_id] = livestream
         self._save_state()
-        _log.info("直播间已添加: live_id={}", live_id)
+        _log.info(
+            "直播间已添加: live_id={} name={}", live_id, livestream.room_name
+        )
         return livestream
 
     async def remove_livestream(self, live_id: int) -> None:
@@ -379,6 +401,28 @@ class MissevanServer(ServerInterface):
         self._save_state()
         return metadata
 
+    # ================================================================== #
+    # 定时消息
+    # ================================================================== #
+
+    def register_timer_message(self, live_id: int, message: str) -> str:
+        return self._bot.register_timer_message(live_id, message)
+
+    def unregister_timer_message(self, message_id: str) -> None:
+        self._bot.unregister_timer_message(message_id)
+
+    def register_timer_messages(
+        self, entries: list[tuple[int, str]]
+    ) -> list[str]:
+        return self._bot.register_timer_messages(entries)
+
+    def unregister_timer_messages(self, message_ids: list[str]) -> None:
+        self._bot.unregister_timer_messages(message_ids)
+
+    @property
+    def timer_message_count(self) -> int:
+        return self._bot.timer_message_count
+
     def get_plugin_data_dir(self, plugin_name: str) -> str:
         pm = self._require_plugin_manager()
         if pm.get_plugin(plugin_name) is None:
@@ -389,13 +433,12 @@ class MissevanServer(ServerInterface):
     # 持久化
     # ================================================================== #
 
-    @staticmethod
-    def _ensure_data_dir() -> None:
-        Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+    def _ensure_data_dir(self) -> None:
+        Path(self._data_dir).mkdir(parents=True, exist_ok=True)
 
     @property
     def _state_path(self) -> str:
-        return os.path.join(DATA_DIR, _STATE_FILE)
+        return os.path.join(self._data_dir, self._state_file)
 
     def _save_state(self) -> None:
         self._ensure_data_dir()
@@ -434,7 +477,11 @@ class MissevanServer(ServerInterface):
         except ValueError:
             permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
         try:
-            self._bot = MissevanBot(cookie, permissions=permissions)
+            self._bot = MissevanBot(
+                cookie,
+                permissions=permissions,
+                timer_interval=self._config.get_float("bot.timer_interval", 60.0),
+            )
             await self._bot.refresh()
             self._bot_available = True
             self._bot_cookie = cookie

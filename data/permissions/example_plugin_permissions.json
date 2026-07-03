@@ -1,7 +1,0 @@
-{
-  "SEND_LIVESTREAM_MESSAGE": true,
-  "SEND_PRIVATE_MESSAGE": false,
-  "SEND_BACKPACK_GIFT": false,
-  "SEND_GIFT": false,
-  "EXPOSE_COOKIE": false
-}

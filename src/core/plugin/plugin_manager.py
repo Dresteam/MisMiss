@@ -32,6 +32,7 @@ from core.exceptions import (
 from core.logging import get_logger
 from core.plugin.config_manager import PluginConfigManager
 from core.plugin.permission_manager import PluginPermissionManager
+from interfaces.plugin.miss_config import MissConfig
 from interfaces.plugin.plugin import Plugin
 from interfaces.plugin.plugin_metadata import PluginMetadata
 
@@ -87,6 +88,7 @@ class PluginManager:
         disabled_plugins: list[str] | None = None,
         on_state_changed: Callable[[], None] | None = None,
         command_router: "CommandRouter | None" = None,
+        pip_mirror: str | None = None,
     ) -> None:
         self._plugin_dir = plugin_dir
         self._event_bus = event_bus
@@ -94,6 +96,7 @@ class PluginManager:
         self._disabled_plugins: set[str] = set(disabled_plugins or [])
         self._on_state_changed = on_state_changed
         self._command_router = command_router
+        self._pip_mirror = pip_mirror
 
         # 权限目录默认与 config 同级
         if permission_dir is None:
@@ -102,10 +105,10 @@ class PluginManager:
             )
         self._permission_dir = permission_dir
 
-        # 插件数据目录默认在 data/ 下
+        # 插件数据目录默认在 data/plugins/ 下
         if plugin_data_dir is None:
             plugin_data_dir = os.path.join(
-                os.path.dirname(os.path.dirname(config_dir)), ""
+                os.path.dirname(config_dir), "plugins"
             )
         self._plugin_data_dir = plugin_data_dir
 
@@ -252,19 +255,21 @@ class PluginManager:
             return path
         return None
 
-    @staticmethod
     def _install_requirements(
+        self,
         requirements_path: str,
         plugin_name: str,
     ) -> None:
         """安装 ``requirements.txt`` 中缺失的依赖。
 
-        对每个包检查是否已安装，仅安装缺失的包。
+        逐个检查包是否已安装，仅对缺失的包使用镜像源安装。
 
         :param requirements_path: requirements.txt 绝对路径
         :param plugin_name: 插件名称（用于日志和异常信息）
         :raises CorePluginDependencyException: 安装失败
         """
+        mirror = self._pip_mirror or "https://pypi.tuna.tsinghua.edu.cn/simple"
+
         try:
             with open(requirements_path, "r", encoding="utf-8") as f:
                 lines = f.read().strip()
@@ -285,8 +290,23 @@ class PluginManager:
         if not packages:
             return
 
+        # 逐个检查，分离已安装和缺失的包
+        missing: list[str] = []
+        for pkg_spec in packages:
+            pkg_name = PluginManager._parse_package_name(pkg_spec)
+            if PluginManager._is_package_installed(pkg_name):
+                _log.debug("插件 [{}] 依赖已安装，跳过: {}", plugin_name, pkg_name)
+            else:
+                missing.append(pkg_spec)
+                _log.debug("插件 [{}] 依赖缺失，待安装: {}", plugin_name, pkg_name)
+
+        if not missing:
+            _log.info("插件 [{}] 所有 {} 个依赖已安装", plugin_name, len(packages))
+            return
+
         _log.info(
-            "正在为插件 [{}] 安装依赖: {} 个包", plugin_name, len(packages)
+            "插件 [{}] 依赖: {} 个中 {} 个缺失，正在安装 ...",
+            plugin_name, len(packages), len(missing),
         )
 
         try:
@@ -297,7 +317,8 @@ class PluginManager:
                     "pip",
                     "install",
                     "--quiet",
-                    *packages,
+                    "-i", mirror,
+                    *missing,
                 ],
                 capture_output=True,
                 text=True,
@@ -311,7 +332,7 @@ class PluginManager:
                     stderr[:500],
                 )
             else:
-                _log.info("插件 [{}] 依赖安装完成", plugin_name)
+                _log.info("插件 [{}] 依赖安装完成 ({}/{} 个)", plugin_name, len(missing), len(packages))
         except subprocess.TimeoutExpired:
             raise CorePluginDependencyException(
                 plugin_name, "依赖安装超时（超过 120 秒）"
@@ -320,6 +341,45 @@ class PluginManager:
             raise CorePluginDependencyException(
                 plugin_name, "未找到 pip，请确保 Python 环境中已安装 pip"
             )
+
+    @staticmethod
+    def _parse_package_name(pkg_spec: str) -> str:
+        """从 pip 包规格中提取包名（去除版本约束和 extras）。
+
+        :param pkg_spec: 如 ``"pypinyin>=0.50"`` 或 ``"pkg[extra]==1.0"``
+        :return: 纯包名，如 ``"pypinyin"``
+        """
+        name = pkg_spec.strip()
+        # 去除 extras: pkg[extra] → pkg
+        if "[" in name:
+            name = name.split("[")[0]
+        # 去除版本约束: pkg>=1.0 → pkg
+        for sep in ("==", ">=", "<=", "!=", "~=", ">", "<"):
+            if sep in name:
+                name = name.split(sep)[0]
+                break
+        return name.strip().lower().replace("-", "_")
+
+    @staticmethod
+    def _is_package_installed(pkg_name: str) -> bool:
+        """检查指定的 Python 包是否已安装。
+
+        :param pkg_name: 规范化的包名（小写、下划线）
+        :return: 已安装返回 ``True``
+        """
+        try:
+            import importlib.metadata
+            importlib.metadata.distribution(pkg_name)
+            return True
+        except importlib.metadata.PackageNotFoundError:
+            pass
+        # 兼容纯顶级模块名（如 ``pypinyin`` 既是包名也是模块名）
+        try:
+            __import__(pkg_name)
+            return True
+        except ImportError:
+            pass
+        return False
 
     # ------------------------------------------------------------------ #
     # 加载
@@ -410,15 +470,6 @@ class PluginManager:
         self._failed_plugins.pop(dir_name, None)
         self._notify_state_changed()
         _log.info("插件已发现（禁用状态）: {}", metadata)
-        return metadata
-
-        # 12. 存入内部字典
-        self._plugins[metadata.name] = metadata
-
-        # 从失败列表移除（如果有重试）
-        self._failed_plugins.pop(dir_name, None)
-
-        self._notify_state_changed()
         return metadata
 
     @staticmethod
@@ -610,8 +661,6 @@ class PluginManager:
 
         # 实例化
         kwargs: dict = {}
-        if plugin_config:
-            kwargs["config"] = plugin_config
         if plugin_permissions:
             kwargs["permissions"] = plugin_permissions
         instance = plugin_cls(**kwargs)
@@ -633,7 +682,8 @@ class PluginManager:
         metadata.enabled = True
 
         # 初始化 + 注册
-        await instance.initialize()
+        miss_config = MissConfig(plugin_config) if plugin_config else MissConfig({})
+        await instance.initialize(config=miss_config)
         self._event_bus.register_new_event(instance)
         _log.info("插件已激活并注册到事件总线: {}", metadata.name)
 
@@ -652,6 +702,10 @@ class PluginManager:
             _log.info("插件已处于启用状态: {}", plugin_name)
             return
 
+        # 立即标记为启用（不等异步加载完成），保证状态查询正确
+        metadata.enabled = True
+        self._disabled_plugins.discard(plugin_name)
+
         if metadata.plugin_instance is None:
             # 尚未激活——通过事件循环调度完整加载
             try:
@@ -662,8 +716,6 @@ class PluginManager:
                     plugin_name, "无法在非异步上下文中激活插件"
                 )
         else:
-            metadata.enabled = True
-            self._disabled_plugins.discard(plugin_name)
             self._event_bus.register_new_event(metadata.plugin_instance)
         _log.info("插件已启用: {}", plugin_name)
 
@@ -1028,13 +1080,29 @@ class PluginManager:
         目录路径为 ``{plugin_data_dir}/{plugin_name}/``，
         若不存在则自动创建。
 
-        插件可将数据库、缓存等自定义文件存储在此目录下。
+        若旧路径（``data/{plugin_name}/``）存在而新路径不存在，
+        自动迁移数据。
 
         :param plugin_name: 插件名称
         :return: 数据目录绝对路径
         """
         safe_name = plugin_name.replace("/", "_").replace("\\", "_")
         data_dir = os.path.join(self._plugin_data_dir, safe_name)
+
+        # 迁移旧数据：data/{plugin_name}/ → data/plugins/{plugin_name}/
+        if not os.path.exists(data_dir):
+            old_dir = os.path.join(
+                os.path.dirname(self._plugin_data_dir), safe_name
+            )
+            if os.path.isdir(old_dir):
+                try:
+                    shutil.move(old_dir, data_dir)
+                    _log.info(
+                        "插件数据已迁移: {} → {}", old_dir, data_dir
+                    )
+                except OSError as e:
+                    _log.warning("插件数据迁移失败 [{}]: {}", plugin_name, e)
+
         Path(data_dir).mkdir(parents=True, exist_ok=True)
         return data_dir
 

@@ -201,7 +201,7 @@ class Live(LiveWebSocket):
 
         titles = data.get("titles", [])
         medal = self._extract_medal(titles)
-        is_admin = self._check_admin(titles)
+        is_admin = self._check_admin(user_id, titles)
 
         return MissevanLiveUser(
             base_user=base_user,
@@ -229,22 +229,27 @@ class Live(LiveWebSocket):
                 )
         return None
 
-    @staticmethod
-    def _check_admin(titles: list[dict[str, Any]]) -> bool:
-        """从 titles 数组中判断是否为管理员。
+    def _check_admin(self, user_id: int, titles: list[dict[str, Any]]) -> bool:
+        """判断用户是否为管理员或主播。
 
-        管理员的 username 类型 title 颜色为 #FF8686。
+        检查顺序：
+        1. 主播（creator）→ ``True``
+        2. Meta API 管理员列表 → ``True``
+        3. 弹幕 title 颜色为 ``#FF8686`` → ``True``
 
-        :param titles: titles JSON 数组
-        :return: 是否为管理员
+        :param user_id: 用户 ID
+        :param titles: WebSocket 传来的 titles JSON 数组
+        :return: 是否为管理员或主播
         """
-        if not isinstance(titles, list):
-            return False
-        for item in titles:
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "username"
-                and item.get("color") == "#FF8686"
-            ):
-                return True
+        # 主播
+        if user_id == self._livestream.creator_id:
+            print("DEBUG:T")
+            return True
+
+        # Meta API 管理员列表
+        admin_ids = {u.id for u in self._livestream.get_admin_list()}
+        if user_id in admin_ids:
+            print("DEBUG:T")
+            return True
+        print("DEBUG:F")
         return False

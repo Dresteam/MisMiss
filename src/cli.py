@@ -175,8 +175,8 @@ class CommandRegistry:
         for cmd in self._commands:
             groups.setdefault(cmd.group, []).append(cmd)
 
-        lines = ["+==================================================================+"]
-        lines.append("|                    MisMiss CLI                                    |")
+        lines = ["+==================================================================+",
+                 "|                    MisMiss CLI                                    |"]
         for group_name in ("bot", "live", "plugin", "server", "help"):
             if group_name not in groups:
                 continue
@@ -389,11 +389,11 @@ def _live_info(args: list[str]) -> None:
         _log.info(f"  粉丝勋章={live.medal.name} (Lv.{live.medal.level})")
 
 
-def _live_enable(args: list[str]) -> None:
+async def _live_enable(args: list[str]) -> None:
     if not _need_args(args, "live enable <id>"):
         return
     try:
-        server.enable_livestream(int(args[0]))
+        await server.enable_livestream(int(args[0]))
         _log.info(f"[成功] 直播间 {args[0]} 已启用")
     except (KeyError, ValueError):
         _log.info(f"[错误] 直播间 {args[0]} 不存在")
