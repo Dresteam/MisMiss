@@ -243,13 +243,10 @@ class Live(LiveWebSocket):
         """
         # 主播
         if user_id == self._livestream.creator_id:
-            print("DEBUG:T")
             return True
 
         # Meta API 管理员列表
         admin_ids = {u.id for u in self._livestream.get_admin_list()}
         if user_id in admin_ids:
-            print("DEBUG:T")
             return True
-        print("DEBUG:F")
         return False
