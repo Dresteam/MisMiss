@@ -1,7 +1,0 @@
-name: example_plugin
-desc: 示例插件 —— 监听直播间消息和礼物事件，演示 config / permission / data_dir 等完整功能
-author: MisMiss
-version: 1.1.0
-short_desc: 监听直播间事件的示例插件
-repo: https://github.com/MisMiss/example-plugin
-display_name: 示例插件

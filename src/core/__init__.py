@@ -35,7 +35,8 @@ from .events.bus import EventBus
 from .livestream.mis_livestream import MissevanLivestream
 from .plugin.plugin_manager import PluginManager
 from .plugin.config_manager import PluginConfigManager
-from .server import MissevanServer, DATA_DIR
+from .config import ServerConfig
+from .server import MissevanServer
 
 __all__ = [
     "CoreApiException",
@@ -53,7 +54,7 @@ __all__ = [
     "EventBus",
     "MissevanLivestream",
     "MissevanServer",
-    "DATA_DIR",
+    "ServerConfig",
     "PluginManager",
     "PluginConfigManager",
 ]

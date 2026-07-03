@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections import namedtuple
 from typing import TYPE_CHECKING, Optional
 
@@ -33,6 +34,12 @@ if TYPE_CHECKING:
 
 # 内部使用的消息条目
 _MessageItem = namedtuple("_MessageItem", ["priority", "live_id", "message"])
+
+# 定时消息条目
+_TimerEntry = namedtuple("_TimerEntry", ["message_id", "live_id", "message"])
+
+# 默认定时消息间隔（秒）
+_DEFAULT_TIMER_INTERVAL: float = 60.0
 
 _log = get_logger(__name__)
 
@@ -63,6 +70,7 @@ class MissevanBot(Bot):
         cookie: str,
         *,
         permissions: BotPermission = _DEFAULT_PERMISSIONS,
+        timer_interval: float = _DEFAULT_TIMER_INTERVAL,
     ) -> None:
         self.__cookie = cookie
 
@@ -77,6 +85,12 @@ class MissevanBot(Bot):
         self._message_queue: list[_MessageItem] = []
         self._queue_lock = asyncio.Lock()
         self._consumer_task: asyncio.Task[None] | None = None
+
+        # 定时消息
+        self._timer_entries: dict[str, _TimerEntry] = {}
+        self._timer_cycle: list[str] = []  # message_id 轮转顺序
+        self._timer_task: asyncio.Task[None] | None = None
+        self._timer_interval: float = timer_interval
 
         # 权限：创建后不可修改
         self.__permissions: BotPermission = permissions
@@ -425,6 +439,128 @@ class MissevanBot(Bot):
         self._check_permission(BotPermission.EXPOSE_COOKIE)
         self._check_plugin_permission(BotPermission.EXPOSE_COOKIE)
         return self.__cookie
+
+    # ------------------------------------------------------------------ #
+    # 定时消息
+    # ------------------------------------------------------------------ #
+
+    def register_timer_message(self, live_id: int, message: str) -> str:
+        """注册一条定时消息。
+
+        消息被加入轮转队列，每 ``timer_interval`` 秒发送一条，
+        确保不同插件的定时消息不会同时发送。
+
+        :param live_id: 目标直播间 ID
+        :param message: 消息文本
+        :return: 唯一消息 ID
+        """
+        message_id = uuid.uuid4().hex[:8]
+        entry = _TimerEntry(message_id=message_id, live_id=live_id, message=message)
+        self._timer_entries[message_id] = entry
+        self._timer_cycle.append(message_id)
+        self._ensure_timer_running()
+        _log.info(
+            "定时消息已注册: id={} live={} msg={} 总数={}",
+            message_id, live_id, message[:30], len(self._timer_cycle),
+        )
+        return message_id
+
+    def unregister_timer_message(self, message_id: str) -> None:
+        """取消注册的定时消息。
+
+        :param message_id: :meth:`register_timer_message` 返回的消息 ID
+        """
+        if message_id in self._timer_entries:
+            del self._timer_entries[message_id]
+        self._timer_cycle = [m for m in self._timer_cycle if m != message_id]
+        _log.info(
+            "定时消息已取消: id={} 剩余={}", message_id, len(self._timer_cycle),
+        )
+
+    def register_timer_messages(
+        self, entries: list[tuple[int, str]]
+    ) -> list[str]:
+        """批量注册定时消息。
+
+        :param entries: ``[(live_id, message), ...]`` 列表
+        :return: 对应的消息 ID 列表
+        """
+        return [self.register_timer_message(lid, msg) for lid, msg in entries]
+
+    def unregister_timer_messages(self, message_ids: list[str]) -> None:
+        """批量取消定时消息。
+
+        :param message_ids: 消息 ID 列表
+        """
+        for mid in message_ids:
+            self.unregister_timer_message(mid)
+
+    # ------------------------------------------------------------------ #
+    # 定时消息 —— 内部
+    # ------------------------------------------------------------------ #
+
+    def _ensure_timer_running(self) -> None:
+        """确保定时器后台任务正在运行。
+
+        若无事件循环（如同步测试场景），静默跳过；
+        定时任务将在 Bot 首次用于异步上下文时自动启动。
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # 无事件循环，暂不启动
+
+        if self._timer_task is None or self._timer_task.done():
+            self._timer_task = loop.create_task(self._run_timer())
+            _log.debug("定时消息循环已启动 间隔={}s", self._timer_interval)
+
+    async def _run_timer(self) -> None:
+        """定时消息后台循环——每间隔发送一条，轮转队列。"""
+        while self._timer_cycle:
+            await asyncio.sleep(self._timer_interval)
+            if not self._timer_cycle:
+                break
+
+            # 取出队列头部
+            msg_id = self._timer_cycle.pop(0)
+            entry = self._timer_entries.get(msg_id)
+            if entry is None:
+                continue
+
+            # 发送（不抛异常阻塞循环）
+            try:
+                self._check_enabled()
+                self._check_permission(BotPermission.SEND_LIVESTREAM_MESSAGE)
+                await self._ensure_initialized()
+                await self._safe_call(
+                    lambda: MessageSendAPI(self.__cookie).api(
+                        entry.live_id, entry.message
+                    )
+                )
+                _log.info(
+                    "定时消息已发送: id={} live={} msg={}",
+                    msg_id, entry.live_id, entry.message[:30],
+                )
+            except CoreApiException as e:
+                _log.warning("定时消息发送失败 id={}: {}", msg_id, e)
+            except CoreCookieException:
+                _log.error("Cookie 已过期，停止定时消息循环")
+                self._timer_cycle.clear()
+                self._timer_entries.clear()
+                return
+            except CoreDisabledException:
+                _log.warning("Bot 已停用，跳过定时消息 id={}", msg_id)
+            except Exception:
+                _log.exception("定时消息未预期异常 id={}", msg_id)
+
+            # 放回队列尾部，循环轮转
+            if entry.message_id in self._timer_entries:
+                self._timer_cycle.append(msg_id)
+
+    @property
+    def timer_message_count(self) -> int:
+        """当前注册的定时消息数量（只读）。"""
+        return len(self._timer_cycle)
 
     # ------------------------------------------------------------------ #
     # 辅助方法

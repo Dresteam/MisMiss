@@ -10,6 +10,7 @@ from abc import ABC
 from typing import TYPE_CHECKING
 
 from interfaces.event.listener import Listener
+from interfaces.plugin.miss_config import MissConfig
 
 if TYPE_CHECKING:
     from interfaces.plugin.plugin import Plugin as _Plugin
@@ -63,13 +64,16 @@ class Plugin(Listener, ABC):
         from interfaces.event.livestream import LiveMessageEvent
 
         class MyPlugin(Plugin):
-            async def initialize(self) -> None:
+            async def initialize(self, config: MissConfig) -> None:
                 print(f"插件 {self.name} 初始化完成")
-                # 可通过 self.config 访问配置
+                print(f"配置项: {config.get('key', 'default')}")
+                # 若事件处理器中也需要配置，自行保存
+                self._config = config
 
             @event_handler
             def on_message(self, event: LiveMessageEvent) -> None:
                 print(f"收到消息: {event.message}")
+                threshold = self._config.get("threshold", 100)
 
     .. versionadded:: 1.1
     """
@@ -100,19 +104,13 @@ class Plugin(Listener, ABC):
 
     def __init__(
         self,
-        config: dict | None = None,
         permissions: dict | None = None,
     ) -> None:
         """初始化插件。
 
-        :param config: 插件运行时配置（已合并 ``_conf_schema.json`` 默认值）。
-                       由 PluginManager 在加载时自动传入。
         :param permissions: 插件运行时权限（已合并 ``_permission.json`` 默认值）。
                             由 PluginManager 在加载时自动传入。
         """
-        self.config: dict | None = config
-        """插件运行时配置字典。若插件无 ``_conf_schema.json`` 则为 ``None``。"""
-
         self.permissions: dict | None = permissions
         """插件运行时权限字典（key → bool）。若插件无 ``_permission.json`` 则为 ``None``。
 
@@ -124,11 +122,18 @@ class Plugin(Listener, ABC):
     # 生命周期钩子
     # ------------------------------------------------------------------ #
 
-    async def initialize(self) -> None:
+    async def initialize(self, config: MissConfig) -> None:
         """插件初始化钩子。
 
         在插件被 :class:`PluginManager` 加载并注册到事件总线后调用。
         可用于初始化数据库连接、加载资源等异步操作。
+
+        :param config: 插件运行时配置（:class:`MissConfig` 实例），
+                       由框架根据 ``_conf_schema.json`` 自动生成并注入。
+                       若插件未定义 schema，传入空的 ``MissConfig({})``。
+
+        插件若需在事件处理器中访问配置，应在该方法中将 ``config``
+        保存为实例属性（如 ``self._config = config``）。
         """
 
     async def terminate(self) -> None:

@@ -141,9 +141,9 @@ def main() -> None:
             merged = cfg.load_config_with_defaults(p.name, schema)
             print(f"    Merged config: {merged}")
 
-            # 5d. 插件实例的 config
-            if p.plugin_instance:
-                print(f"    Instance config: {p.plugin_instance.config}")
+            # 5d. 插件元数据中的 config（原始 dict）
+            if p.config:
+                print(f"    Metadata config: {p.config}")
         else:
             print("    (no _conf_schema.json)")
 
@@ -219,7 +219,6 @@ def main() -> None:
 
     # 创建一个权限受限的模拟插件
     restricted_plugin = Plugin(
-        config={},
         permissions={
             "SEND_LIVESTREAM_MESSAGE": True,   # 有此权限
             "SEND_GIFT": False,                 # 无此权限
@@ -229,7 +228,7 @@ def main() -> None:
     restricted_plugin.name = "restricted_demo"
 
     # 创建一个无 permissions 的插件（向后兼容 — 静默通过）
-    legacy_plugin = Plugin(config={}, permissions=None)
+    legacy_plugin = Plugin(permissions=None)
     legacy_plugin.name = "legacy_demo"
 
     print("  --- Scenario 1: 插件有权限 → 通过 ---")
