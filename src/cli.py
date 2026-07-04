@@ -534,7 +534,7 @@ def _plugin_handlers(args: list[str]) -> None:
         _log.info(f"[错误] {e}")
 
 
-def _plugin_enable(args: list[str]) -> None:
+async def _plugin_enable(args: list[str]) -> None:
     if not _need_args(args, "plugin enable <name>"):
         return
     try:
