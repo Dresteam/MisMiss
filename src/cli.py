@@ -538,7 +538,7 @@ def _plugin_enable(args: list[str]) -> None:
     if not _need_args(args, "plugin enable <name>"):
         return
     try:
-        asyncio.get_running_loop().create_task(server.enable_plugin(args[0]))
+        await server.enable_plugin(args[0])
         _log.info(f"[成功] 插件 '{args[0]}' 已启用")
     except CorePluginNotFoundException as e:
         _log.info(f"[错误] {e}")

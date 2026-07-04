@@ -111,7 +111,7 @@ class MissevanServer(ServerInterface):
         # 仅启用 state 中记录的已启用插件
         for name in enabled_plugins:
             try:
-                self._plugin_manager.enable_plugin(name)
+                await self._plugin_manager.enable_plugin(name)
             except Exception:
                 _log.warning("恢复插件启用状态失败: {}", name)
 
@@ -167,6 +167,7 @@ class MissevanServer(ServerInterface):
         self._bot_available = True
         self._bot_cookie = cookie
         self._bot_permissions = permissions
+        self._constrain_plugin_permissions()
         self._save_state()
         _log.info("Bot 创建成功: {}", bot)
         return bot
@@ -255,12 +256,12 @@ class MissevanServer(ServerInterface):
         """停用直播间并断开连接。"""
         import asyncio
         livestream = self._livestreams[live_id]
-        livestream.enabled = False
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(livestream.quit())
         except RuntimeError:
             pass
+        livestream.enabled = False
         self._enabled_livestreams.discard(live_id)
         self._save_state()
         _log.info("直播间已停用: live_id={}", live_id)
@@ -279,6 +280,31 @@ class MissevanServer(ServerInterface):
 
     def _require_plugin_manager(self) -> PluginManager:
         return self._plugin_manager
+
+    def _constrain_plugin_permissions(self) -> None:
+        """将所有已加载插件的权限强制缩小至 Bot 当前权限范围。
+
+        Bot 权限为插件权限的天花板：若插件拥有某权限但 Bot 没有，
+        则强制禁用该插件的对应权限并持久化。
+        """
+        pm = self._require_plugin_manager()
+        if not self._bot_available:
+            return
+        bot_perm_dict = PluginPermissionManager.to_dict(self._bot.permissions)
+        for meta in pm.list_plugins():
+            if meta.permissions is None:
+                continue
+            changed = False
+            for key in list(meta.permissions.keys()):
+                if meta.permissions[key] and not bot_perm_dict.get(key, False):
+                    meta.permissions[key] = False
+                    changed = True
+                    _log.info(
+                        "插件 [%s] 权限 %s 超出 Bot 范围，已强制禁用",
+                        meta.name, key,
+                    )
+            if changed:
+                pm.permission_manager.save_permissions(meta.name, meta.permissions)
 
     async def install_plugin(self, plugin_name: str) -> PluginMetadata:
         pm = self._require_plugin_manager()
@@ -316,7 +342,23 @@ class MissevanServer(ServerInterface):
 
     async def enable_plugin(self, plugin_name: str) -> None:
         pm = self._require_plugin_manager()
-        pm.enable_plugin(plugin_name)
+        metadata = pm.get_plugin(plugin_name)
+        if metadata is None:
+            raise CorePluginNotFoundException(plugin_name)
+        if metadata.enabled:
+            return  # 已启用，无需操作
+
+        if metadata.plugin_instance is None:
+            # 尚未激活 → 同步等待激活完成
+            try:
+                await pm._activate_plugin(metadata)
+            except Exception as e:
+                raise CorePluginLoadException(plugin_name, str(e))
+        else:
+            pm._event_bus.register_new_event(metadata.plugin_instance)
+
+        metadata.enabled = True
+        pm._disabled_plugins.discard(plugin_name)
         self._save_state()
 
     async def disable_plugin(self, plugin_name: str) -> None:
