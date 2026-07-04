@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import sys
 import json
 import logging
+import asyncio
 from pathlib import Path
 
 import yaml
@@ -112,6 +114,41 @@ async def set_log_level(body: dict):
         pass
 
     return {"success": True, "message": f"日志等级已设为 {level_name}"}
+
+
+# ================================================================== #
+# 端口修改 + 重启
+# ================================================================== #
+
+@router.put("/config/ports")
+async def update_ports(body: dict, s: MissevanServer = Depends(get_server)):
+    """修改 API/WEB 端口，保存配置后立即重启后端。"""
+    api_port = body.get("api_port", 8000)
+    web_port = body.get("web_port", 5173)
+
+    # 保存到 config.yml
+    current: dict = {}
+    if os.path.exists(_CONFIG_PATH):
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            current = yaml.safe_load(f) or {}
+    current.setdefault("server", {})["api_port"] = api_port
+    current.setdefault("server", {})["web_port"] = web_port
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    # 关闭当前服务器
+    await s.shutdown()
+
+    # 0.5s 后在新端口重启
+    def _restart():
+        os.execv(sys.executable, [
+            sys.executable, "-m", "web.backend.main", "--port", str(api_port)
+        ])
+
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.5, _restart)
+
+    return {"success": True, "message": f"配置已保存，后端即将在端口 {api_port} 重启。前端请手动重启: npx vite --port {web_port}"}
 
 
 # ================================================================== #
