@@ -33,9 +33,10 @@ sys.path.insert(0, str(_BACKEND_ROOT))  # web/backend/ — for `from api.xxx imp
 # 第三方
 # ------------------------------------------------------------------ #
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 # ------------------------------------------------------------------ #
 # 项目
@@ -44,7 +45,7 @@ from fastapi.staticfiles import StaticFiles
 from core.logging import get_logger
 from core import MissevanServer
 from api.deps import set_server
-from api.routes import bot, live, plugin, server, dashboard, ws, config, proxy
+from api.routes import bot, live, plugin, server, dashboard, ws, config, proxy, auth
 
 _log = get_logger("web.api")
 
@@ -95,6 +96,35 @@ app.add_middleware(
 )
 
 # ------------------------------------------------------------------ #
+# 认证中间件 —— 保护所有 /api/* 路由（/api/auth/* 和 /api/health 除外）
+# ------------------------------------------------------------------ #
+
+PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/health"}
+PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/", "/api/ws")
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+
+    # 公开路径跳过
+    if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    # 非 API 路径跳过（静态文件等）
+    if not path.startswith("/api/"):
+        return await call_next(request)
+
+    # 检查 Authorization header
+    from api.routes.auth import verify_token
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+    if not token or not verify_token(token):
+        return JSONResponse(status_code=401, content={"detail": "未登录或登录已过期"})
+
+    return await call_next(request)
+
+
+# ------------------------------------------------------------------ #
 # 路由注册
 # ------------------------------------------------------------------ #
 
@@ -106,6 +136,7 @@ app.include_router(server.router, prefix="/api/server", tags=["Server"])
 app.include_router(ws.router, prefix="/api", tags=["WebSocket"])
 app.include_router(config.router, prefix="/api", tags=["Config"])
 app.include_router(proxy.router, prefix="/api", tags=["Proxy"])
+app.include_router(auth.router, prefix="/api", tags=["Auth"])
 
 # 生产环境静态文件（前端构建产物）
 _FRONTEND_DIST = _PROJECT_ROOT / "web" / "frontend" / "dist"
