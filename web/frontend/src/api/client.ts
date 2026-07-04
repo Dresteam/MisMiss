@@ -42,15 +42,22 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const url = `${BASE}${path}`;
+  const token = localStorage.getItem('auth_token');
   const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
     ...options,
   });
 
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('auth_token');
+      window.location.reload();
+      throw new ApiError(401, '登录已过期');
+    }
     let detail = res.statusText;
     try {
       const body = await res.json();

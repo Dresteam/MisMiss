@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Bot, Radio, Puzzle, Server, Settings,
-  Moon, Sun, Terminal, ChevronLeft, ChevronRight,
+  Moon, Sun, Terminal, ChevronLeft, ChevronRight, LogOut,
 } from 'lucide-react';
 import { t } from '../i18n';
+import { useAuth } from '../hooks/useAuth';
 
 interface Props {
   dark: boolean;
@@ -23,6 +24,7 @@ const navItems = [
 ];
 
 export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Props) {
+  const { logout } = useAuth();
   return (
     <>
       {/* Mobile overlay */}
@@ -82,6 +84,15 @@ export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Pro
 
         {/* Footer actions */}
         <div className="p-2 border-t border-surface-200 dark:border-surface-700 space-y-1">
+          <button
+            onClick={logout}
+            className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm
+                       text-surface-600 dark:text-surface-400
+                       hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+          >
+            <LogOut className="w-5 h-5 shrink-0" />
+            {!collapsed && <span className="whitespace-nowrap">退出登录</span>}
+          </button>
           <button
             onClick={onToggleDark}
             className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm
