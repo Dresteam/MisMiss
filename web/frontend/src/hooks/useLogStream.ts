@@ -32,7 +32,10 @@ export function useLogStream(): UseLogStreamReturn {
   // ---- HTTP: load history ----
   const loadHistory = useCallback(async (since: number) => {
     try {
-      const res = await fetch(`/api/logs/history?since=${since}&limit=${PAGE_SIZE}`);
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/logs/history?since=${since}&limit=${PAGE_SIZE}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const data = await res.json();
       if (data.entries?.length) {
         setEntries((prev) => {

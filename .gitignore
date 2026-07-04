@@ -194,6 +194,10 @@ cython_debug/
 .idea/claudeCodeTabState.xml
 .idea/MisMiss.iml
 .idea/workspace.xml
+.idea/.gitignore
+.idea/misc.xml
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/pyLspTools.xml
 
 # Abstra
 #   Abstra is an AI-powered process automation framework.
