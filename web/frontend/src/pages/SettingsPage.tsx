@@ -10,6 +10,9 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(() => localStorage.getItem('debug_enabled') === 'true');
   const [logSaving, setLogSaving] = useState(false);
+  const [apiPort, setApiPort] = useState(8000);
+  const [webPort, setWebPort] = useState(5173);
+  const [portSaving, setPortSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -18,6 +21,8 @@ export function SettingsPage() {
         const data = await res.json();
         setConfig(data.config);
         setEditConfig(JSON.parse(JSON.stringify(data.config)));
+        setApiPort(data.config?.server?.api_port || 8000);
+        setWebPort(data.config?.server?.web_port || 5173);
       } catch { /* ignore */ }
       setLoading(false);
     })();
@@ -63,6 +68,29 @@ export function SettingsPage() {
     setLogSaving(false);
   };
 
+  const handleSavePorts = async () => {
+    setPortSaving(true);
+    try {
+      const res = await fetch('/api/config/ports', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_port: apiPort, web_port: webPort }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('success', data.message);
+        // 后端重启中，前端30秒后自动刷新
+        setTimeout(() => window.location.reload(), 3000);
+      } else {
+        showToast('error', data.detail);
+      }
+    } catch {
+      // 后端可能已重启，静默等待刷新
+    } finally {
+      setPortSaving(false);
+    }
+  };
+
   const updateField = (section: string, key: string, value: any) => {
     setEditConfig((prev) => ({
       ...prev,
@@ -106,6 +134,33 @@ export function SettingsPage() {
               </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Port Config Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-900 dark:text-white">
+          端口设置
+        </div>
+        <div className="p-6">
+          <div className="flex items-end gap-4">
+            <div className="w-40">
+              <label className="block text-xs text-gray-500 mb-1">API 端口</label>
+              <input type="number" value={apiPort} onChange={(e) => setApiPort(Number(e.target.value) || 8000)}
+                className="input text-sm" />
+            </div>
+            <div className="w-40">
+              <label className="block text-xs text-gray-500 mb-1">Web 端口</label>
+              <input type="number" value={webPort} onChange={(e) => setWebPort(Number(e.target.value) || 5173)}
+                className="input text-sm" />
+            </div>
+            <Button variant="primary" size="sm" icon={<Save />} onClick={handleSavePorts} loading={portSaving}>
+              保存并重启
+            </Button>
+          </div>
+          <p className="text-xs text-gray-400 mt-2">
+            修改后端端口后自动重启。Web 端口需手动重启前端。
+          </p>
         </div>
       </div>
 

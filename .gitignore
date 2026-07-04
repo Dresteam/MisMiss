@@ -223,3 +223,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.tomlweb/frontend/node_modules/
+
+# node
+web/frontend/node_modules
+
+# plugins
+plugins
+data
+permissions
+test/plugins
+test/cookie.txt
