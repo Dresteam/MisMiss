@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Terminal, Key, User, Lock, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../components/Button';
 import { showToast } from '../hooks/useToast';
@@ -13,6 +13,14 @@ export function LoginPage({ onLogin }: Props) {
   const [logging, setLogging] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
   const [error, setError] = useState('');
+
+  // 启动时自动同步端口配置
+  useEffect(() => {
+    fetch('/api/health').then(r => r.json()).then(d => {
+      if (d.api_port) localStorage.setItem('api_port', String(d.api_port));
+      if (d.web_port) localStorage.setItem('web_port', String(d.web_port));
+    }).catch(() => {});
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import time
 from pathlib import Path
 
@@ -17,7 +18,13 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
-AUTH_FILE = Path(__file__).resolve().parent.parent.parent.parent.parent / "data" / "auth.json"
+# 持久化路径：PyInstaller 模式下使用 exe 所在目录，而非临时解压目录
+if getattr(sys, "frozen", False):
+    _HOME = Path(os.environ.get("MISMISS_HOME", Path(sys.executable).parent))
+else:
+    _HOME = Path(__file__).resolve().parent.parent.parent.parent.parent
+
+AUTH_FILE = _HOME / "data" / "auth.json"
 
 # In-memory token store: token -> {"username": str, "expires": float}
 _tokens: dict[str, dict] = {}

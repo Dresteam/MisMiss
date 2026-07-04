@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ _DEFAULTS: dict[str, Any] = {
     "server": {
         "data_dir": "data",
         "state_file": "server_state.json",
-        "api_port": 8000,
+        "api_port": 8080,
         "web_port": 5173,
     },
     "bot": {
@@ -63,9 +64,14 @@ class ServerConfig:
         :return: 配置实例
         """
         if config_path is None:
-            config_path = str(
-                Path(__file__).resolve().parent.parent.parent / "config.yml"
-            )
+            # PyInstaller --onefile: 从用户工作目录读取（可写副本）
+            # 正常模式: 从项目根目录读取
+            if getattr(sys, "frozen", False):
+                config_path = str(Path(os.getcwd()) / "config.yml")
+            else:
+                config_path = str(
+                    Path(__file__).resolve().parent.parent.parent / "config.yml"
+                )
 
         loaded: dict[str, Any] = {}
         if os.path.exists(config_path):
