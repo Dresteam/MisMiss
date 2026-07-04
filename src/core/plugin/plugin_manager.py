@@ -683,7 +683,25 @@ class PluginManager:
 
         # 初始化 + 注册
         miss_config = MissConfig(plugin_config) if plugin_config else MissConfig({})
-        await instance.initialize(config=miss_config)
+        try:
+            await instance.initialize(config=miss_config)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            _log.error("插件 [{}] 初始化失败，移入失败列表: {}", metadata.name, e)
+            metadata.enabled = False
+            metadata.plugin_instance = None
+            metadata.module = None
+            metadata.module_path = None
+            self._plugins.pop(metadata.name, None)
+            self._failed_plugins[dir_name] = {
+                "dir_name": dir_name,
+                "error": str(e),
+                "traceback": tb,
+            }
+            self._notify_state_changed()
+            return
+
         self._event_bus.register_new_event(instance)
         _log.info("插件已激活并注册到事件总线: {}", metadata.name)
 
@@ -695,28 +713,22 @@ class PluginManager:
             if names:
                 _log.info("插件已注册 {} 个指令: {}", len(names), names)
 
-    def enable_plugin(self, plugin_name: str) -> None:
-        """启用插件——若尚未激活则完整加载。"""
+    async def enable_plugin(self, plugin_name: str) -> None:
+        """启用插件——若尚未激活则完整加载（等待激活完成）。"""
         metadata = self._get_plugin(plugin_name)
-        if metadata.enabled:
+        if metadata.plugin_instance is not None and metadata.enabled:
             _log.info("插件已处于启用状态: {}", plugin_name)
             return
 
-        # 立即标记为启用（不等异步加载完成），保证状态查询正确
-        metadata.enabled = True
         self._disabled_plugins.discard(plugin_name)
 
         if metadata.plugin_instance is None:
-            # 尚未激活——通过事件循环调度完整加载
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._activate_plugin(metadata))
-            except RuntimeError:
-                raise CorePluginLoadException(
-                    plugin_name, "无法在非异步上下文中激活插件"
-                )
+            # 尚未激活 → 同步等待
+            await self._activate_plugin(metadata)
         else:
             self._event_bus.register_new_event(metadata.plugin_instance)
+
+        metadata.enabled = True
         _log.info("插件已启用: {}", plugin_name)
 
     def disable_plugin(self, plugin_name: str) -> None:
