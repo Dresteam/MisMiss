@@ -79,7 +79,8 @@ export function useLogStream(): UseLogStreamReturn {
     function connect() {
       if (stopped) return;
       const lastSeq = lastSeqRef.current;
-      const wsUrl = `ws://${window.location.hostname}:8000/api/ws?last_seq=${lastSeq}`;
+      const apiPort = localStorage.getItem('api_port') || '8080';
+      const wsUrl = `ws://${window.location.hostname}:${apiPort}/api/ws?last_seq=${lastSeq}`;
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;

@@ -1,23 +1,11 @@
-# ============================================================
-# MisMiss 服务器配置
-# ============================================================
-
 server:
-  # 数据存储根目录
-  data_dir: "data"
-  # 服务器状态持久化文件名（位于 data_dir 下）
-  state_file: "server_state.json"
-
+  data_dir: data
+  state_file: server_state.json
+  api_port: 8080
+  web_port: 5173
 bot:
-  # 定时消息轮转间隔（秒）
   timer_interval: 60
-
 plugin:
-  # pip 安装依赖时使用的镜像源
-  pip_mirror: "https://pypi.tuna.tsinghua.edu.cn/simple"
-
+  pip_mirror: https://pypi.tuna.tsinghua.edu.cn/simple
 logging:
-  # 日志文件存储目录
-  dir: "logs"
-  # 日志格式（留空使用默认格式）
-  # format: "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function} | {message}"
+  dir: logs
