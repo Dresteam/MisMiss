@@ -22,12 +22,23 @@ from pathlib import Path
 # 路径 & 工作目录
 # ------------------------------------------------------------------ #
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_BACKEND_ROOT = Path(__file__).resolve().parent
-os.chdir(str(_PROJECT_ROOT))
-sys.path.insert(0, str(_PROJECT_ROOT))
-sys.path.insert(0, str(_PROJECT_ROOT / "src"))
-sys.path.insert(0, str(_BACKEND_ROOT))  # web/backend/ — for `from api.xxx import ...`
+_FROZEN = getattr(sys, "frozen", False)
+
+if _FROZEN:
+    # PyInstaller --onefile 模式：运行时根目录由 pyinstaller_entry 设置
+    _PROJECT_ROOT = Path(os.environ.get("MISMISS_HOME", os.getcwd()))
+    _BUNDLE = Path(os.environ.get("MISMISS_BUNDLE", sys._MEIPASS))  # type: ignore[attr-defined]
+    os.chdir(str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_BUNDLE / "src"))
+    sys.path.insert(0, str(_BUNDLE / "web" / "backend"))
+else:
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    _BACKEND_ROOT = Path(__file__).resolve().parent
+    os.chdir(str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_PROJECT_ROOT))
+    sys.path.insert(0, str(_PROJECT_ROOT / "src"))
+    sys.path.insert(0, str(_BACKEND_ROOT))  # web/backend/ — for `from api.xxx import ...`
 
 # ------------------------------------------------------------------ #
 # 第三方
@@ -44,6 +55,7 @@ from fastapi.responses import JSONResponse
 
 from core.logging import get_logger
 from core import MissevanServer
+from core.config import ServerConfig
 from api.deps import set_server
 from api.routes import bot, live, plugin, server, dashboard, ws, config, proxy, auth
 
@@ -107,6 +119,10 @@ PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/", "/api/ws")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
 
+    # OPTIONS 预检请求跳过（CORS preflight 不带 Authorization header）
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # 公开路径跳过
     if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
@@ -138,10 +154,30 @@ app.include_router(config.router, prefix="/api", tags=["Config"])
 app.include_router(proxy.router, prefix="/api", tags=["Proxy"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 
-# 生产环境静态文件（前端构建产物）
-_FRONTEND_DIST = _PROJECT_ROOT / "web" / "frontend" / "dist"
+# 静态文件 & SPA fallback
+# 开发模式：Vite(:5173) HMR 代理到本后端
+# 单端口模式：npm run build 后，直接访问 8080 即可同时提供前端和 API
+if _FROZEN:
+    _FRONTEND_DIST = Path(os.environ.get("MISMISS_BUNDLE", sys._MEIPASS)) / "web" / "frontend" / "dist"  # type: ignore[attr-defined]
+else:
+    _FRONTEND_DIST = _PROJECT_ROOT / "web" / "frontend" / "dist"
+
 if _FRONTEND_DIST.exists():
-    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        from fastapi.responses import FileResponse
+        # 跳过 API 路径
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file = _FRONTEND_DIST / full_path
+        if file.is_file():
+            return FileResponse(file)
+        index = _FRONTEND_DIST / "index.html"
+        if index.is_file():
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 # ------------------------------------------------------------------ #
@@ -150,7 +186,13 @@ if _FRONTEND_DIST.exists():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "server_running": _server is not None}
+    cfg = ServerConfig.load()
+    return {
+        "status": "ok",
+        "server_running": _server is not None,
+        "api_port": cfg.get_int("server.api_port", 8080),
+        "web_port": cfg.get_int("server.web_port", 5173),
+    }
 
 
 # ------------------------------------------------------------------ #
@@ -160,7 +202,7 @@ async def health():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000, help="API 端口 (默认 8000)")
+    parser.add_argument("--port", type=int, default=8080, help="API port (default 8080)")
     args = parser.parse_args()
 
     import uvicorn

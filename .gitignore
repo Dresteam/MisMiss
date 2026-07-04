@@ -237,3 +237,6 @@ data
 permissions
 test/plugins
 test/cookie.txt
+
+# Frontend build output
+web/frontend/dist

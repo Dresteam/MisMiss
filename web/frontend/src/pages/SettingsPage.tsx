@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react';
 import { Settings, Save, RotateCcw, Loader2 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { showToast } from '../hooks/useToast';
+import { ApiError } from '../api/client';
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('auth_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export function SettingsPage() {
   const [config, setConfig] = useState<Record<string, any> | null>(null);
@@ -17,12 +23,16 @@ export function SettingsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/config');
+        const res = await fetch('/api/config', { headers: authHeaders() });
         const data = await res.json();
         setConfig(data.config);
         setEditConfig(JSON.parse(JSON.stringify(data.config)));
-        setApiPort(data.config?.server?.api_port || 8000);
-        setWebPort(data.config?.server?.web_port || 5173);
+        const api = data.config?.server?.api_port || 8000;
+        const web = data.config?.server?.web_port || 5173;
+        setApiPort(api);
+        setWebPort(web);
+        localStorage.setItem('api_port', String(api));
+        localStorage.setItem('web_port', String(web));
       } catch { /* ignore */ }
       setLoading(false);
     })();
@@ -33,7 +43,7 @@ export function SettingsPage() {
     try {
       const res = await fetch('/api/config', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ config: editConfig }),
       });
       const data = await res.json();
@@ -61,7 +71,7 @@ export function SettingsPage() {
     try {
       await fetch('/api/config/log-level', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ level: enabled ? 'DEBUG' : 'INFO' }),
       });
     } catch { /* silent */ }
@@ -73,14 +83,18 @@ export function SettingsPage() {
     try {
       const res = await fetch('/api/config/ports', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ api_port: apiPort, web_port: webPort }),
       });
       const data = await res.json();
       if (res.ok) {
+        localStorage.setItem('api_port', String(apiPort));
+        localStorage.setItem('web_port', String(webPort));
         showToast('success', data.message);
-        // 后端重启中，前端30秒后自动刷新
-        setTimeout(() => window.location.reload(), 3000);
+        // 3秒后跳转到新前端端口
+        setTimeout(() => {
+          window.location.href = `http://${window.location.hostname}:${webPort}`;
+        }, 3000);
       } else {
         showToast('error', data.detail);
       }
@@ -150,16 +164,16 @@ export function SettingsPage() {
                 className="input text-sm" />
             </div>
             <div className="w-40">
-              <label className="block text-xs text-gray-500 mb-1">Web 端口</label>
-              <input type="number" value={webPort} onChange={(e) => setWebPort(Number(e.target.value) || 5173)}
-                className="input text-sm" />
+              <label className="block text-xs text-gray-500 mb-1">Web 端口（只读）</label>
+              <input type="number" value={webPort} disabled
+                className="input text-sm opacity-60 cursor-not-allowed" />
             </div>
             <Button variant="primary" size="sm" icon={<Save />} onClick={handleSavePorts} loading={portSaving}>
               保存并重启
             </Button>
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            修改后端端口后自动重启。Web 端口需手动重启前端。
+            修改 API 端口后自动重启。Web 端口需通过启动脚本修改。
           </p>
         </div>
       </div>
@@ -171,7 +185,9 @@ export function SettingsPage() {
         </div>
         <div className="p-6 space-y-4">
           {editConfig.server && (
-            <ConfigSection title="Server" path="server" fields={editConfig.server} onChange={updateField} />
+            <ConfigSection title="Server" path="server"
+              fields={Object.fromEntries(Object.entries(editConfig.server).filter(([k]) => !['api_port', 'web_port'].includes(k)))}
+              onChange={updateField} />
           )}
           {editConfig.bot && (
             <ConfigSection title="Bot" path="bot" fields={editConfig.bot} onChange={updateField} />
