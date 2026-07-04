@@ -127,11 +127,16 @@ async def health():
 # ------------------------------------------------------------------ #
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8000, help="API 端口 (默认 8000)")
+    args = parser.parse_args()
+
     import uvicorn
     uvicorn.run(
         "web.backend.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=args.port,
         reload=True,
         reload_dirs=[str(_PROJECT_ROOT / "src"), str(_PROJECT_ROOT / "web" / "backend")],
     )

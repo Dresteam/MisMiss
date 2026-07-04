@@ -21,6 +21,8 @@ _DEFAULTS: dict[str, Any] = {
     "server": {
         "data_dir": "data",
         "state_file": "server_state.json",
+        "api_port": 8000,
+        "web_port": 5173,
     },
     "bot": {
         "timer_interval": 60,
