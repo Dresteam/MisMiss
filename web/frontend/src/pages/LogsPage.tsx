@@ -2,10 +2,11 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import Convert from 'ansi-to-html';
 import {
-  Terminal, Download, X, ArrowDown, Search, RefreshCw,
+  Terminal, Download, X, ArrowDown, Search, RefreshCw, Package,
 } from 'lucide-react';
 import { useLogStream, type LogEntry } from '../hooks/useLogStream';
 import { Button } from '../components/Button';
+import { showToast } from '../hooks/useToast';
 
 const ansi = new Convert({
   fg: '#e2e8f0', bg: '#030712',
@@ -24,14 +25,18 @@ const levelColors: Record<string, string> = {
   CRITICAL:'text-red-700 dark:text-red-400 font-bold',
 };
 
-const levels = ['ALL', 'DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
+const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 
 export function LogsPage() {
-  const { entries, connected, hasMore, loadMore, refresh } = useLogStream();
-  const [filterLevel, setFilterLevel] = useState('ALL');
+  const { entries, connected, total, hasMore, loadMore, refresh } = useLogStream();
+  const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
   const [keyword, setKeyword] = useState('');
   const [atBottom, setAtBottom] = useState(true);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  // Pip install modal
+  const [pipOpen, setPipOpen] = useState(false);
+  const [pipPkg, setPipPkg] = useState('');
+  const [pipInstalling, setPipInstalling] = useState(false);
 
   // wrap loadMore to deduplicate calls
   const loadingMore = useRef(false);
@@ -43,15 +48,23 @@ export function LogsPage() {
   }, [hasMore, loadMore]);
 
   // Filter
+  const toggleLevel = (lv: string) => {
+    setFilterLevels((prev) => {
+      const next = new Set(prev);
+      next.has(lv) ? next.delete(lv) : next.add(lv);
+      return next;
+    });
+  };
+
   const filtered = useMemo(() => {
     let arr = entries;
-    if (filterLevel !== 'ALL') arr = arr.filter((e) => e.level === filterLevel);
+    if (filterLevels.size > 0) arr = arr.filter((e) => filterLevels.has(e.level));
     if (keyword) {
       const kw = keyword.toLowerCase();
       arr = arr.filter((e) => e.message.toLowerCase().includes(kw));
     }
     return arr;
-  }, [entries, filterLevel, keyword]);
+  }, [entries, filterLevels, keyword]);
 
   // Auto-follow
   useEffect(() => {
@@ -66,6 +79,23 @@ export function LogsPage() {
   };
 
   // Export
+  const handlePipInstall = async () => {
+    if (!pipPkg.trim()) return;
+    setPipInstalling(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch('/api/config/pip-install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ package: pipPkg.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) { showToast('success', data.message); setPipPkg(''); setPipOpen(false); }
+      else showToast('error', data.detail);
+    } catch { showToast('error', '安装失败'); }
+    finally { setPipInstalling(false); }
+  };
+
   const handleExport = () => {
     const text = entries
       .map((l) => `[${new Date(l.timestamp * 1000).toISOString()}] [${l.level}] ${l.message}`)
@@ -87,23 +117,32 @@ export function LogsPage() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">服务器日志</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${connected ? 'bg-emerald-500' : 'bg-red-500'}`} />
-            {connected ? '实时' : '离线'} · {filtered.length} 条
-            {filtered.length !== entries.length && ` / 共 ${entries.length}`}
+            {connected ? '实时' : '离线'} · 已加载 {entries.length} / 共 {total} 条
+            {filtered.length !== entries.length && `（筛选后 ${filtered.length} 条）`}
           </p>
         </div>
         <div className="flex items-center gap-1.5">
-          {levels.map((lv) => (
-            <button key={lv} onClick={() => setFilterLevel(lv)}
-              className={`px-2 py-1 text-[11px] font-medium rounded transition-colors
-                ${filterLevel === lv
-                  ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
-                  : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
-              {lv}
-            </button>
-          ))}
+          {levels.map((lv) => {
+            const active = filterLevels.has(lv);
+            return (
+              <button key={lv} onClick={() => toggleLevel(lv)}
+                className={`px-2 py-1 text-[11px] font-medium rounded transition-colors
+                  ${active
+                    ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
+                    : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                {lv}
+              </button>
+            );
+          })}
+          {filterLevels.size > 0 && (
+            <button onClick={() => setFilterLevels(new Set())}
+              className="px-2 py-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors">清除</button>
+          )}
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
           <Button variant="ghost" size="sm" icon={<RefreshCw />}
             onClick={refresh}>刷新</Button>
+          <Button variant="ghost" size="sm" icon={<Package />}
+            onClick={() => setPipOpen(true)}>安装包</Button>
           <Button variant="ghost" size="sm" icon={<Download />}
             onClick={handleExport}>导出</Button>
         </div>
@@ -167,6 +206,25 @@ export function LogsPage() {
           </button>
         )}
       </div>
+      {/* Pip install modal */}
+      {pipOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={() => setPipOpen(false)} />
+          <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 animate-slide-in-up">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">安装 pip 包</h3>
+            <p className="text-xs text-gray-500 mb-4">输入包名，将使用 pip 安装到当前 Python 环境</p>
+            <div className="flex gap-2">
+              <input type="text" value={pipPkg} onChange={e => setPipPkg(e.target.value)}
+                className="input flex-1" placeholder="例如: pypinyin"
+                onKeyDown={e => e.key === 'Enter' && handlePipInstall()} />
+              <Button variant="primary" onClick={handlePipInstall} loading={pipInstalling}>安装</Button>
+            </div>
+            <div className="flex justify-end mt-3">
+              <Button variant="ghost" size="sm" onClick={() => setPipOpen(false)}>取消</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

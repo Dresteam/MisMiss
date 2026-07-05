@@ -1,11 +1,12 @@
 server:
   data_dir: data
   state_file: server_state.json
-  api_port: 8080
-  web_port: 5173
+  api_port: 18080
+  web_port: 15173
 bot:
   timer_interval: 60
 plugin:
   pip_mirror: https://pypi.tuna.tsinghua.edu.cn/simple
 logging:
   dir: logs
+  level: DEBUG

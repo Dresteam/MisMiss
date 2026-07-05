@@ -8,8 +8,10 @@ from core import MissevanServer
 from core.exceptions import (
     CoreApiException,
     CoreBotException,
+    CoreCookieException,
     CoreDisabledException,
     CorePermissionException,
+    CoreWebSocketException,
 )
 from api.deps import get_server
 from api.schemas import (
@@ -110,6 +112,8 @@ async def live_enable(live_id: int, s: MissevanServer = Depends(get_server)):
         return StatusResponse(success=True, message=f"直播间 {live_id} 已启用")
     except KeyError:
         raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
+    except CoreWebSocketException as e:
+        raise HTTPException(status_code=502, detail=f"连接失败（403 错误可能为 Cookie 已过期）: {e}")
     except CoreApiException as e:
         raise HTTPException(status_code=502, detail=f"API 错误: {e}")
 
