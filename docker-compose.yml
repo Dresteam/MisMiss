@@ -1,0 +1,38 @@
+# ============================================================
+# MisMiss — Docker Compose 一键部署
+# ============================================================
+# 启动:  docker compose up -d
+# 查看:  docker compose logs -f
+# 停止:  docker compose down
+# ============================================================
+
+services:
+  mismiss:
+    image: mismiss:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mismiss
+    restart: unless-stopped
+    ports:
+      - "18080:18080"
+    volumes:
+      # 持久化数据（Bot 状态、直播间状态、插件配置等）
+      - ./data:/app/data
+      # 日志文件
+      - ./logs:/app/logs
+      # 插件目录
+      - ./plugins:/app/plugins
+      # 权限配置
+      - ./permissions:/app/permissions
+      # 自定义配置（修改后 docker compose restart 即可）
+      - ./config.yml:/app/config.yml:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+      - MISMISS_PROD=1
+    # 如需 GPU 或其他资源限制，取消注释:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 512M
