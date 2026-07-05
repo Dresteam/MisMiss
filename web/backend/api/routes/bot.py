@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from core import MissevanServer
+from core.bot.mis_bot import MissevanBot
 from core.exceptions import (
     CoreCookieException,
     CorePermissionException,
@@ -129,6 +130,18 @@ async def bot_enable(s: MissevanServer = Depends(get_server)):
         return StatusResponse(success=True, message="Bot 已启用")
     except CoreCookieException as e:
         raise HTTPException(status_code=400, detail=f"Cookie 无效: {e}")
+
+
+@router.delete("/", response_model=StatusResponse)
+async def bot_delete(s: MissevanServer = Depends(get_server)):
+    """删除 Bot，恢复为无 Bot 状态。"""
+    s.bot.enabled = False
+    s._bot = MissevanBot("", timer_interval=s._config.get_float("bot.timer_interval", 60.0))
+    s._bot_available = False
+    s._bot_cookie = ""
+    s._bot_permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
+    s._save_state()
+    return StatusResponse(success=True, message="Bot 已删除，服务器恢复为无 Bot 状态")
 
 
 @router.post("/disable", response_model=StatusResponse)

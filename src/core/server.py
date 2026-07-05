@@ -85,11 +85,11 @@ class MissevanServer(ServerInterface):
             if live.enabled and lid not in self._enabled_livestreams:
                 _log.info("自动纳入已启用直播间: live_id={}", lid)
                 self._enabled_livestreams.add(lid)
-        # 自动连接
+        # 自动连接（使用 enable_livestream 确保完整流程）
         for lid in list(self._enabled_livestreams):
             if lid in self._livestreams:
                 try:
-                    await self._livestreams[lid].join()
+                    await self.enable_livestream(lid)
                     _log.info("已自动连接直播间: live_id={}", lid)
                 except Exception as e:
                     _log.warning("自动连接直播间失败 live_id={}: {}", lid, e)
@@ -345,11 +345,13 @@ class MissevanServer(ServerInterface):
         metadata = pm.get_plugin(plugin_name)
         if metadata is None:
             raise CorePluginNotFoundException(plugin_name)
-        if metadata.enabled:
-            return  # 已启用，无需操作
+        if metadata.enabled and metadata.plugin_instance is not None:
+            _log.info("插件已处于启用状态: {}", plugin_name)
+            return
+
+        pm._disabled_plugins.discard(plugin_name)
 
         if metadata.plugin_instance is None:
-            # 尚未激活 → 同步等待激活完成
             try:
                 await pm._activate_plugin(metadata)
             except Exception as e:
@@ -358,7 +360,7 @@ class MissevanServer(ServerInterface):
             pm._event_bus.register_new_event(metadata.plugin_instance)
 
         metadata.enabled = True
-        pm._disabled_plugins.discard(plugin_name)
+        _log.info("插件已启用: {}", plugin_name)
         self._save_state()
 
     async def disable_plugin(self, plugin_name: str) -> None:
@@ -544,6 +546,7 @@ class MissevanServer(ServerInterface):
     async def _restore_livestream(self, live_id: int) -> None:
         """从持久化数据恢复 Livestream（不自动 join）。"""
         livestream = MissevanLivestream(live_id, self._bot, self._event_bus)
+        livestream.enabled = False  # 默认禁用，由 enabled_livestreams 决定是否启用
         try:
             await livestream._refresh()  # type: ignore[attr-defined]
         except CoreApiException:

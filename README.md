@@ -21,6 +21,7 @@
 
 ## ✨ 特性
 
+- 🖥️ **Web 控制台** — React + TypeScript + Tailwind CSS 现代化管理面板，完全替代 CLI
 - 📐 **MIST 标准兼容** — 严格遵循 MIST 接口规范，跨平台复用业务逻辑
 - 🧩 **清晰的分层架构** — 接口层（`interfaces`）定义契约，核心层（`core`）负责实现
 - 🔌 **插件系统** — 启动/停止/重载/安装/卸载 全生命周期；`_conf_schema.json` 配置自动注入默认值；Server 自动分配权限（对标 `BotPermission`）；`requirements.txt` 自动安装；插件专属 `data/{name}/` 数据目录
@@ -29,7 +30,8 @@
 - 💬 **优先级消息队列** — 消息按优先级排序发送，后台异步消费，自动限流
 - 🔄 **WebSocket 长连接** — Brotli 解压、心跳维持、自动重连（指数退避）
 - 💾 **状态持久化** — Server 启动自动恢复 Bot、直播间和插件状态，修改时自动保存
-- 📝 **日志系统** — 基于 loguru，自动提取调用类名/方法名，支持多维度过滤
+- 🔐 **登录认证** — 默认 MisMiss / MisMiss，SHA-256 哈希存储，首次登录强制改密
+- 📝 **日志系统** — 基于 loguru，实时 WebSocket 推送，虚拟滚动万条日志不卡顿
 - 🧪 **完整类型标注** — mypy 严格模式，所有接口均有完善的 docstring
 
 ## 🏗️ 架构
@@ -102,24 +104,35 @@ Event (ABC, 标记)
 
 ## 📦 安装
 
-### 环境要求
-
-- **Python** ≥ 3.13
-- **依赖**：httpx · websockets · brotli · loguru · pyyaml
+- **Python** ≥ 3.13 · **Node.js** ≥ 20（Web 控制台需要）
+- 依赖：httpx · websockets · brotli · loguru · pyyaml · fastapi · uvicorn · react
 
 ```bash
 git clone https://github.com/MIST/MissMiss.git
 cd MissMiss
 
-# 创建虚拟环境
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# 安装依赖
 pip install -r requirements.txt
+pip install -r web/backend/requirements.txt
+cd web/frontend && npm install && cd ../..
 ```
 
 ## 🚀 快速开始
+
+### Web 控制台（推荐）
+
+```bash
+start.bat          # 开发模式：前端 :15173 + API :18080
+start.bat prod     # 单端口：:18080 同时提供前端和 API
+```
+
+打开浏览器访问 `http://localhost:15173`（开发）或 `http://localhost:18080`（生产），默认用户名密码均为 **MisMiss**。
+
+详细的构建和部署说明见 [BUILDING.md](BUILDING.md)。
+
+### CLI / Python API
 
 ### 1. 启动机器人
 
@@ -499,6 +512,19 @@ class MyPlugin(Plugin):
 MissMiss/
 ├── requirements.txt              # 依赖清单
 ├── README.md                     # 本文件
+├── BUILDING.md                   # 构建与部署指南
+├── start.bat                     # 一键启动脚本
+├── mismiss.spec                  # PyInstaller 打包配置
+├── Dockerfile / docker-compose.yml
+│
+├── web/                          # 🖥️ Web 控制台
+│   ├── backend/                  # FastAPI 后端 API
+│   │   ├── main.py               #   入口 + 认证中间件 + SPA fallback
+│   │   └── api/routes/           #   Bot / Live / Plugin / Server / Auth / Logs / Config
+│   └── frontend/                 # React + TypeScript + Tailwind CSS
+│       └── src/
+│           ├── pages/            #   仪表盘 / Bot / 直播间 / 插件 / 日志 / 设置 / 登录
+│           └── components/       #   Sidebar / Button / Toast / Drawer / Modal
 │
 ├── plugins/                      # 🔌 插件目录
 │   └── example_plugin/           # 示例插件

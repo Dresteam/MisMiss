@@ -16,8 +16,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(() => localStorage.getItem('debug_enabled') === 'true');
   const [logSaving, setLogSaving] = useState(false);
-  const [apiPort, setApiPort] = useState(8000);
-  const [webPort, setWebPort] = useState(5173);
+  const [apiPort, setApiPort] = useState(18080);
   const [portSaving, setPortSaving] = useState(false);
 
   useEffect(() => {
@@ -27,12 +26,10 @@ export function SettingsPage() {
         const data = await res.json();
         setConfig(data.config);
         setEditConfig(JSON.parse(JSON.stringify(data.config)));
-        const api = data.config?.server?.api_port || 8000;
-        const web = data.config?.server?.web_port || 5173;
+        const api = data.config?.server?.api_port || 18080;
+        const web = data.config?.server?.web_port || 15173;
         setApiPort(api);
-        setWebPort(web);
         localStorage.setItem('api_port', String(api));
-        localStorage.setItem('web_port', String(web));
       } catch { /* ignore */ }
       setLoading(false);
     })();
@@ -84,16 +81,15 @@ export function SettingsPage() {
       const res = await fetch('/api/config/ports', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ api_port: apiPort, web_port: webPort }),
+        body: JSON.stringify({ api_port: apiPort }),
       });
       const data = await res.json();
       if (res.ok) {
         localStorage.setItem('api_port', String(apiPort));
-        localStorage.setItem('web_port', String(webPort));
         showToast('success', data.message);
-        // 3秒后跳转到新前端端口
+        // 3秒后跳转到新端口
         setTimeout(() => {
-          window.location.href = `http://${window.location.hostname}:${webPort}`;
+          window.location.href = `http://${window.location.hostname}:${apiPort}`;
         }, 3000);
       } else {
         showToast('error', data.detail);
@@ -160,20 +156,15 @@ export function SettingsPage() {
           <div className="flex items-end gap-4">
             <div className="w-40">
               <label className="block text-xs text-gray-500 mb-1">API 端口</label>
-              <input type="number" value={apiPort} onChange={(e) => setApiPort(Number(e.target.value) || 8000)}
+              <input type="number" value={apiPort} onChange={(e) => setApiPort(Number(e.target.value) || 18080)}
                 className="input text-sm" />
-            </div>
-            <div className="w-40">
-              <label className="block text-xs text-gray-500 mb-1">Web 端口（只读）</label>
-              <input type="number" value={webPort} disabled
-                className="input text-sm opacity-60 cursor-not-allowed" />
             </div>
             <Button variant="primary" size="sm" icon={<Save />} onClick={handleSavePorts} loading={portSaving}>
               保存并重启
             </Button>
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            修改 API 端口后自动重启。Web 端口需通过启动脚本修改。
+            修改后自动重启。生产环境所有流量经由 API 端口，无需单独 Web 端口。
           </p>
         </div>
       </div>

@@ -112,7 +112,7 @@ async def set_log_level(body: dict):
     # stdlib
     logging.getLogger().setLevel(valid[level_name])
 
-    # loguru — update level on existing handlers without removing them
+    # loguru — update level on existing handlers
     try:
         from loguru import logger as _loguru_logger
         for handler_id, handler_config in list(_loguru_logger._core.handlers.items()):
@@ -120,7 +120,23 @@ async def set_log_level(body: dict):
     except Exception:
         pass
 
-    return {"success": True, "message": f"日志等级已设为 {level_name}"}
+    # 同步更新 WebSocket sink 的日志等级
+    try:
+        from api.routes.ws import set_ws_log_level
+        set_ws_log_level(level_name)
+    except Exception:
+        pass
+
+    # 持久化到 config.yml
+    current = {}
+    if os.path.exists(_CONFIG_PATH):
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            current = yaml.safe_load(f) or {}
+    current.setdefault("logging", {})["level"] = level_name
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+        yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    return {"success": True, "message": f"日志等级已设为 {level_name}，已持久化到 config.yml"}
 
 
 # ================================================================== #
@@ -173,6 +189,29 @@ async def read_cookie(s: MissevanServer = Depends(get_server)):
         return BotCookieResponse(cookie=cookie, length=len(cookie))
     except (json.JSONDecodeError, OSError) as e:
         raise HTTPException(status_code=500, detail=f"读取失败: {e}")
+
+
+# ================================================================== #
+# pip 安装
+# ================================================================== #
+
+@router.post("/config/pip-install")
+async def pip_install(body: dict):
+    """安装 pip 包。"""
+    pkg = body.get("package", "").strip()
+    if not pkg:
+        raise HTTPException(status_code=400, detail="请输入包名")
+
+    try:
+        from pip._internal.cli.main import main as pip_main
+        exit_code = pip_main(["install", "--quiet", pkg])
+        if exit_code != 0:
+            raise HTTPException(status_code=500, detail=f"pip install 失败 (exit {exit_code})")
+        return {"success": True, "message": f"{pkg} 已安装"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ================================================================== #

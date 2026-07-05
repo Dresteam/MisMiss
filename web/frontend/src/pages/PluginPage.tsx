@@ -78,7 +78,11 @@ export function PluginPage() {
     try {
       const form = new FormData();
       form.append('file', file);
-      const res = await fetch('/api/plugin/install', { method: 'POST', body: form });
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch('/api/plugin/install', {
+        method: 'POST', body: form,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
       const data = await res.json();
 
@@ -110,8 +114,12 @@ export function PluginPage() {
     try {
       const form = new FormData();
       form.append('file', updateFileRef.current);
+      const token = localStorage.getItem('auth_token');
       const wasEnabled = updateInfo.enabled ? 'true' : 'false';
-      const res = await fetch(`/api/plugin/install/update?was_enabled=${wasEnabled}`, { method: 'POST', body: form });
+      const res = await fetch(`/api/plugin/install/update?was_enabled=${wasEnabled}`, {
+        method: 'POST', body: form,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
       const data = await res.json();
       showToast('success', `${data.plugin.name} v${data.plugin.version} 更新完成`);

@@ -112,7 +112,7 @@ app.add_middleware(
 # ------------------------------------------------------------------ #
 
 PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/health"}
-PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/", "/api/ws")
+PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/", "/api/ws", "/api/plugin/install", "/api/config/pip-install")
 
 
 @app.middleware("http")
@@ -190,8 +190,8 @@ async def health():
     return {
         "status": "ok",
         "server_running": _server is not None,
-        "api_port": cfg.get_int("server.api_port", 8080),
-        "web_port": cfg.get_int("server.web_port", 5173),
+        "api_port": cfg.get_int("server.api_port", 18080),
+        "web_port": cfg.get_int("server.web_port", 15173),
     }
 
 
@@ -202,7 +202,7 @@ async def health():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8080, help="API port (default 8080)")
+    parser.add_argument("--port", type=int, default=18080, help="API port (default 18080)")
     args = parser.parse_args()
 
     import uvicorn

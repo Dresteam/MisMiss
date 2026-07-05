@@ -310,36 +310,25 @@ class PluginManager:
         )
 
         try:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--quiet",
-                    "-i", mirror,
-                    *missing,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if result.returncode != 0:
-                stderr = result.stderr.strip()
-                _log.warning(
-                    "插件 [{}] 部分依赖安装可能失败: {}",
+            # 使用 pip 内部 API（PyInstaller exe 中 subprocess pip 可能不可用）
+            from pip._internal.cli.main import main as pip_main
+            exit_code = pip_main([
+                "install", "--quiet", "-i", mirror,
+                *missing,
+            ])
+            if exit_code != 0:
+                _log.error("插件 [{}] 依赖安装失败: exit_code={}", plugin_name, exit_code)
+                raise CorePluginDependencyException(
                     plugin_name,
-                    stderr[:500],
+                    f"依赖安装失败 (exit {exit_code})",
                 )
             else:
                 _log.info("插件 [{}] 依赖安装完成 ({}/{} 个)", plugin_name, len(missing), len(packages))
-        except subprocess.TimeoutExpired:
+        except CorePluginDependencyException:
+            raise
+        except Exception as e:
             raise CorePluginDependencyException(
-                plugin_name, "依赖安装超时（超过 120 秒）"
-            )
-        except FileNotFoundError:
-            raise CorePluginDependencyException(
-                plugin_name, "未找到 pip，请确保 Python 环境中已安装 pip"
+                plugin_name, f"依赖安装失败: {e}"
             )
 
     @staticmethod

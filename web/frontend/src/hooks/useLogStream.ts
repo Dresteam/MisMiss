@@ -11,6 +11,7 @@ interface UseLogStreamReturn {
   entries: LogEntry[];
   connected: boolean;
   latestSeq: number;
+  total: number;
   hasMore: boolean;
   loadMore: () => Promise<void>;
   refresh: () => void;
@@ -22,12 +23,14 @@ export function useLogStream(): UseLogStreamReturn {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [latestSeq, setLatestSeq] = useState(0);
+  const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(0);
   const fetchedSeqRef = useRef(0);
   const oldestSeqRef = useRef(0);
+  const loadingMore = useRef(false);
 
   // ---- HTTP: load history ----
   const loadHistory = useCallback(async (since: number) => {
@@ -46,20 +49,24 @@ export function useLogStream(): UseLogStreamReturn {
         fetchedSeqRef.current = Math.max(fetchedSeqRef.current, since);
       }
       setLatestSeq(data.latest_seq || 0);
+      setTotal(data.total || 0);
       oldestSeqRef.current = data.oldest_seq || 0;
       setHasMore(data.has_more || false);
     } catch { /* ignore */ }
   }, []);
 
   const loadMore = useCallback(async () => {
-    if (!hasMore) return;
-    const oldest = entries.length > 0 ? entries[0].seq_id - 1 : 0;
+    if (!hasMore || loadingMore.current) return;
+    loadingMore.current = true;
+    const oldest = entries.length > 0 ? entries[0].seq_id : 0;
     await loadHistory(oldest);
+    loadingMore.current = false;
   }, [hasMore, entries, loadHistory]);
 
   const refresh = useCallback(() => {
     setEntries([]);
     setLatestSeq(0);
+    setTotal(0);
     setHasMore(false);
     lastSeqRef.current = 0;
     fetchedSeqRef.current = 0;
@@ -75,47 +82,63 @@ export function useLogStream(): UseLogStreamReturn {
   useEffect(() => {
     let stopped = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let reconnectDelay = 1000;
 
     function connect() {
       if (stopped) return;
       const lastSeq = lastSeqRef.current;
-      const apiPort = localStorage.getItem('api_port') || '8080';
+      // 单端口模式下用当前页面端口；开发模式下从 localStorage 读取
+      const pagePort = window.location.port;
+      const savedPort = localStorage.getItem('api_port');
+      const apiPort = (pagePort && pagePort !== '80' && pagePort !== '443')
+        ? pagePort
+        : (savedPort || '18080');
       const wsUrl = `ws://${window.location.hostname}:${apiPort}/api/ws?last_seq=${lastSeq}`;
 
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+      try {
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-      ws.onopen = () => {
-        if (!stopped) setConnected(true);
-      };
-
-      ws.onmessage = (event) => {
-        if (stopped) return;
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'log' && msg.seq_id) {
-            lastSeqRef.current = msg.seq_id;
-            setLatestSeq((prev) => Math.max(prev, msg.seq_id));
-            setEntries((prev) => {
-              if (prev.some((e) => e.seq_id === msg.seq_id)) return prev;
-              return [...prev.slice(-1999), msg as LogEntry];
-            });
+        ws.onopen = () => {
+          if (!stopped) {
+            setConnected(true);
+            reconnectDelay = 1000; // reset on success
           }
-        } catch { /* ignore */ }
-      };
+        };
 
-      ws.onclose = () => {
-        if (!stopped) {
-          setConnected(false);
+        ws.onmessage = (event) => {
+          if (stopped) return;
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'log' && msg.seq_id) {
+              lastSeqRef.current = msg.seq_id;
+              setLatestSeq((prev) => Math.max(prev, msg.seq_id));
+              setEntries((prev) => {
+                if (prev.some((e) => e.seq_id === msg.seq_id)) return prev;
+                return [...prev.slice(-1999), msg as LogEntry];
+              });
+            }
+          } catch { /* ignore */ }
+        };
+
+        ws.onclose = () => {
+          if (!stopped) {
+            setConnected(false);
+            wsRef.current = null;
+            reconnectTimer = setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, 30000); // 1s → 2s → 4s → ... → 30s max
+          }
+        };
+
+        ws.onerror = () => {
+          ws.close();
           wsRef.current = null;
-          reconnectTimer = setTimeout(connect, 3000);
+        };
+      } catch {
+        if (!stopped) {
+          reconnectTimer = setTimeout(connect, reconnectDelay);
         }
-      };
-
-      ws.onerror = () => {
-        ws.close();
-        wsRef.current = null;
-      };
+      }
     }
 
     connect();
@@ -131,5 +154,5 @@ export function useLogStream(): UseLogStreamReturn {
     };
   }, [refreshKey]);
 
-  return { entries, connected, latestSeq, hasMore, loadMore, refresh };
+  return { entries, connected, latestSeq, total, hasMore, loadMore, refresh };
 }

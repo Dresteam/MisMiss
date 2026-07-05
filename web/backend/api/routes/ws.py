@@ -15,6 +15,7 @@ import threading
 import time
 import re
 from collections import deque
+from pathlib import Path
 from typing import Any
 from dataclasses import dataclass
 
@@ -70,10 +71,21 @@ class RingBuffer:
             return entry
 
     def get_since(self, since_seq: int, limit: int = 50) -> list[dict]:
-        """获取 since_seq 之后的日志（不含 since_seq 本身）。"""
+        """获取 since_seq **之前** 的日志（用于向上翻页加载更早历史）。
+
+        返回 limit 条 seq_id <= since_seq 的最新日志，按 seq_id 升序排列。
+        首次加载传入 0 则返回最新 limit 条。
+        """
         with self._lock:
-            result = [e for e in self._buffer if e.seq_id > since_seq]
-            return [_entry_to_dict(e) for e in result[-limit:]]
+            all_entries = list(self._buffer)
+            if since_seq <= 0:
+                # 首次加载：返回最新 limit 条
+                result = all_entries[-limit:]
+            else:
+                # 向上翻页：返回 seq_id < since_seq 的最近 limit 条
+                older = [e for e in all_entries if e.seq_id < since_seq]
+                result = older[-limit:]
+            return [_entry_to_dict(e) for e in result]
 
     def get_range(self, from_seq: int, to_seq: int) -> list[dict] | None:
         """获取 [from_seq, to_seq] 范围内的日志。若数据已被淘汰返回 None。"""
@@ -155,6 +167,8 @@ async def _broadcast(entry: LogEntry) -> None:
 # loguru & stdlib 集成
 # ================================================================== #
 
+_WS_SINK_ID: int | None = None
+
 try:
     from loguru import logger as _loguru_logger
 
@@ -168,9 +182,35 @@ try:
         except RuntimeError:
             pass
 
-    _loguru_logger.add(_loguru_sink, level="DEBUG")
+    # 从 config.yml 读取持久化的日志等级
+    _initial_level = "DEBUG"
+    try:
+        import yaml as _y
+        _cfg_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml"
+        if _cfg_path.exists():
+            with open(_cfg_path, "r", encoding="utf-8") as _f:
+                _cfg = _y.safe_load(_f) or {}
+            _initial_level = _cfg.get("logging", {}).get("level", "DEBUG")
+    except Exception:
+        pass
+
+    _WS_SINK_ID = _loguru_logger.add(_loguru_sink, level=_initial_level)
 except ImportError:
     pass
+
+
+def set_ws_log_level(level_name: str) -> None:
+    """动态修改 WebSocket sink 的日志等级。"""
+    global _WS_SINK_ID
+    if _WS_SINK_ID is None:
+        return
+    try:
+        from loguru import logger as _loguru_logger
+        level_no = {"DEBUG": 10, "INFO": 20, "SUCCESS": 25, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+        if level_name in level_no:
+            _loguru_logger._core.handlers[_WS_SINK_ID]._levelno = level_no[level_name]
+    except Exception:
+        pass
 
 import logging
 
@@ -203,11 +243,16 @@ async def logs_history(
 ):
     """拉取 since_seq 之后的历史日志。"""
     entries = _buffer.get_since(since, limit)
+    has_more = False
+    if entries:
+        first_returned = entries[0]["seq_id"]
+        has_more = first_returned > _buffer.oldest_seq
     return {
         "entries": entries,
         "latest_seq": _buffer.latest_seq,
         "oldest_seq": _buffer.oldest_seq,
-        "has_more": len(entries) > 0 and entries[0]["seq_id"] > _buffer.oldest_seq,
+        "total": _buffer.count,
+        "has_more": has_more,
     }
 
 
