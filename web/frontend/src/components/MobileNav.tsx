@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Bot, Radio, Puzzle, Settings, Terminal,
+  LayoutDashboard, Bot, Radio, Puzzle, Terminal,
+  Moon, Sun, LogOut,
 } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth';
 
 const items = [
   { to: '/', icon: LayoutDashboard, label: '仪表盘', end: true },
@@ -9,10 +11,16 @@ const items = [
   { to: '/live', icon: Radio, label: '直播间' },
   { to: '/plugin', icon: Puzzle, label: '插件' },
   { to: '/logs', icon: Terminal, label: '日志' },
-  { to: '/settings', icon: Settings, label: '设置' },
 ];
 
-export function MobileNav() {
+interface Props {
+  dark: boolean;
+  onToggleDark: () => void;
+}
+
+export function MobileNav({ dark, onToggleDark }: Props) {
+  const { logout } = useAuth();
+
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-30 lg:hidden
                     bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700
@@ -36,6 +44,20 @@ export function MobileNav() {
             <span className="text-[10px] leading-none truncate">{item.label}</span>
           </NavLink>
         ))}
+        {/* Theme toggle */}
+        <button onClick={onToggleDark}
+          className="flex flex-col items-center justify-center gap-0.5 min-w-0 flex-1 h-full
+                     text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400">
+          {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          <span className="text-[10px] leading-none truncate">{dark ? '浅色' : '深色'}</span>
+        </button>
+        {/* Logout */}
+        <button onClick={logout}
+          className="flex flex-col items-center justify-center gap-0.5 min-w-0 flex-1 h-full
+                     text-gray-400 dark:text-gray-500 hover:text-red-500 transition-colors">
+          <LogOut className="w-5 h-5" />
+          <span className="text-[10px] leading-none truncate">退出</span>
+        </button>
       </div>
     </nav>
   );

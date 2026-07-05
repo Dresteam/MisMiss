@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Settings, Save, RotateCcw, Loader2 } from 'lucide-react';
 import { Button } from '../components/Button';
+import { AccountSetup } from '../components/AccountSetup';
+import { useAuth } from '../hooks/useAuth';
 import { showToast } from '../hooks/useToast';
 import { ApiError } from '../api/client';
 
@@ -10,6 +12,8 @@ function authHeaders(): Record<string, string> {
 }
 
 export function SettingsPage() {
+  const { token } = useAuth();
+  const [showAccount, setShowAccount] = useState(false);
   const [config, setConfig] = useState<Record<string, any> | null>(null);
   const [editConfig, setEditConfig] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
@@ -64,12 +68,18 @@ export function SettingsPage() {
   const handleToggleDebug = async (enabled: boolean) => {
     setDebugEnabled(enabled);
     localStorage.setItem('debug_enabled', String(enabled));
+    const level = enabled ? 'DEBUG' : 'INFO';
+    // 同步更新下方服务器配置中 logging.level 的显示
+    setEditConfig((prev) => ({
+      ...prev,
+      logging: { ...prev.logging, level },
+    }));
     setLogSaving(true);
     try {
       await fetch('/api/config/log-level', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ level: enabled ? 'DEBUG' : 'INFO' }),
+        body: JSON.stringify({ level }),
       });
     } catch { /* silent */ }
     setLogSaving(false);
@@ -119,6 +129,20 @@ export function SettingsPage() {
   return (
     <div className="space-y-6 animate-fade-in max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white">设置</h1>
+
+      {/* Account Section */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-900 dark:text-white">
+          账户安全
+        </div>
+        <div className="p-6 flex items-center justify-between">
+          <p className="text-sm text-gray-500">修改用户名或密码后需重新登录</p>
+          <Button variant="primary" size="sm" onClick={() => setShowAccount(true)}>修改账户</Button>
+        </div>
+      </div>
+      {showAccount && token && (
+        <AccountSetup token={token} onDone={() => setShowAccount(false)} />
+      )}
 
       {/* Log Level Section */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">

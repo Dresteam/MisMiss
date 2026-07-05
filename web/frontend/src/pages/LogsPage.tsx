@@ -110,18 +110,18 @@ export function LogsPage() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-6rem)] animate-fade-in">
+    <div className="flex flex-col h-[calc(100vh-8rem)] lg:h-[calc(100vh-6rem)] animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">服务器日志</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div className="min-w-0">
+          <h1 className="text-xl lg:text-2xl font-bold text-gray-900 dark:text-white">服务器日志</h1>
+          <p className="text-xs lg:text-sm text-gray-500 dark:text-gray-400 mt-1">
             <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${connected ? 'bg-emerald-500' : 'bg-red-500'}`} />
             {connected ? '实时' : '离线'} · 已加载 {entries.length} / 共 {total} 条
             {filtered.length !== entries.length && `（筛选后 ${filtered.length} 条）`}
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1">
           {levels.map((lv) => {
             const active = filterLevels.has(lv);
             return (
@@ -149,7 +149,7 @@ export function LogsPage() {
       </div>
 
       {/* Search bar */}
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
         <Search className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 shrink-0" />
         <input type="text" value={keyword} onChange={(e) => setKeyword(e.target.value)}
           placeholder="搜索日志关键词..."

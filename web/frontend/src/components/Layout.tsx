@@ -39,7 +39,7 @@ export function Layout({
           <Outlet />
         </div>
       </main>
-      <MobileNav />
+      <MobileNav dark={dark} onToggleDark={onToggleDark} />
       <ToastContainer toasts={toasts} onRemove={onRemoveToast} />
     </div>
   );
