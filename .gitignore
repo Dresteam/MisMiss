@@ -240,3 +240,11 @@ test/cookie.txt
 
 # Frontend build output
 web/frontend/dist
+web/frontend/tsconfig.*.tsbuildinfo
+
+# Build artifacts
+*.tar
+*.tar.gz
+
+# IDE
+.idea/pyProjectModel.xml

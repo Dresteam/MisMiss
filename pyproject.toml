@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mismiss"
+version = "1.0.0"
+description = "MIST 标准实现 · 猫耳FM 直播场控机器人框架"
+readme = "README.md"
+license = {text = "AGPL-3.0"}
+requires-python = ">=3.13"
+authors = [{name = "MisMiss Dev"}]
+keywords = ["missevan", "live-stream", "bot", "mist"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "httpx>=0.28.0",
+    "websockets>=14.0",
+    "brotli>=1.1",
+    "loguru>=0.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.50.0",
+    "pydantic>=2.0.0",
+    "python-multipart>=0.0.9",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+# ------------------------------------------------------------------ #
+# 入口点
+# ------------------------------------------------------------------ #
+[project.scripts]
+mismiss = "mismiss_cli:main"
+
+# ------------------------------------------------------------------ #
+# 包发现
+# ------------------------------------------------------------------ #
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ------------------------------------------------------------------ #
+# 工具配置
+# ------------------------------------------------------------------ #
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+asyncio_mode = "auto"
