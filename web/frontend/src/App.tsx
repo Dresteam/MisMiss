@@ -47,7 +47,7 @@ function App() {
   return (
     <AuthContext.Provider value={auth}>
       {auth.firstLogin && (
-        <AccountSetup token={auth.token} onDone={() => window.location.reload()} />
+        <AccountSetup firstLogin token={auth.token} onDone={() => window.location.reload()} />
       )}
       <BrowserRouter
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
