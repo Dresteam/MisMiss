@@ -93,7 +93,13 @@ export function useLogStream(): UseLogStreamReturn {
       const apiPort = (pagePort && pagePort !== '80' && pagePort !== '443')
         ? pagePort
         : (savedPort || '18080');
-      const wsUrl = `ws://${window.location.hostname}:${apiPort}/api/ws?last_seq=${lastSeq}`;
+      const apiPort = localStorage.getItem('api_port') || window.location.port || '18080';
+      // 优先使用当前页面协议+主机，走同源（避免 HTTPS 混合内容问题）
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const sameOriginPort = window.location.port && window.location.port !== '80' && window.location.port !== '443';
+      const wsUrl = sameOriginPort
+        ? `${wsProtocol}//${window.location.hostname}:${window.location.port}/api/ws?last_seq=${lastSeq}`
+        : `${wsProtocol}//${window.location.hostname}:${apiPort}/api/ws?last_seq=${lastSeq}`;
 
       try {
         const ws = new WebSocket(wsUrl);
