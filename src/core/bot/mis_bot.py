@@ -153,6 +153,10 @@ class MissevanBot(Bot):
 
         perm_name = perm.name
         if not plugin.permissions.get(perm_name, False):
+            _log.warning(
+                "插件 [{}] 缺少 {} 权限，操作被拒绝",
+                plugin.name, perm_name,
+            )
             raise CorePermissionException(
                 f"插件 '{plugin.name}' 缺少 {perm_name} 权限",
                 required=perm_name,

@@ -87,19 +87,10 @@ export function useLogStream(): UseLogStreamReturn {
     function connect() {
       if (stopped) return;
       const lastSeq = lastSeqRef.current;
-      // 单端口模式下用当前页面端口；开发模式下从 localStorage 读取
-      const pagePort = window.location.port;
-      const savedPort = localStorage.getItem('api_port');
-      const apiPort = (pagePort && pagePort !== '80' && pagePort !== '443')
-        ? pagePort
-        : (savedPort || '18080');
-      const apiPort = localStorage.getItem('api_port') || window.location.port || '18080';
-      // 优先使用当前页面协议+主机，走同源（避免 HTTPS 混合内容问题）
+      // 始终使用同源连接：经过反向代理时自动适配 HTTPS/WSS
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const sameOriginPort = window.location.port && window.location.port !== '80' && window.location.port !== '443';
-      const wsUrl = sameOriginPort
-        ? `${wsProtocol}//${window.location.hostname}:${window.location.port}/api/ws?last_seq=${lastSeq}`
-        : `${wsProtocol}//${window.location.hostname}:${apiPort}/api/ws?last_seq=${lastSeq}`;
+      const wsHost = window.location.host; // 含端口（非标准端口时）
+      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?last_seq=${lastSeq}`;
 
       try {
         const ws = new WebSocket(wsUrl);
