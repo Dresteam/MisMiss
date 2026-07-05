@@ -3,7 +3,7 @@ import {
   Bot, Key, RefreshCw, ShieldCheck, Eye, EyeOff, Copy, Check, User,
 } from 'lucide-react';
 import {
-  fetchBotInfo, createBot, refreshBot, verifyBot, getBotCookieRaw, enableBot, disableBot,
+  fetchBotInfo, createBot, refreshBot, verifyBot, getBotCookieRaw, enableBot, disableBot, deleteBot,
 } from '../api/client';
 import type { BotInfo } from '../api/types';
 import { showToast } from '../hooks/useToast';
@@ -45,7 +45,7 @@ export function BotPage() {
 
   // Confirm dialogs
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'enable' | 'disable';
+    type: 'enable' | 'disable' | 'delete';
     run: () => Promise<void>;
   } | null>(null);
 
@@ -210,6 +210,17 @@ export function BotPage() {
                   })}
                   loading={actionLoading.has('enable')}>启用 Bot</Button>
               )}
+              <Button variant="destructive" size="sm"
+                onClick={() => setConfirmAction({
+                  type: 'delete',
+                  run: async () => {
+                    setActionLoading((prev) => new Set(prev).add('delete'));
+                    await deleteBot(); await load();
+                    showToast('success', 'Bot 已删除');
+                    setActionLoading((prev) => { const n = new Set(prev); n.delete('delete'); return n; });
+                  },
+                })}
+                loading={actionLoading.has('delete')}>删除 Bot</Button>
             </div>
           </div>
         </div>
@@ -333,12 +344,17 @@ export function BotPage() {
       {/* Confirm Dialog */}
       <ConfirmDialog
         open={!!confirmAction}
-        title={confirmAction?.type === 'disable' ? '停用 Bot' : '启用 Bot'}
-        message={confirmAction?.type === 'disable'
-          ? '停用后 Bot 将停止所有消息发送和事件处理，确定要继续吗？'
-          : '确定要启用 Bot 吗？'}
-        variant={confirmAction?.type === 'disable' ? 'danger' : 'default'}
-        confirmLabel={confirmAction?.type === 'disable' ? '停用' : '启用'}
+        title={
+          confirmAction?.type === 'disable' ? '停用 Bot' :
+          confirmAction?.type === 'delete' ? '删除 Bot' : '启用 Bot'}
+        message={
+          confirmAction?.type === 'disable' ? '停用后 Bot 将停止所有消息发送和事件处理，确定要继续吗？' :
+          confirmAction?.type === 'delete' ? '删除 Bot 将清除 Cookie 和权限信息，服务器恢复为无 Bot 状态。此操作不可撤销！' :
+          '确定要启用 Bot 吗？'}
+        variant={confirmAction?.type === 'disable' || confirmAction?.type === 'delete' ? 'danger' : 'default'}
+        confirmLabel={
+          confirmAction?.type === 'disable' ? '停用' :
+          confirmAction?.type === 'delete' ? '确认删除' : '启用'}
         onConfirm={async () => {
           if (confirmAction) {
             await confirmAction.run();

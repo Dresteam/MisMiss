@@ -118,6 +118,10 @@ export async function disableBot(): Promise<StatusResponse> {
   return request<StatusResponse>('/bot/disable', { method: 'POST' });
 }
 
+export async function deleteBot(): Promise<StatusResponse> {
+  return request<StatusResponse>('/bot/', { method: 'DELETE' });
+}
+
 // ================================================================== //
 // Livestream
 // ================================================================== //
