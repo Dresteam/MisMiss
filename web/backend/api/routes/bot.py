@@ -124,10 +124,11 @@ async def bot_verify(s: MissevanServer = Depends(get_server)):
 
 @router.post("/enable", response_model=StatusResponse)
 async def bot_enable(s: MissevanServer = Depends(get_server)):
-    """启用 Bot。"""
+    """启用 Bot，恢复所有标记为已启用的插件。"""
     try:
         await s.enable_bot()
-        return StatusResponse(success=True, message="Bot 已启用")
+        await s._plugin_manager.resume_all()
+        return StatusResponse(success=True, message="Bot 已启用，插件已恢复")
     except CoreCookieException as e:
         raise HTTPException(status_code=400, detail=f"Cookie 无效: {e}")
 
@@ -144,8 +145,31 @@ async def bot_delete(s: MissevanServer = Depends(get_server)):
     return StatusResponse(success=True, message="Bot 已删除，服务器恢复为无 Bot 状态")
 
 
+@router.put("/timer-interval", response_model=StatusResponse)
+async def bot_timer_interval(body: dict, s: MissevanServer = Depends(get_server)):
+    """动态修改定时消息间隔（秒）。"""
+    interval = body.get("interval", 60)
+    if not isinstance(interval, (int, float)) or interval < 1:
+        raise HTTPException(status_code=400, detail="间隔必须 >= 1 秒")
+    s.bot.timer_interval = float(interval)
+    # 持久化到 config.yml
+    import yaml
+    import os
+    from pathlib import Path
+    config_path = str(Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml")
+    current = {}
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            current = yaml.safe_load(f) or {}
+    current.setdefault("bot", {})["timer_interval"] = int(interval)
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    return StatusResponse(success=True, message=f"定时消息间隔已设为 {int(interval)} 秒")
+
+
 @router.post("/disable", response_model=StatusResponse)
 async def bot_disable(s: MissevanServer = Depends(get_server)):
-    """停用 Bot。"""
+    """停用 Bot，暂停所有插件（不修改 enabled 标记和持久化状态）。"""
     s.bot.enabled = False
-    return StatusResponse(success=True, message="Bot 已停用")
+    await s._plugin_manager.suspend_all()
+    return StatusResponse(success=True, message="Bot 已停用，插件已暂停（启停标记不变）")

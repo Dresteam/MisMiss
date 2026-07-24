@@ -108,12 +108,21 @@ class MissevanServer(ServerInterface):
             pip_mirror=self._config.get_str("plugin.pip_mirror"),
         )
         await self._plugin_manager.load_all()
-        # 仅启用 state 中记录的已启用插件
+        # 先标记所有持久化为启用的插件（即使 Bot 停用也设置 metadata.enabled）
+        pm = self._plugin_manager
         for name in enabled_plugins:
-            try:
-                await self._plugin_manager.enable_plugin(name)
-            except Exception:
-                _log.warning("恢复插件启用状态失败: {}", name)
+            meta = pm.get_plugin(name)
+            if meta:
+                meta.enabled = True
+        # Bot 可用且启用时，才实际加载插件
+        if self._bot_available and self._bot.enabled:
+            for name in enabled_plugins:
+                try:
+                    await pm.enable_plugin(name)
+                except Exception:
+                    _log.warning("恢复插件启用状态失败: {}", name)
+        else:
+            _log.info("Bot 未启用，插件标记已同步（待 Bot 启用后恢复）")
 
         _log.info(
             "服务器启动完成 bot={} livestreams={} plugins={}",
@@ -122,8 +131,9 @@ class MissevanServer(ServerInterface):
         )
 
     async def shutdown(self) -> None:
-        """关闭服务器——停用所有组件。"""
+        """关闭服务器——先持久化状态再停用所有组件。"""
         _log.info("服务器关闭中 ...")
+        self._save_state()  # 先保存当前状态
         await self._plugin_manager.shutdown_all()
         for livestream in self._livestreams.values():
             try:
@@ -156,18 +166,44 @@ class MissevanServer(ServerInterface):
         permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE,
     ) -> MissevanBot:
         _log.info("创建 Bot ...")
-        self._bot.enabled = False
+        was_enabled = self._bot.enabled
         bot = MissevanBot(
             cookie,
             permissions=permissions,
             timer_interval=self._config.get_float("bot.timer_interval", 60.0),
         )
         await bot.refresh()
+        bot.enabled = was_enabled
+
+        # 1. 先停用所有已启用插件（终止旧实例）
+        pm = self._plugin_manager
+        enabled_names = [p.name for p in pm.list_plugins() if p.enabled]
+        for name in enabled_names:
+            try:
+                _log.info("Cookie 更新前停用插件: {}", name)
+                pm.disable_plugin(name)
+            except Exception as e:
+                _log.warning("停用插件失败 [{}]: {}", name, e)
+
+        # 2. 切换到新 Bot
         self._bot = bot
         self._bot_available = True
         self._bot_cookie = cookie
         self._bot_permissions = permissions
         self._constrain_plugin_permissions()
+
+        # 3. 更新所有直播间的 bot 引用
+        for live in self._livestreams.values():
+            live._bot = bot
+
+        # 4. 重新启用插件（使用新 bot 实例初始化）
+        for name in enabled_names:
+            try:
+                _log.info("Cookie 更新后启用插件: {}", name)
+                await pm.enable_plugin(name)
+            except Exception as e:
+                _log.warning("启用插件失败 [{}]: {}", name, e)
+
         self._save_state()
         _log.info("Bot 创建成功: {}", bot)
         return bot
@@ -499,8 +535,11 @@ class MissevanServer(ServerInterface):
                 "enabled": self._bot.enabled,
             }
         state["livestreams"] = list(self._livestreams.keys())
-        with open(self._state_path, "w", encoding="utf-8") as f:
+        # 原子写入：先写临时文件再替换，防止写一半崩溃导致文件损坏
+        tmp_path = self._state_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, self._state_path)
 
     def _load_state(self) -> dict[str, Any] | None:
         if not os.path.exists(self._state_path):

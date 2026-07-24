@@ -305,18 +305,37 @@ async def plugin_handlers(plugin_name: str, s: MissevanServer = Depends(get_serv
 
 @router.post("/{plugin_name}/enable", response_model=StatusResponse)
 async def plugin_enable(plugin_name: str, s: MissevanServer = Depends(get_server)):
-    """启用插件。"""
+    """启用插件。Bot 停用时仅更新持久化标记，不实际加载。"""
     try:
+        pm = s._plugin_manager
+        meta = pm.get_plugin(plugin_name)
+        if meta is None:
+            raise CorePluginNotFoundException(plugin_name)
+        if not s.bot_available:
+            # Bot 停用 → 仅更新持久化标记
+            meta.enabled = True
+            s._save_state()
+            return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已标记为启用（Bot 停用，待恢复）")
         await s.enable_plugin(plugin_name)
         return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已启用")
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except CorePluginLoadException as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{plugin_name}/disable", response_model=StatusResponse)
 async def plugin_disable(plugin_name: str, s: MissevanServer = Depends(get_server)):
-    """禁用插件。"""
+    """禁用插件。Bot 停用时仅更新持久化标记，不实际卸载。"""
     try:
+        pm = s._plugin_manager
+        meta = pm.get_plugin(plugin_name)
+        if meta is None:
+            raise CorePluginNotFoundException(plugin_name)
+        if not s.bot_available:
+            meta.enabled = False
+            s._save_state()
+            return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已标记为禁用（Bot 停用，待生效）")
         await s.disable_plugin(plugin_name)
         return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已禁用")
     except CorePluginNotFoundException as e:

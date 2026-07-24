@@ -4,7 +4,7 @@ server:
   api_port: 18080
   web_port: 15173
 bot:
-  timer_interval: 60
+  timer_interval: 120
 plugin:
   pip_mirror: https://pypi.tuna.tsinghua.edu.cn/simple
 logging:
