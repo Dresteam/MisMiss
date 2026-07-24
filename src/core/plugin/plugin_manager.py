@@ -310,17 +310,16 @@ class PluginManager:
         )
 
         try:
-            # 使用 pip 内部 API（PyInstaller exe 中 subprocess pip 可能不可用）
-            from pip._internal.cli.main import main as pip_main
-            exit_code = pip_main([
-                "install", "--quiet", "-i", mirror,
-                *missing,
-            ])
-            if exit_code != 0:
-                _log.error("插件 [{}] 依赖安装失败: exit_code={}", plugin_name, exit_code)
+            # PyInstaller exe 中不能 import pip（会导致 distlib 错误），
+            # 统一用 subprocess 调用系统 pip
+            import subprocess
+            cmd = [sys.executable, "-m", "pip", "install", "--quiet", "-i", mirror, *missing]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                _log.error("插件 [{}] 依赖安装失败: {}", plugin_name, result.stderr.strip())
                 raise CorePluginDependencyException(
                     plugin_name,
-                    f"依赖安装失败 (exit {exit_code})",
+                    f"依赖安装失败: {result.stderr.strip()[:200]}",
                 )
             else:
                 _log.info("插件 [{}] 依赖安装完成 ({}/{} 个)", plugin_name, len(missing), len(packages))
@@ -747,6 +746,46 @@ class PluginManager:
                 pass
 
         _log.info("插件已禁用: {}", plugin_name)
+
+    async def suspend_plugin(self, plugin_name: str) -> None:
+        """暂停插件——取消事件注册和终止钩子，但不改变 enabled 标记。
+
+        用于 Bot 停用时临时暂停所有插件，持久化状态不受影响。
+        """
+        metadata = self._get_plugin(plugin_name)
+        if metadata.plugin_instance is not None:
+            self._event_bus.unregister_event(metadata.plugin_instance)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(metadata.plugin_instance.terminate())
+            except RuntimeError:
+                pass
+        _log.info("插件已暂停: {}", plugin_name)
+
+    async def resume_plugin(self, plugin_name: str) -> None:
+        """恢复暂停的插件——重新注册到事件总线，跳过 initialize()。"""
+        metadata = self._get_plugin(plugin_name)
+        if metadata.plugin_instance is not None:
+            self._event_bus.register_new_event(metadata.plugin_instance)
+        _log.info("插件已恢复: {}", plugin_name)
+
+    async def suspend_all(self) -> None:
+        """暂停所有已启用插件。"""
+        for meta in list(self._plugins.values()):
+            if meta.enabled and meta.plugin_instance is not None:
+                try:
+                    await self.suspend_plugin(meta.name)
+                except Exception:
+                    pass
+
+    async def resume_all(self) -> None:
+        """恢复所有标记为已启用的插件。"""
+        for meta in list(self._plugins.values()):
+            if meta.enabled:
+                try:
+                    await self.resume_plugin(meta.name)
+                except Exception:
+                    pass
 
     # 别名
     start_plugin = enable_plugin

@@ -39,7 +39,7 @@ _MessageItem = namedtuple("_MessageItem", ["priority", "live_id", "message"])
 _TimerEntry = namedtuple("_TimerEntry", ["message_id", "live_id", "message"])
 
 # 默认定时消息间隔（秒）
-_DEFAULT_TIMER_INTERVAL: float = 60.0
+_DEFAULT_TIMER_INTERVAL: float = 120.0
 
 _log = get_logger(__name__)
 
@@ -97,6 +97,17 @@ class MissevanBot(Bot):
         # 启用状态
         self._enabled: bool = True
 
+    @property
+    def timer_interval(self) -> float:
+        """定时消息发送间隔（秒），可运行时修改。"""
+        return self._timer_interval
+
+    @timer_interval.setter
+    def timer_interval(self, value: float) -> None:
+        self._timer_interval = max(1.0, float(value))
+
+
+
     # ------------------------------------------------------------------ #
     # 启停控制
     # ------------------------------------------------------------------ #
@@ -138,7 +149,8 @@ class MissevanBot(Bot):
                 required=str(perm.name),
             )
 
-    def _check_plugin_permission(self, perm: BotPermission) -> None:
+    @staticmethod
+    def _check_plugin_permission(perm: BotPermission) -> None:
         """校验当前插件是否拥有指定权限。
 
         通过 :data:`current_plugin` 上下文变量获取正在执行事件处理器
