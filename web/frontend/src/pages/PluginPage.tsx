@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Puzzle, RefreshCw, AlertTriangle, Eye, FolderSync, Loader2, Upload, BookOpen, Trash2, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Puzzle, RefreshCw, AlertTriangle, Eye, FolderSync, Loader2, Upload, BookOpen, Trash2, X, ExternalLink } from 'lucide-react';
 import { fetchPluginList, enablePlugin, disablePlugin, reloadPlugin,
   fetchFailedPlugins, retryFailedPlugin, refreshPlugins, fetchPluginReadme, uninstallPlugin } from '../api/client';
 import type { PluginSummary, FailedPluginInfo } from '../api/types';
@@ -251,6 +252,12 @@ export function PluginPage() {
                   <div className="flex items-center gap-1.5">
                     <Button variant="ghost" size="sm" icon={<Eye />}
                       onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name); }}>详情</Button>
+                    {plugin.has_ui && (
+                      <Link to={`/plugin/${encodeURIComponent(plugin.name)}/page`} target="_blank"
+                        onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="sm" icon={<ExternalLink />}>主页</Button>
+                      </Link>
+                    )}
                     {plugin.has_readme && (
                       <Button variant="ghost" size="sm" icon={<BookOpen />}
                         onClick={(e) => { e.stopPropagation(); handleViewReadme(plugin); }}>文档</Button>

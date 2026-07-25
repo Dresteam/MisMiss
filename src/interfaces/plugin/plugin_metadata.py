@@ -76,6 +76,9 @@ class PluginMetadata:
     config_schema_path: str | None = None
     """``_conf_schema.json`` 的绝对路径，若不存在则为 ``None``。"""
 
+    ui_schema_path: str | None = None
+    """``_ui_schema.json`` 的绝对路径，若不存在则为 ``None``。"""
+
     config: dict | None = field(default=None, compare=False)
     """插件运行时配置（已合并默认值）。"""
 
@@ -95,6 +98,21 @@ class PluginMetadata:
 
     data_dir: str | None = None
     """插件专属数据目录（``data/{plugin_name}/``），插件加载时自动创建。"""
+
+    initialized: bool = field(default=False, compare=False, repr=False)
+    """是否已完成异步初始化（:meth:`Plugin.initialize` 已调用且成功）。
+
+    由 :class:`PluginManager` 在 :meth:`_finish_activation` 或
+    :meth:`_activate_plugin` 中设置为 ``True``。
+    用于区分"仅加载模块以便注册 UI 路由"与"完整初始化"两种状态。
+    """
+
+    routes_registered: bool = field(default=False, compare=False, repr=False)
+    """是否已将 UI 路由注册到 FastAPI app。
+
+    由 :meth:`PluginManager._register_routes_if_needed` 设置为 ``True``，
+    防止 :meth:`set_app` 和 :meth:`resume_plugin` 重复注册同一路由前缀。
+    """
 
     # ---------------------------------------------------------------- #
     # 计算属性

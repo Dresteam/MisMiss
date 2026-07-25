@@ -98,27 +98,41 @@ class PluginManager:
         self._command_router = command_router
         self._pip_mirror = pip_mirror
 
-        # 权限目录默认与 config 同级
         if permission_dir is None:
-            permission_dir = os.path.join(
-                os.path.dirname(config_dir), "permissions"
-            )
+            permission_dir = os.path.join(os.path.dirname(config_dir), "permissions")
         self._permission_dir = permission_dir
-
-        # 插件数据目录默认在 data/plugins/ 下
         if plugin_data_dir is None:
-            plugin_data_dir = os.path.join(
-                os.path.dirname(config_dir), "plugins"
-            )
+            plugin_data_dir = os.path.join(os.path.dirname(config_dir), "plugins")
         self._plugin_data_dir = plugin_data_dir
 
-        # plugin_name -> PluginMetadata
         self._plugins: dict[str, PluginMetadata] = {}
         self._config_mgr = PluginConfigManager(config_dir)
         self._permission_mgr = PluginPermissionManager(permission_dir)
-
-        # 失败插件追踪: dir_name -> error_info
         self._failed_plugins: dict[str, dict[str, Any]] = {}
+        self._app = None  # FastAPI app 引用
+
+    def set_app(self, app) -> None:
+        """设置 FastAPI app 引用并注册所有插件的 UI 路由。
+
+        若插件尚未实例化（如 Bot 未启用时仅加载了元数据），
+        会通过 :meth:`_ensure_plugin_loaded` 创建轻量实例以注册路由。
+        已存在的实例（已初始化或暂停恢复）不会被重新创建。
+        """
+        self._app = app
+        for name, meta in list(self._plugins.items()):
+            if not meta.ui_schema_path or not os.path.exists(meta.ui_schema_path):
+                _log.debug("跳过无 UI schema 的插件: {}", name)
+                continue
+            _log.info("注册 UI 路由: {} (inst={}, initialized={})",
+                      name, meta.plugin_instance is not None, meta.initialized)
+            if meta.plugin_instance is None:
+                self._ensure_plugin_loaded(meta)
+            if meta.plugin_instance is not None and hasattr(meta.plugin_instance, 'register_routes'):
+                # 仅当路由尚未注册时才注册（避免重复注册同一前缀）
+                self._register_routes_if_needed(meta)
+                _log.info("插件已注册 UI 路由: {}", name)
+            else:
+                _log.warning("插件实例不可用或缺少 register_routes: {}", name)
 
     # ------------------------------------------------------------------ #
     # 目录扫描
@@ -438,10 +452,13 @@ class PluginManager:
             _log.warning("插件已加载，跳过: {}", metadata.name)
             return self._plugins[metadata.name]
 
-        # 2. 检查是否存在 _conf_schema.json（仅记录路径，不加载内容）
+        # 2. 检查是否存在 _conf_schema.json / _ui_schema.json（仅记录路径）
         schema_path = os.path.join(plugin_path, _CONF_SCHEMA_FILENAME)
         if os.path.exists(schema_path):
             metadata.config_schema_path = schema_path
+        ui_schema_path = os.path.join(plugin_path, "_ui_schema.json")
+        if os.path.exists(ui_schema_path):
+            metadata.ui_schema_path = ui_schema_path
 
         # 3. 记录 README 路径
         readme_path = os.path.join(plugin_path, "README.md")
@@ -594,21 +611,38 @@ class PluginManager:
         # 清除模块缓存
         self._purge_modules(metadata)
 
+        # 保存启停标记
+        was_enabled = metadata.enabled
+
         # 移除旧条目
         del self._plugins[plugin_name]
 
         # 重新加载（load_plugin 会重新检测 requirements.txt 变更）
-        return await self.load_plugin(dir_name)  # type: ignore[return-value]
+        new_meta = await self.load_plugin(dir_name)
+        new_meta.enabled = was_enabled  # 恢复原标记
+        return new_meta  # type: ignore[return-value]
 
     # ------------------------------------------------------------------ #
     # 启用 / 禁用（启动 / 停止）
     # ------------------------------------------------------------------ #
 
     async def _activate_plugin(self, metadata: PluginMetadata) -> None:
-        """完整加载一个尚未激活的插件（导入、实例化、初始化、注册）。"""
+        """完整加载一个尚未激活的插件（导入、实例化、初始化、注册）。
+
+        若实例已存在（如 :meth:`set_app` 通过 :meth:`_ensure_plugin_loaded`
+        提前创建），则复用已有实例仅调用 :meth:`Plugin.initialize` 完成激活。
+        """
         dir_name = metadata.root_dir_name
         if dir_name is None:
             raise CorePluginLoadException(metadata.name, "root_dir_name 为空")
+
+        # —— 若实例已存在（由 _ensure_plugin_loaded 提前创建），
+        #    复用实例仅完成异步初始化部分，避免重复创建导致路由冲突
+        if metadata.plugin_instance is not None:
+            await self._finish_activation(metadata)
+            # _finish_activation 失败会抛出 CorePluginLoadException
+            return
+
         plugin_path = os.path.join(self._plugin_dir, dir_name)
 
         # 安装依赖
@@ -669,7 +703,16 @@ class PluginManager:
         metadata.data_dir = data_dir
         metadata.enabled = True
 
-        # 初始化 + 注册
+        # 注册插件自定义路由（在 initialize 之前，确保 UI 立即可用）
+        if self._app is not None and hasattr(instance, 'register_routes'):
+            from fastapi import APIRouter as _APIRouter
+            plugin_router = _APIRouter(prefix=f"/api/plugin/{metadata.name}/ui", tags=[metadata.name])
+            instance.register_routes(plugin_router)
+            PluginManager._insert_plugin_routes(self._app, plugin_router)
+            metadata.routes_registered = True
+            _log.info("插件已注册自定义 UI 路由: {}", metadata.name)
+
+        # 初始化
         miss_config = MissConfig(plugin_config) if plugin_config else MissConfig({})
         try:
             await instance.initialize(config=miss_config)
@@ -678,18 +721,19 @@ class PluginManager:
             tb = traceback.format_exc()
             _log.error("插件 [{}] 初始化失败，移入失败列表: {}", metadata.name, e)
             metadata.enabled = False
-            metadata.plugin_instance = None
-            metadata.module = None
-            metadata.module_path = None
-            self._plugins.pop(metadata.name, None)
+            metadata.initialized = False
+            # 保留 plugin_instance 以便 UI 路由继续工作
             self._failed_plugins[dir_name] = {
                 "dir_name": dir_name,
                 "error": str(e),
                 "traceback": tb,
             }
             self._notify_state_changed()
-            return
+            raise CorePluginLoadException(
+                metadata.name, f"插件初始化失败: {e}"
+            )
 
+        metadata.initialized = True
         self._event_bus.register_new_event(instance)
         _log.info("插件已激活并注册到事件总线: {}", metadata.name)
 
@@ -702,7 +746,11 @@ class PluginManager:
                 _log.info("插件已注册 {} 个指令: {}", len(names), names)
 
     async def enable_plugin(self, plugin_name: str) -> None:
-        """启用插件——若尚未激活则完整加载（等待激活完成）。"""
+        """启用插件——若尚未激活则完整加载（等待激活完成）。
+
+        :raises CorePluginNotFoundException: 插件不存在
+        :raises CorePluginLoadException: 插件初始化失败
+        """
         metadata = self._get_plugin(plugin_name)
         if metadata.plugin_instance is not None and metadata.enabled:
             _log.info("插件已处于启用状态: {}", plugin_name)
@@ -711,18 +759,25 @@ class PluginManager:
         self._disabled_plugins.discard(plugin_name)
 
         if metadata.plugin_instance is None:
-            # 尚未激活 → 同步等待
+            # 尚未激活 → 完整加载
             await self._activate_plugin(metadata)
+        elif not metadata.initialized:
+            # 实例已存在（由 _ensure_plugin_loaded 提前创建）但未初始化
+            await self._finish_activation(metadata)
         else:
+            # 实例存在且已初始化（如 suspend 后 resume）
             self._event_bus.register_new_event(metadata.plugin_instance)
+            # 补注册指令
+            if self._command_router is not None:
+                self._command_router.register_plugin(metadata.plugin_instance)
+            metadata.enabled = True
 
-        metadata.enabled = True
         _log.info("插件已启用: {}", plugin_name)
 
     def disable_plugin(self, plugin_name: str) -> None:
         """禁用插件。
 
-        从事件总线取消注册，保留插件实例和文件。
+        从事件总线和命令路由器取消注册，保留插件实例和文件。
 
         :param plugin_name: 插件名称
         :raises CorePluginNotFoundException: 插件不存在
@@ -737,6 +792,9 @@ class PluginManager:
 
         if metadata.plugin_instance is not None:
             self._event_bus.unregister_event(metadata.plugin_instance)
+            # 从命令路由器取消注册
+            if self._command_router is not None:
+                self._command_router.unregister_plugin(metadata.plugin_instance)
             # 调用终止钩子
             try:
                 loop = asyncio.get_running_loop()
@@ -747,11 +805,8 @@ class PluginManager:
 
         _log.info("插件已禁用: {}", plugin_name)
 
-    async def suspend_plugin(self, plugin_name: str) -> None:
-        """暂停插件——取消事件注册和终止钩子，但不改变 enabled 标记。
-
-        用于 Bot 停用时临时暂停所有插件，持久化状态不受影响。
-        """
+    def suspend_plugin(self, plugin_name: str) -> None:
+        """暂停插件——取消事件注册和终止钩子，但不改变 enabled 标记。"""
         metadata = self._get_plugin(plugin_name)
         if metadata.plugin_instance is not None:
             self._event_bus.unregister_event(metadata.plugin_instance)
@@ -762,28 +817,156 @@ class PluginManager:
                 pass
         _log.info("插件已暂停: {}", plugin_name)
 
-    async def resume_plugin(self, plugin_name: str) -> None:
-        """恢复暂停的插件——重新注册到事件总线，跳过 initialize()。"""
+    def resume_plugin(self, plugin_name: str) -> None:
+        """恢复暂停的插件——同步完成路由注册，异步初始化。"""
         metadata = self._get_plugin(plugin_name)
-        if metadata.plugin_instance is not None:
+        if metadata.plugin_instance is None:
+            self._ensure_plugin_loaded(metadata)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._finish_activation(metadata))
+            except RuntimeError:
+                pass
+        elif not metadata.initialized:
+            # 实例存在但从未初始化（由 set_app 提前加载）→ 异步完成初始化
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._finish_activation(metadata))
+            except RuntimeError:
+                pass
+        else:
             self._event_bus.register_new_event(metadata.plugin_instance)
+            # 补充注册路由（_app 可能在实例创建后才设置）
+            self._register_routes_if_needed(metadata)
         _log.info("插件已恢复: {}", plugin_name)
 
-    async def suspend_all(self) -> None:
+    def _register_routes_if_needed(self, metadata: PluginMetadata) -> None:
+        """为已有实例补注册 UI 路由（兜底：_app 延迟设置时）。
+
+        若路由已注册（``metadata.routes_registered == True``）则跳过，
+        避免 FastAPI 重复注册同一路由前缀。
+        使用前端插入规避 SPA 兜底路由的拦截。
+        """
+        if metadata.routes_registered:
+            return
+        inst = metadata.plugin_instance
+        if inst is not None and self._app is not None and hasattr(inst, 'register_routes'):
+            from fastapi import APIRouter as _APIRouter
+            plugin_router = _APIRouter(prefix=f"/api/plugin/{metadata.name}/ui", tags=[metadata.name])
+            inst.register_routes(plugin_router)
+            PluginManager._insert_plugin_routes(self._app, plugin_router)
+            metadata.routes_registered = True
+            _log.info("插件已补注册 UI 路由: {}", metadata.name)
+
+    def _ensure_plugin_loaded(self, metadata: PluginMetadata) -> None:
+        """同步加载插件模块并注册路由，不执行 initialize。"""
+        dir_name = metadata.root_dir_name
+        if not dir_name:
+            return
+        try:
+            plugin_path = os.path.join(self._plugin_dir, dir_name)
+            req = self._find_requirements(plugin_path)
+            if req:
+                self._install_requirements(req, metadata.name)
+            module_file = self._find_main_module(plugin_path)
+            if not module_file:
+                _log.warning("插件 [{}] 未找到主模块，跳过加载", metadata.name)
+                return
+            import_path = f"plugins.{dir_name}.{module_file}"
+            project_root = os.path.abspath(self._plugin_dir)
+            if project_root not in sys.path:
+                sys.path.insert(0, project_root)
+            module = importlib.import_module(import_path)
+            plugin_cls = self._find_plugin_class(module, dir_name)
+            cfg: dict = {}
+            if metadata.config_schema_path and os.path.exists(metadata.config_schema_path):
+                try:
+                    schema = PluginConfigManager.load_schema(metadata.config_schema_path)
+                    if schema:
+                        cfg = self._config_mgr.load_config_with_defaults(metadata.name, schema)
+                except CorePluginConfigException:
+                    pass
+            perms = self._permission_mgr.ensure_permissions(metadata.name)
+            kwargs: dict = {}
+            if perms:
+                kwargs["permissions"] = perms
+            instance = plugin_cls(**kwargs)
+            instance.name = metadata.name
+            instance.author = metadata.author
+            instance.plugin_id = metadata.plugin_id
+            instance.data_dir = self.get_plugin_data_dir(metadata.name)
+            metadata.plugin_instance = instance
+            metadata.module = module
+            metadata.module_path = import_path
+            metadata.config = cfg
+            metadata.permissions = perms
+            # 注册路由（插入到路由表前端以规避 SPA 兜底路由拦截）
+            if self._app is not None and hasattr(instance, 'register_routes'):
+                from fastapi import APIRouter as _APIRouter
+                plugin_router = _APIRouter(prefix=f"/api/plugin/{metadata.name}/ui", tags=[metadata.name])
+                instance.register_routes(plugin_router)
+                PluginManager._insert_plugin_routes(self._app, plugin_router)
+                metadata.routes_registered = True
+                _log.info("插件已注册自定义 UI 路由: {}", metadata.name)
+            elif hasattr(instance, 'register_routes'):
+                _log.debug("插件 [{}] 有 register_routes 但 _app 未设置，将在 set_app 时补注册", metadata.name)
+        except Exception as e:
+            _log.error("插件 [{}] 同步加载失败: {}", metadata.name, e)
+
+    async def _finish_activation(self, metadata: PluginMetadata) -> None:
+        """完成插件的异步激活部分（调用 initialize + 注册到事件总线）。
+
+        :raises CorePluginLoadException: 插件初始化失败
+        """
+        instance = metadata.plugin_instance
+        if instance is None:
+            return
+        miss_config = MissConfig(metadata.config) if metadata.config else MissConfig({})
+        try:
+            await instance.initialize(config=miss_config)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            _log.error("插件 [{}] 初始化失败，移入失败列表: {}", metadata.name, e)
+            metadata.enabled = False
+            metadata.initialized = False
+            # 保留 plugin_instance/m/module 以便 UI 路由继续工作
+            self._failed_plugins[metadata.root_dir_name or metadata.name] = {
+                "dir_name": metadata.root_dir_name or metadata.name,
+                "error": str(e),
+                "traceback": tb,
+            }
+            self._notify_state_changed()
+            raise CorePluginLoadException(
+                metadata.name, f"插件初始化失败: {e}"
+            )
+        metadata.enabled = True
+        metadata.initialized = True
+        self._event_bus.register_new_event(instance)
+        _log.info("插件已激活并注册到事件总线: {}", metadata.name)
+        if self._command_router is not None:
+            self._command_router.register_plugin(instance)
+            cmds = self._command_router.list_commands()
+            names = cmds.get(metadata.name, [])
+            if names:
+                _log.info("插件已注册 {} 个指令: {}", len(names), names)
+        self._notify_state_changed()
+
+    def suspend_all(self) -> None:
         """暂停所有已启用插件。"""
         for meta in list(self._plugins.values()):
             if meta.enabled and meta.plugin_instance is not None:
                 try:
-                    await self.suspend_plugin(meta.name)
+                    self.suspend_plugin(meta.name)
                 except Exception:
                     pass
 
-    async def resume_all(self) -> None:
+    def resume_all(self) -> None:
         """恢复所有标记为已启用的插件。"""
         for meta in list(self._plugins.values()):
             if meta.enabled:
                 try:
-                    await self.resume_plugin(meta.name)
+                    self.resume_plugin(meta.name)
                 except Exception:
                     pass
 
@@ -1181,6 +1364,31 @@ class PluginManager:
     # ------------------------------------------------------------------ #
     # 内部辅助
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _insert_plugin_routes(app, plugin_router: "APIRouter") -> None:  # noqa: F821
+        """将插件 UI 路由注册到 FastAPI，确保优先于 SPA 兜底路由。
+
+        FastAPI/Starlette 按路由列表顺序匹配（先匹配者胜）。
+        SPA 兜底路由 ``/{full_path:path}`` 在模块加载时已注册到列表末尾，
+        若直接 ``include_router`` 会追加到兜底路由之后，导致请求被兜底路由拦截。
+
+        此方法先暂存并移除兜底路由，再通过 ``include_router`` 以标准流程
+        注册插件路由，最后将兜底路由恢复到列表末尾。
+        """
+        # 找到并暂存 SPA 兜底路由（避免它拦截插件 UI 请求）
+        catch_all = None
+        for i, route in enumerate(app.router.routes):
+            if hasattr(route, 'path') and route.path == '/{full_path:path}':
+                catch_all = app.router.routes.pop(i)
+                break
+
+        # 标准 FastAPI 路由注册（确保 APIRoute 正确初始化）
+        app.include_router(plugin_router)
+
+        # 将兜底路由放回末尾，使其优先级最低
+        if catch_all is not None:
+            app.router.routes.append(catch_all)
 
     def _notify_state_changed(self) -> None:
         """通知外部（如 Server）插件状态已变更，需要持久化。"""

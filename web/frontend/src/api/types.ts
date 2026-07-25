@@ -83,6 +83,7 @@ export interface PluginSummary {
   has_config: boolean;
   has_readme: boolean;
   has_changelog: boolean;
+  has_ui: boolean;
 }
 
 export interface PluginEventHandler {
@@ -107,6 +108,7 @@ export interface PluginDetail {
   permissions: Record<string, boolean> | null;
   config_schema: Record<string, ConfigFieldSchema> | null;
   config_values: Record<string, unknown> | null;
+  ui_schema: Record<string, unknown> | null;
 }
 
 export interface ConfigFieldSchema {

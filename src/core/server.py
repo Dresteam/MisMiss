@@ -57,10 +57,19 @@ class MissevanServer(ServerInterface):
         self._enabled_livestreams: set[int] = set()
         self._event_bus: EventBus = EventBus()
         self._plugin_manager: PluginManager = PluginManager("", EventBus(), "")
+        self._app = None  # FastAPI app 引用，由 lifespan 在 start() 前注入
 
     # ================================================================== #
     # 生命周期
     # ================================================================== #
+
+    def set_app(self, app) -> None:
+        """注入 FastAPI app 引用——必须在 :meth:`start` 前调用。
+
+        确保 PluginManager 在 :meth:`resume_all` 之前就已持有 app 引用，
+        从而插件自定义 UI 路由能在实例化时立即注册，避免延迟补注册。
+        """
+        self._app = app
 
     async def start(self) -> None:
         """启动服务器——从磁盘加载持久化数据。"""
@@ -108,21 +117,21 @@ class MissevanServer(ServerInterface):
             pip_mirror=self._config.get_str("plugin.pip_mirror"),
         )
         await self._plugin_manager.load_all()
-        # 先标记所有持久化为启用的插件（即使 Bot 停用也设置 metadata.enabled）
+        # 恢复持久化的启用标记
         pm = self._plugin_manager
         for name in enabled_plugins:
             meta = pm.get_plugin(name)
             if meta:
                 meta.enabled = True
-        # Bot 可用且启用时，才实际加载插件
+        # 在 resume_all 之前注入 app 引用，确保 _ensure_plugin_loaded 注册路由时 _app 已可用
+        if self._app is not None:
+            self._plugin_manager.set_app(self._app)
+        # Bot 可用且启用时，加载所有标记为启用的插件
         if self._bot_available and self._bot.enabled:
-            for name in enabled_plugins:
-                try:
-                    await pm.enable_plugin(name)
-                except Exception:
-                    _log.warning("恢复插件启用状态失败: {}", name)
+            pm.resume_all()
         else:
-            _log.info("Bot 未启用，插件标记已同步（待 Bot 启用后恢复）")
+            _log.info("Bot 未启用，插件标记已恢复（待 Bot 启用后加载）")
+        self._save_state()  # 立即持久化当前状态
 
         _log.info(
             "服务器启动完成 bot={} livestreams={} plugins={}",
@@ -148,6 +157,7 @@ class MissevanServer(ServerInterface):
         """重载服务器（shutdown + start）。"""
         await self.shutdown()
         await self.start()
+        # start() 已通过 self._app 重新注入了 app 引用到新的 PluginManager
 
     async def refresh_plugins(self) -> None:
         """重新扫描插件目录，加载新插件（已加载的不重载）。"""
@@ -388,14 +398,24 @@ class MissevanServer(ServerInterface):
         pm._disabled_plugins.discard(plugin_name)
 
         if metadata.plugin_instance is None:
+            # 尚未激活 → 完整加载（_activate_plugin 内部会处理初始化）
             try:
                 await pm._activate_plugin(metadata)
             except Exception as e:
                 raise CorePluginLoadException(plugin_name, str(e))
+        elif not metadata.initialized:
+            # 实例已存在（由 set_app 提前创建）但从未初始化
+            try:
+                await pm._finish_activation(metadata)
+            except Exception as e:
+                raise CorePluginLoadException(plugin_name, str(e))
         else:
+            # 已初始化，仅重新注册到事件总线（从 suspend 恢复）
             pm._event_bus.register_new_event(metadata.plugin_instance)
+            if pm._command_router is not None:
+                pm._command_router.register_plugin(metadata.plugin_instance)
+            metadata.enabled = True
 
-        metadata.enabled = True
         _log.info("插件已启用: {}", plugin_name)
         self._save_state()
 

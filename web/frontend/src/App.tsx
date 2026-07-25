@@ -8,6 +8,7 @@ import { PluginPage } from './pages/PluginPage';
 import { ServerPage } from './pages/ServerPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { PluginPageView } from './pages/PluginPageView';
 import { LoginPage } from './pages/LoginPage';
 import { AccountSetup } from './components/AccountSetup';
 import { useToast } from './hooks/useToast';
@@ -72,6 +73,7 @@ function App() {
             <Route path="server" element={<ServerPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+          <Route path="plugin/:name/page" element={<PluginPageView />} />
           </Route>
         </Routes>
       </BrowserRouter>
