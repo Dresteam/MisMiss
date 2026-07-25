@@ -126,6 +126,7 @@ class PluginSummary(BaseModel):
     has_config: bool = False
     has_readme: bool = False
     has_changelog: bool = False
+    has_ui: bool = False
 
 
 class PluginEventHandler(BaseModel):
@@ -164,6 +165,7 @@ class PluginDetailResponse(BaseModel):
     permissions: dict[str, bool] | None = None
     config_schema: dict[str, Any] | None = None
     config_values: dict[str, Any] | None = None
+    ui_schema: dict[str, Any] | None = None
 
 
 class PluginPermUpdateRequest(BaseModel):

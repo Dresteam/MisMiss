@@ -53,7 +53,8 @@ class PluginPermissionManager:
 
     def __init__(self, permission_dir: str) -> None:
         self._permission_dir = permission_dir
-        Path(self._permission_dir).mkdir(parents=True, exist_ok=True)
+        if permission_dir:
+            Path(self._permission_dir).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     # 默认权限

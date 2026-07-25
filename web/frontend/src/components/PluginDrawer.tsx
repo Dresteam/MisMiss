@@ -175,17 +175,10 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
           {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap
-                  ${activeTab === tab.id
-                    ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                    : 'border-transparent text-surface-500 hover:text-surface-700 dark:hover:text-surface-300'
-                  }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {tab.label}
+                  ${activeTab === tab.id ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-surface-500 hover:text-surface-700 dark:hover:text-surface-300'}`}>
+                <Icon className="w-3.5 h-3.5" />{tab.label}
               </button>
             );
           })}
