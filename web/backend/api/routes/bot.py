@@ -127,7 +127,7 @@ async def bot_enable(s: MissevanServer = Depends(get_server)):
     """启用 Bot，恢复所有标记为已启用的插件。"""
     try:
         await s.enable_bot()
-        await s._plugin_manager.resume_all()
+        s._plugin_manager.resume_all()
         return StatusResponse(success=True, message="Bot 已启用，插件已恢复")
     except CoreCookieException as e:
         raise HTTPException(status_code=400, detail=f"Cookie 无效: {e}")
@@ -171,5 +171,6 @@ async def bot_timer_interval(body: dict, s: MissevanServer = Depends(get_server)
 async def bot_disable(s: MissevanServer = Depends(get_server)):
     """停用 Bot，暂停所有插件（不修改 enabled 标记和持久化状态）。"""
     s.bot.enabled = False
-    await s._plugin_manager.suspend_all()
-    return StatusResponse(success=True, message="Bot 已停用，插件已暂停（启停标记不变）")
+    s._save_state()
+    s._plugin_manager.suspend_all()
+    return StatusResponse(success=True, message="Bot 已停用，插件已暂停")

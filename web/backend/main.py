@@ -74,6 +74,9 @@ async def lifespan(app: FastAPI):
     global _server
     _log.info("正在启动 MissevanServer ...")
     _server = MissevanServer()
+    # 必须在 start() 之前注入 app，确保 PluginManager 在 resume_all
+    # 之前就能拿到 app 引用，避免"跳过路由注册"警告
+    _server.set_app(app)
     await _server.start()
     set_server(_server)
     _log.info("MissevanServer 已启动，API 就绪")
@@ -123,8 +126,10 @@ async def auth_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # 公开路径跳过
+    # 公开路径跳过（含插件 UI 路由：/api/plugin/{name}/ui/...）
     if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
+        return await call_next(request)
+    if path.startswith("/api/plugin/") and "/ui/" in path:
         return await call_next(request)
 
     # 非 API 路径跳过（静态文件等）

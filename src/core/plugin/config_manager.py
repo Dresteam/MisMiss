@@ -60,7 +60,8 @@ class PluginConfigManager:
 
     def __init__(self, config_dir: str) -> None:
         self._config_dir = config_dir
-        Path(self._config_dir).mkdir(parents=True, exist_ok=True)
+        if config_dir:
+            Path(self._config_dir).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     # Schema
