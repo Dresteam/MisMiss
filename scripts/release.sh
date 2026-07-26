@@ -10,6 +10,7 @@
 #   bash scripts/release.sh
 #   bash scripts/release.sh -v 1.2.0
 #   bash scripts/release.sh --skip-pyinstaller
+#   bash scripts/release.sh --skip-docker
 # ============================================================
 
 set -euo pipefail
@@ -19,11 +20,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 VERSION=""
+SKIP_DOCKER=false
 SKIP_PYINSTALLER=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--version) VERSION="$2"; shift 2 ;;
+        --skip-docker) SKIP_DOCKER=true; shift ;;
         --skip-pyinstaller) SKIP_PYINSTALLER=true; shift ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
@@ -53,7 +56,9 @@ detect_version() {
 }
 
 VERSION=$(detect_version)
-VERSION_CLEAN="${VERSION//[^0-9.]/}"
+# SemVer clean: strip leading 'v', preserve pre-release (-beta.2) and build (+hash)
+SEMVER="${VERSION#v}"
+SEMVER="${SEMVER// /}"
 
 # Short hash for dev builds
 SHORT_HASH=""
@@ -73,11 +78,11 @@ esac
 # ------------------------------------------------------------------ #
 # Archive names
 # ------------------------------------------------------------------ #
-SRC_NAME="mismiss-${VERSION_CLEAN}"
+SRC_NAME="mismiss-${SEMVER}"
 if [ -n "$SHORT_HASH" ]; then
-    EXE_NAME="mismiss-${VERSION_CLEAN}-${PLATFORM}-${SHORT_HASH}"
+    EXE_NAME="mismiss-${SEMVER}-${PLATFORM}-${SHORT_HASH}"
 else
-    EXE_NAME="mismiss-${VERSION_CLEAN}-${PLATFORM}"
+    EXE_NAME="mismiss-${SEMVER}-${PLATFORM}"
 fi
 
 RELEASE_DIR="$PROJECT_ROOT/release"
@@ -112,7 +117,7 @@ rm -rf "$PROJECT_ROOT/build"
 # ------------------------------------------------------------------ #
 # 1. Build frontend
 # ------------------------------------------------------------------ #
-step "[1/5] Building frontend ..."
+step "[1/6] Building frontend ..."
 check_cmd node; check_cmd npm
 
 cd "$PROJECT_ROOT/web/frontend"
@@ -124,7 +129,7 @@ ok "dist ready"
 # ------------------------------------------------------------------ #
 # 2. Source archives
 # ------------------------------------------------------------------ #
-step "[2/5] Building source archives ..."
+step "[2/6] Building source archives ..."
 
 BUILD_DIR="$PROJECT_ROOT/build/$SRC_NAME"
 mkdir -p "$BUILD_DIR"
@@ -161,7 +166,7 @@ rm -rf "$BUILD_DIR"
 # ------------------------------------------------------------------ #
 # 3. pip wheel
 # ------------------------------------------------------------------ #
-step "[3/5] Building pip wheel ..."
+step "[3/6] Building pip wheel ..."
 check_cmd python3 || check_cmd python
 PY=$(command -v python3 || command -v python)
 
@@ -169,6 +174,14 @@ PY=$(command -v python3 || command -v python)
 "$PY" -m build --wheel --outdir "$RELEASE_DIR" "$PROJECT_ROOT"
 
 WHL=$(ls -1 "$RELEASE_DIR"/mismiss-*-py3-none-any.whl 2>/dev/null | head -1)
+
+# PEP 427 normalizes 1.0.0-beta.2 → 1.0.0b2, rename to SemVer
+WHL_SEMVER="$RELEASE_DIR/mismiss-${SEMVER}-py3-none-any.whl"
+if [ "$WHL" != "$WHL_SEMVER" ] && [ -f "$WHL" ]; then
+    mv "$WHL" "$WHL_SEMVER"
+    WHL="$WHL_SEMVER"
+fi
+
 ok "wheel           $(basename "$WHL")  ($(_size "$WHL"))"
 
 # ------------------------------------------------------------------ #
@@ -177,7 +190,7 @@ ok "wheel           $(basename "$WHL")  ($(_size "$WHL"))"
 if $SKIP_PYINSTALLER; then
     step "[4/5] PyInstaller -- SKIPPED"
 else
-    step "[4/5] Building PyInstaller standalone binary ..."
+    step "[4/6] Building PyInstaller standalone binary ..."
     check_cmd python3 || check_cmd python
 
     "$PY" -m pip install -q pyinstaller 2>/dev/null
@@ -236,9 +249,31 @@ fi
 # ------------------------------------------------------------------ #
 # 5. Checksums
 # ------------------------------------------------------------------ #
-step "[5/5] Generating checksums ..."
+# ------------------------------------------------------------------ #
+# 5. Docker image
+# ------------------------------------------------------------------ #
+if $SKIP_DOCKER; then
+    step "[5/6] Docker image -- SKIPPED"
+elif command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+    step "[5/6] Building Docker image ..."
 
-CHECKSUM_NAME="checksums-${VERSION_CLEAN}.txt"
+    DOCKER_TAG="mismiss:${SEMVER}"
+    DOCKER_FILE="mismiss-${SEMVER}-docker.tar"
+
+    docker build -t "$DOCKER_TAG" -f "$PROJECT_ROOT/Dockerfile" "$PROJECT_ROOT"
+    docker save -o "$RELEASE_DIR/$DOCKER_FILE" "$DOCKER_TAG"
+
+    ok "docker         $DOCKER_FILE  ($(_size "$RELEASE_DIR/$DOCKER_FILE"))"
+else
+    step "[5/6] Docker image -- Docker not available, skipped"
+fi
+
+# ------------------------------------------------------------------ #
+# 6. Checksums
+# ------------------------------------------------------------------ #
+step "[6/6] Generating checksums ..."
+
+CHECKSUM_NAME="checksums-${SEMVER}.txt"
 cd "$RELEASE_DIR"
 for f in *; do
     if [ "$f" != "$CHECKSUM_NAME" ] && [ -f "$f" ]; then
