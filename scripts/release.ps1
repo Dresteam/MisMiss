@@ -3,6 +3,8 @@
 # ============================================================
 # Builds all distribution formats for a GitHub release.
 #
+# Naming: mismiss-<version>[-<platform>].<ext>
+#
 # Usage:
 #   powershell -File scripts/release.ps1
 #   powershell -File scripts/release.ps1 -Version 1.2.0
@@ -11,29 +13,70 @@
 
 param(
     [string]$Version = "",
-    [switch]$SkipDocker,
     [switch]$SkipPyInstaller
 )
 
 $ErrorActionPreference = "Stop"
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Resolve-Path "$ScriptDir\.."
-$DistDir    = "$ProjectRoot\dist"
-$ReleaseDir = "$ProjectRoot\release"
+$ScriptDir    = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot  = Resolve-Path "$ScriptDir\.."
+$DistDir      = "$ProjectRoot\dist"
+$ReleaseDir   = "$ProjectRoot\release"
 
 # ------------------------------------------------------------------ #
 # Version detection
 # ------------------------------------------------------------------ #
-if (-not $Version) {
-    $Version = (Get-Date -Format "yyyy.M.d")
+function Get-ProjectVersion {
+    # 1. CLI parameter
+    if ($Version) { return $Version }
+
+    # 2. pyproject.toml
+    $pyproject = "$ProjectRoot\pyproject.toml"
+    if (Test-Path $pyproject) {
+        $match = Select-String -Path $pyproject -Pattern 'version\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($match -and $match.Matches.Count -gt 0) {
+            return $match.Matches[0].Groups[1].Value
+        }
+    }
+
+    # 3. Git tag
+    $gitTag = git -C $ProjectRoot describe --tags --abbrev=0 2>$null
+    if ($gitTag) { return $gitTag -replace '^v', '' }
+
+    # 4. Date fallback
+    return (Get-Date -Format "yyyy.M.d")
 }
 
-$ArchiveName = "mismiss-$Version"
+function Get-ShortHash {
+    $hash = git -C $ProjectRoot rev-parse --short=7 HEAD 2>$null
+    if ($hash) { return $hash }
+    return ""
+}
+
+$Version = Get-ProjectVersion
+$ShortHash = Get-ShortHash
 $VersionClean = $Version -replace '[^0-9.]', ''
+$IsDev = $Version -match '^\d{4}\.\d{1,2}\.\d{1,2}$'  # date-based = dev build
+
+# ------------------------------------------------------------------ #
+# Platform detection (for PyInstaller)
+# ------------------------------------------------------------------ #
+if ($IsWindows) { $Platform = "win" }
+elseif ($IsLinux) { $Platform = "linux" }
+elseif ($IsMacOS) { $Platform = "macos" }
+else { $Platform = "win" }
+
+# ------------------------------------------------------------------ #
+# Archive names
+# ------------------------------------------------------------------ #
+$SrcName     = "mismiss-$VersionClean"
+$ExeName     = if ($ShortHash) { "mismiss-${VersionClean}-win-${ShortHash}" } else { "mismiss-${VersionClean}-win" }
+$WheelPrefix = "mismiss-$VersionClean"
 
 Write-Host ""
 Write-Host "  ==========================================" -ForegroundColor Cyan
-Write-Host "   MisMiss Release Builder v$Version"         -ForegroundColor Cyan
+Write-Host "   MisMiss Release Builder"                   -ForegroundColor Cyan
+Write-Host "   Version: $Version"                         -ForegroundColor Cyan
+if ($ShortHash) { Write-Host "   Commit:  $ShortHash" -ForegroundColor Cyan }
 Write-Host "  ==========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -57,8 +100,6 @@ Write-Step "Preparing release directory..."
 
 if (Test-Path $ReleaseDir) { Remove-Item -Recurse -Force $ReleaseDir }
 New-Item -ItemType Directory -Path $ReleaseDir -Force | Out-Null
-
-# Clean build cache but keep dist
 if (Test-Path "$ProjectRoot\build") { Remove-Item -Recurse -Force "$ProjectRoot\build" }
 
 # ------------------------------------------------------------------ #
@@ -72,15 +113,14 @@ if (-not (Test-Path node_modules)) { npm ci --silent }
 npm run build
 if ($LASTEXITCODE -ne 0) { Write-ERR "Frontend build failed" }
 Pop-Location
-
 Write-OK "dist ready"
 
 # ------------------------------------------------------------------ #
-# 2. Source archives (.zip + .tar.gz)
+# 2. Source archives (.tar.gz + .zip)
 # ------------------------------------------------------------------ #
 Write-Step "[2/5] Building source archives ..."
 
-$BuildDir = "$ProjectRoot\build\$ArchiveName"
+$BuildDir = "$ProjectRoot\build\$SrcName"
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 
 # Collect files
@@ -94,7 +134,6 @@ $copy = { param($src, $dst)
     }
 }
 
-# Source
 & $copy "$ProjectRoot\src"               "$BuildDir\src"
 & $copy "$ProjectRoot\web\backend"       "$BuildDir\web\backend"
 & $copy "$ProjectRoot\web\frontend\dist" "$BuildDir\web\frontend\dist"
@@ -104,33 +143,29 @@ $copy = { param($src, $dst)
 & $copy "$ProjectRoot\mismiss_cli.py"    "$BuildDir\mismiss_cli.py"
 & $copy "$ProjectRoot\README.md"         "$BuildDir\README.md"
 
-# Scripts
 New-Item -ItemType Directory -Path "$BuildDir\scripts" -Force | Out-Null
 Get-ChildItem "$ProjectRoot\scripts" | ForEach-Object {
     Copy-Item $_.FullName "$BuildDir\scripts\" -ErrorAction SilentlyContinue
 }
 
-# Runtime dirs
 @("data", "logs", "plugins", "permissions") | ForEach-Object {
     New-Item -ItemType Directory -Path "$BuildDir\$_" -Force | Out-Null
 }
 
-# Clean caches
 Get-ChildItem -Recurse -Directory -Filter "__pycache__" -Path $BuildDir -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
 
 # Create archives
 Push-Location "$ProjectRoot\build"
-Compress-Archive -Path $ArchiveName -DestinationPath "$ReleaseDir\$ArchiveName.zip" -Force
+Compress-Archive -Path $SrcName -DestinationPath "$ReleaseDir\$SrcName.zip" -Force
 if (Get-Command tar -ErrorAction SilentlyContinue) {
-    tar -czf "$ReleaseDir\$ArchiveName.tar.gz" $ArchiveName
+    tar -czf "$ReleaseDir\$SrcName.tar.gz" $SrcName
 }
 Pop-Location
 
-$zipSize = (Get-Item "$ReleaseDir\$ArchiveName.zip").Length
-Write-OK "source zip  ($('{0:N1}' -f ($zipSize / 1MB)) MB)"
+$zipSize = (Get-Item "$ReleaseDir\$SrcName.zip").Length
+Write-OK "source zip     $SrcName.zip  ($('{0:N1}' -f ($zipSize / 1MB)) MB)"
 
-# Clean up build dir for next step
 Remove-Item -Recurse -Force $BuildDir
 
 # ------------------------------------------------------------------ #
@@ -143,8 +178,8 @@ python -m pip install -q --upgrade pip build 2>$null
 python -m build --wheel --outdir "$ReleaseDir" "$ProjectRoot"
 if ($LASTEXITCODE -ne 0) { Write-ERR "Wheel build failed" }
 
-$whl = Get-ChildItem "$ReleaseDir\mismiss-*.whl" | Select-Object -First 1
-Write-OK "wheel  ($('{0:N1}' -f ($whl.Length / 1MB)) MB)"
+$whl = Get-ChildItem "$ReleaseDir\mismiss-*-py3-none-any.whl" | Select-Object -First 1
+Write-OK "wheel          $($whl.Name)  ($('{0:N1}' -f ($whl.Length / 1MB)) MB)"
 
 # ------------------------------------------------------------------ #
 # 4. PyInstaller standalone
@@ -161,7 +196,7 @@ if ($SkipPyInstaller) {
         --distpath "$ReleaseDir" `
         --workpath "$ProjectRoot\build\pyinstaller" `
         --specpath "$ProjectRoot\build" `
-        --name "mismiss" `
+        --name "$ExeName" `
         --onefile `
         --console `
         --clean `
@@ -201,8 +236,8 @@ if ($SkipPyInstaller) {
 
     if ($LASTEXITCODE -ne 0) { Write-ERR "PyInstaller build failed" }
 
-    $exe = Get-ChildItem "$ReleaseDir\mismiss.exe" | Select-Object -First 1
-    Write-OK "exe  ($('{0:N1}' -f ($exe.Length / 1MB)) MB)"
+    $exe = Get-ChildItem "$ReleaseDir\$ExeName.exe" | Select-Object -First 1
+    Write-OK "exe            $($exe.Name)  ($('{0:N1}' -f ($exe.Length / 1MB)) MB)"
 }
 
 # ------------------------------------------------------------------ #
@@ -210,15 +245,14 @@ if ($SkipPyInstaller) {
 # ------------------------------------------------------------------ #
 Write-Step "[5/5] Generating checksums ..."
 
+$ChecksumName = "checksums-${VersionClean}.txt"
 Push-Location $ReleaseDir
-$checksumFile = "checksums_${VersionClean}.txt"
-Get-ChildItem -File | Where-Object { $_.Name -ne $checksumFile } | ForEach-Object {
+Get-ChildItem -File | Where-Object { $_.Name -ne $ChecksumName } | ForEach-Object {
     $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-    "$hash  $($_.Name)" | Out-File -Append -Encoding utf8 $checksumFile
+    "$hash  $($_.Name)" | Out-File -Append -Encoding utf8 $ChecksumName
 }
 Pop-Location
-
-Write-OK "SHA256 checksums"
+Write-OK "checksums     $ChecksumName"
 
 # ------------------------------------------------------------------ #
 # Done
@@ -227,23 +261,21 @@ $releaseSize = (Get-ChildItem -Recurse $ReleaseDir | Measure-Object -Property Le
 
 Write-Host ""
 Write-Host "  ==========================================" -ForegroundColor Green
-Write-Host "   RELEASE v$Version BUILD COMPLETE"           -ForegroundColor Green
+Write-Host "   RELEASE BUILD COMPLETE"                    -ForegroundColor Green
 Write-Host "  ==========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Output: $ReleaseDir" -ForegroundColor White
 Write-Host "  Size:   $('{0:N1}' -f ($releaseSize / 1MB)) MB" -ForegroundColor White
 Write-Host ""
-Get-ChildItem $ReleaseDir | ForEach-Object {
+Get-ChildItem $ReleaseDir -File | ForEach-Object {
     $size = '{0:N1} MB' -f ($_.Length / 1MB)
-    Write-Host "    $($_.Name.PadRight(36)) $size" -ForegroundColor White
+    Write-Host "    $($_.Name.PadRight(44)) $size" -ForegroundColor White
 }
 Write-Host ""
-Write-Host "  Draft release notes:" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  ## v$Version" -ForegroundColor White
 
-# Generate asset markdown
-Get-ChildItem $ReleaseDir -File | Where-Object { $_.Name -match '\.(zip|gz|whl|exe)$' } | ForEach-Object {
+# Markdown table for GitHub Release
+Write-Host "  --- Release notes table ---" -ForegroundColor Cyan
+Get-ChildItem $ReleaseDir -File | Where-Object { $_.Name -notmatch '^checksums' } | ForEach-Object {
     $size = '{0:N1} MB' -f ($_.Length / 1MB)
     Write-Host "  | $($_.Name) | $size |" -ForegroundColor White
 }

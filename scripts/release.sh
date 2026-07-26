@@ -4,6 +4,8 @@
 # ============================================================
 # Builds all distribution formats for a GitHub release.
 #
+# Naming: mismiss-<version>[-<platform>].<ext>
+#
 # Usage:
 #   bash scripts/release.sh
 #   bash scripts/release.sh -v 1.2.0
@@ -16,29 +18,68 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-VERSION="${MISMISS_VERSION:-}"
-SKIP_DOCKER=false
+VERSION=""
 SKIP_PYINSTALLER=false
 
-# ------------------------------------------------------------------ #
-# Parse args
-# ------------------------------------------------------------------ #
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--version) VERSION="$2"; shift 2 ;;
-        --skip-docker) SKIP_DOCKER=true; shift ;;
         --skip-pyinstaller) SKIP_PYINSTALLER=true; shift ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
 done
 
-# Version from date if not set
-if [ -z "$VERSION" ]; then
-    VERSION="$(date +%Y.%-m.%-d)"
+# ------------------------------------------------------------------ #
+# Version detection
+# ------------------------------------------------------------------ #
+detect_version() {
+    # 1. CLI parameter
+    if [ -n "$VERSION" ]; then echo "$VERSION"; return; fi
+
+    # 2. pyproject.toml
+    if [ -f pyproject.toml ]; then
+        local v; v=$(grep -oP 'version\s*=\s*"\K[^"]+' pyproject.toml | head -1)
+        if [ -n "$v" ]; then echo "$v"; return; fi
+    fi
+
+    # 3. Git tag
+    if command -v git &>/dev/null && git rev-parse --git-dir &>/dev/null 2>&1; then
+        local tag; tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        if [ -n "$tag" ]; then echo "${tag#v}"; return; fi
+    fi
+
+    # 4. Date fallback
+    date +%Y.%-m.%-d
+}
+
+VERSION=$(detect_version)
+VERSION_CLEAN="${VERSION//[^0-9.]/}"
+
+# Short hash for dev builds
+SHORT_HASH=""
+if command -v git &>/dev/null && git rev-parse --git-dir &>/dev/null 2>&1; then
+    SHORT_HASH=$(git rev-parse --short=7 HEAD 2>/dev/null || true)
 fi
 
-ARCHIVE_NAME="mismiss-${VERSION}"
-VERSION_CLEAN="${VERSION//[^0-9.]/}"
+# ------------------------------------------------------------------ #
+# Platform
+# ------------------------------------------------------------------ #
+case "$(uname -s)" in
+    Linux*)  PLATFORM="linux" ;;
+    Darwin*) PLATFORM="macos" ;;
+    *)       PLATFORM="linux" ;;
+esac
+
+# ------------------------------------------------------------------ #
+# Archive names
+# ------------------------------------------------------------------ #
+SRC_NAME="mismiss-${VERSION_CLEAN}"
+if [ -n "$SHORT_HASH" ]; then
+    EXE_NAME="mismiss-${VERSION_CLEAN}-${PLATFORM}-${SHORT_HASH}"
+else
+    EXE_NAME="mismiss-${VERSION_CLEAN}-${PLATFORM}"
+fi
+
 RELEASE_DIR="$PROJECT_ROOT/release"
 
 # ------------------------------------------------------------------ #
@@ -48,23 +89,25 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
 step() { echo -e "${CYAN}[$(date +%H:%M:%S)]${NC} $*"; }
 ok()   { echo -e "         -> ${GREEN}$*${NC}"; }
 die()  { echo -e "${RED}ERROR: $*${NC}"; exit 1; }
-size() { du -sh "$1" 2>/dev/null | cut -f1; }
+_size() { du -sh "$1" 2>/dev/null | cut -f1; }
 
 check_cmd() { command -v "$1" &>/dev/null || die "$1 is required"; }
 
 # ------------------------------------------------------------------ #
 # Prepare
 # ------------------------------------------------------------------ #
+echo ""
+echo "  =========================================="
+echo "   MisMiss Release Builder"
+echo "   Version: $VERSION"
+[ -n "$SHORT_HASH" ] && echo "   Commit:  $SHORT_HASH"
+echo "  =========================================="
+echo ""
+
 step "Preparing release directory ..."
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 rm -rf "$PROJECT_ROOT/build"
-
-echo ""
-echo "  =========================================="
-echo "   MisMiss Release Builder v${VERSION}"
-echo "  =========================================="
-echo ""
 
 # ------------------------------------------------------------------ #
 # 1. Build frontend
@@ -83,43 +126,35 @@ ok "dist ready"
 # ------------------------------------------------------------------ #
 step "[2/5] Building source archives ..."
 
-BUILD_DIR="$PROJECT_ROOT/build/$ARCHIVE_NAME"
+BUILD_DIR="$PROJECT_ROOT/build/$SRC_NAME"
 mkdir -p "$BUILD_DIR"
 
-# Source code
 cp -r "$PROJECT_ROOT/src"                "$BUILD_DIR/"
 mkdir -p "$BUILD_DIR/web/backend"
 cp -r "$PROJECT_ROOT/web/backend"/*.py   "$BUILD_DIR/web/backend/" 2>/dev/null || true
 cp -r "$PROJECT_ROOT/web/backend/api"    "$BUILD_DIR/web/backend/"
 mkdir -p "$BUILD_DIR/web/frontend/dist"
 cp -r "$PROJECT_ROOT/web/frontend/dist"/* "$BUILD_DIR/web/frontend/dist/"
-
-# Config & metadata
 cp "$PROJECT_ROOT/config.yml"            "$BUILD_DIR/"
 cp "$PROJECT_ROOT/requirements.txt"      "$BUILD_DIR/"
 cp "$PROJECT_ROOT/pyproject.toml"        "$BUILD_DIR/"
 cp "$PROJECT_ROOT/mismiss_cli.py"        "$BUILD_DIR/"
 cp "$PROJECT_ROOT/README.md"             "$BUILD_DIR/"
 
-# Scripts
 mkdir -p "$BUILD_DIR/scripts"
 cp "$PROJECT_ROOT/scripts/"*             "$BUILD_DIR/scripts/" 2>/dev/null || true
-
-# Runtime dirs
 mkdir -p "$BUILD_DIR"/{data,logs,plugins,permissions}
 
-# Clean
 find "$BUILD_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$BUILD_DIR" -type f -name "*.pyc" -delete 2>/dev/null || true
 
-# Create archives
 cd "$PROJECT_ROOT/build"
-tar -czf "$RELEASE_DIR/${ARCHIVE_NAME}.tar.gz" "$ARCHIVE_NAME"
-zip -qr "$RELEASE_DIR/${ARCHIVE_NAME}.zip" "$ARCHIVE_NAME"
+tar -czf "$RELEASE_DIR/${SRC_NAME}.tar.gz" "$SRC_NAME"
+zip -qr "$RELEASE_DIR/${SRC_NAME}.zip" "$SRC_NAME"
 cd "$PROJECT_ROOT"
 
-ok "source .tar.gz  ($(size "$RELEASE_DIR/${ARCHIVE_NAME}.tar.gz"))"
-ok "source .zip     ($(size "$RELEASE_DIR/${ARCHIVE_NAME}.zip"))"
+ok "source zip      ${SRC_NAME}.zip  ($(_size "$RELEASE_DIR/${SRC_NAME}.zip"))"
+ok "source tar.gz   ${SRC_NAME}.tar.gz  ($(_size "$RELEASE_DIR/${SRC_NAME}.tar.gz"))"
 
 rm -rf "$BUILD_DIR"
 
@@ -133,8 +168,8 @@ PY=$(command -v python3 || command -v python)
 "$PY" -m pip install -q --upgrade pip build 2>/dev/null
 "$PY" -m build --wheel --outdir "$RELEASE_DIR" "$PROJECT_ROOT"
 
-WHL=$(ls -1 "$RELEASE_DIR"/mismiss-*.whl 2>/dev/null | head -1)
-ok "wheel  ($(size "$WHL"))"
+WHL=$(ls -1 "$RELEASE_DIR"/mismiss-*-py3-none-any.whl 2>/dev/null | head -1)
+ok "wheel           $(basename "$WHL")  ($(_size "$WHL"))"
 
 # ------------------------------------------------------------------ #
 # 4. PyInstaller
@@ -151,7 +186,7 @@ else
         --distpath "$RELEASE_DIR" \
         --workpath "$PROJECT_ROOT/build/pyinstaller" \
         --specpath "$PROJECT_ROOT/build" \
-        --name "mismiss" \
+        --name "$EXE_NAME" \
         --onefile \
         --console \
         --clean \
@@ -189,11 +224,13 @@ else
         --collect-all "uvicorn" \
         "$PROJECT_ROOT/scripts/pyinstaller_entry.py"
 
-    if [ -f "$RELEASE_DIR/mismiss.exe" ]; then
-        ok "exe  ($(size "$RELEASE_DIR/mismiss.exe"))"
-    else
-        ok "binary  ($(size "$RELEASE_DIR/mismiss"))"
+    BINARY=""
+    if [ -f "$RELEASE_DIR/${EXE_NAME}.exe" ]; then
+        BINARY="${EXE_NAME}.exe"
+    elif [ -f "$RELEASE_DIR/$EXE_NAME" ]; then
+        BINARY="$EXE_NAME"
     fi
+    ok "binary          $BINARY  ($(_size "$RELEASE_DIR/$BINARY"))"
 fi
 
 # ------------------------------------------------------------------ #
@@ -201,16 +238,16 @@ fi
 # ------------------------------------------------------------------ #
 step "[5/5] Generating checksums ..."
 
-CHECKSUM_FILE="$RELEASE_DIR/checksums_${VERSION_CLEAN}.txt"
+CHECKSUM_NAME="checksums-${VERSION_CLEAN}.txt"
 cd "$RELEASE_DIR"
 for f in *; do
-    if [ "$f" != "$(basename "$CHECKSUM_FILE")" ] && [ -f "$f" ]; then
-        sha256sum "$f" >> "$CHECKSUM_FILE"
+    if [ "$f" != "$CHECKSUM_NAME" ] && [ -f "$f" ]; then
+        sha256sum "$f" >> "$CHECKSUM_NAME"
     fi
 done
 cd "$PROJECT_ROOT"
 
-ok "SHA256 checksums"
+ok "checksums      $CHECKSUM_NAME"
 
 # ------------------------------------------------------------------ #
 # Done
@@ -219,7 +256,7 @@ RELEASE_SIZE=$(du -sh "$RELEASE_DIR" 2>/dev/null | cut -f1)
 
 echo ""
 echo "  =========================================="
-echo -e "  ${GREEN} RELEASE v${VERSION} BUILD COMPLETE${NC}"
+echo -e "  ${GREEN} RELEASE BUILD COMPLETE${NC}"
 echo "  =========================================="
 echo ""
 echo "  Output: $RELEASE_DIR"
@@ -231,14 +268,9 @@ ls -lh "$RELEASE_DIR" | tail -n +2 | while read -r line; do
 done
 
 echo ""
-echo "  Draft release notes:"
-echo ""
-echo "  ## v${VERSION}"
-echo "  | Asset | Size |"
-echo "  |-------|------|"
-
+echo "  --- Release notes table ---"
 ls -lh "$RELEASE_DIR" | tail -n +2 | while read -r _ _ size _ _ name; do
-    if echo "$name" | grep -qE '\.(zip|gz|whl|exe)$|^mismiss$'; then
+    if echo "$name" | grep -qvE '^checksums'; then
         echo "  | $name | $size |"
     fi
 done
