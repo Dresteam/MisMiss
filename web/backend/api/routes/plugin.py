@@ -491,8 +491,20 @@ async def plugin_retry_failed(dir_name: str, s: MissevanServer = Depends(get_ser
     try:
         meta = await s.retry_failed_plugin(dir_name)
         return _plugin_to_summary(meta)
+    except CorePluginNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/failed/{dir_name}/discard", response_model=StatusResponse)
+async def plugin_discard_failed(dir_name: str, s: MissevanServer = Depends(get_server)):
+    """放弃加载失败的插件（从列表中移除，保留目录文件）。"""
+    try:
+        await s.discard_failed_plugin(dir_name)
+        return StatusResponse(success=True, message=f"已放弃加载 '{dir_name}'")
+    except CorePluginNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/refresh", response_model=StatusResponse)

@@ -11,10 +11,12 @@
 
 from core.plugin.plugin_manager import PluginManager
 from core.plugin.config_manager import PluginConfigManager
+from core.plugin.data_manager import PluginDataManager
 from core.plugin.permission_manager import PluginPermissionManager
 
 __all__ = [
     "PluginManager",
     "PluginConfigManager",
+    "PluginDataManager",
     "PluginPermissionManager",
 ]

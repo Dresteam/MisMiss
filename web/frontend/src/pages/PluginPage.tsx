@@ -50,9 +50,8 @@ export function PluginPage() {
     try {
       if (plugin.enabled) { await disablePlugin(plugin.name); showToast('success', plugin.name + ' 已禁用'); }
       else { await enablePlugin(plugin.name); showToast('success', plugin.name + ' 已启用'); }
-      await load();
-    } catch (e: any) { showToast('error', '操作失败', e.message);
-    } finally { setProcessing(plugin.name, null); }
+    } catch (e: any) { showToast('error', '操作失败', e.message); }
+    finally { setProcessing(plugin.name, null); await load(); }
   };
 
   const handleReload = async (pluginName: string) => {
@@ -165,6 +164,17 @@ export function PluginPage() {
     try { await retryFailedPlugin(dirName); showToast('success', '加载成功'); await load(); }
     catch (e: any) { showToast('error', '重试失败', e.message); }
   };
+  const handleDiscardFailed = async (dirName: string) => {
+    try {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/plugin/failed/${encodeURIComponent(dirName)}/discard`, {
+        method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
+      showToast('success', `"${dirName}" 已退回禁用`);
+      await load();
+    } catch (e: any) { showToast('error', '操作失败', e.message); }
+  };
 
   const openDrawer = (name: string) => { setSelectedPlugin(name); setDrawerOpen(true); };
 
@@ -253,7 +263,7 @@ export function PluginPage() {
                     <Button variant="ghost" size="sm" icon={<Eye />}
                       onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name); }}>详情</Button>
                     {plugin.has_ui && (
-                      <Link to={`/plugin/${encodeURIComponent(plugin.name)}/page`} target="_blank"
+                      <Link to={`/plugin/${encodeURIComponent(plugin.name)}/page`}
                         onClick={(e) => e.stopPropagation()}>
                         <Button variant="ghost" size="sm" icon={<ExternalLink />}>主页</Button>
                       </Link>
@@ -297,6 +307,12 @@ export function PluginPage() {
                                  bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300
                                  hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">
                       <RefreshCw className="w-3 h-3" /> 重试
+                    </button>
+                    <button onClick={() => handleDiscardFailed(f.dir_name)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-lg
+                                 bg-gray-100 dark:bg-gray-700 text-red-500 dark:text-red-400
+                                 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+                      <X className="w-3 h-3" /> 放弃
                     </button>
                   </div>
                 </div>

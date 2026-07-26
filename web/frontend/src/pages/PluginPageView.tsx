@@ -38,6 +38,8 @@ export function PluginPageView() {
     );
   }
 
+  const displayName = detail.display_name || detail.name;
+
   return (
     <div className="animate-fade-in max-w-5xl">
       <div className="flex items-center justify-between mb-4">
@@ -47,7 +49,7 @@ export function PluginPageView() {
           </Link>
           <div>
             <h1 className="text-xl font-bold text-gray-900 dark:text-white">
-              {detail.display_name || detail.name}
+              {displayName}
             </h1>
             <p className="text-xs text-gray-500">{detail.plugin_id} · v{detail.version}</p>
           </div>

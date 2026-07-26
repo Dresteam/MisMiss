@@ -64,11 +64,7 @@ class MissevanServer(ServerInterface):
     # ================================================================== #
 
     def set_app(self, app) -> None:
-        """注入 FastAPI app 引用——必须在 :meth:`start` 前调用。
-
-        确保 PluginManager 在 :meth:`resume_all` 之前就已持有 app 引用，
-        从而插件自定义 UI 路由能在实例化时立即注册，避免延迟补注册。
-        """
+        """注入 FastAPI app 引用——必须在 :meth:`start` 前调用。"""
         self._app = app
 
     async def start(self) -> None:
@@ -116,6 +112,7 @@ class MissevanServer(ServerInterface):
             command_router=command_router,
             pip_mirror=self._config.get_str("plugin.pip_mirror"),
         )
+        self._plugin_manager.set_server(self)
         await self._plugin_manager.load_all()
         # 恢复持久化的启用标记
         pm = self._plugin_manager
@@ -500,6 +497,12 @@ class MissevanServer(ServerInterface):
         metadata = await pm.retry_failed_plugin(dir_name)
         self._save_state()
         return metadata
+
+    async def discard_failed_plugin(self, dir_name: str) -> None:
+        """放弃加载失败的插件（从失败列表和插件列表中移除）。"""
+        pm = self._require_plugin_manager()
+        pm.discard_failed_plugin(dir_name)
+        self._save_state()
 
     # ================================================================== #
     # 定时消息

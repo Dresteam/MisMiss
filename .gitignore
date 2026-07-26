@@ -235,8 +235,7 @@ web/frontend/node_modules
 plugins
 data
 permissions
-test/plugins
-test/cookie.txt
+test/
 
 # Frontend build output
 web/frontend/dist
