@@ -31,6 +31,7 @@ from core.exceptions import (
 )
 from core.logging import get_logger
 from core.plugin.config_manager import PluginConfigManager
+from core.plugin.data_manager import PluginDataManager
 from core.plugin.permission_manager import PluginPermissionManager
 from interfaces.plugin.miss_config import MissConfig
 from interfaces.plugin.plugin import Plugin
@@ -110,6 +111,12 @@ class PluginManager:
         self._permission_mgr = PluginPermissionManager(permission_dir)
         self._failed_plugins: dict[str, dict[str, Any]] = {}
         self._app = None  # FastAPI app 引用
+        self._server = None  # MissevanServer 引用，供插件获取直播间列表等
+        self._server = None  # MissevanServer 引用
+
+    def set_server(self, server) -> None:
+        """注入 MissevanServer 引用，供插件查询直播间列表等。"""
+        self._server = server
 
     def set_app(self, app) -> None:
         """设置 FastAPI app 引用并注册所有插件的 UI 路由。
@@ -703,6 +710,12 @@ class PluginManager:
         metadata.data_dir = data_dir
         metadata.enabled = True
 
+        # 注入 server 引用（若可用），供插件查询直播间列表等
+        if self._server is not None:
+            instance._server = self._server  # type: ignore[attr-defined]
+        # 注入 PluginDataManager（封装 data 文件读写，路径沙箱）
+        instance.data = PluginDataManager(data_dir)
+
         # 注册插件自定义路由（在 initialize 之前，确保 UI 立即可用）
         if self._app is not None and hasattr(instance, 'register_routes'):
             from fastapi import APIRouter as _APIRouter
@@ -895,6 +908,9 @@ class PluginManager:
             instance.author = metadata.author
             instance.plugin_id = metadata.plugin_id
             instance.data_dir = self.get_plugin_data_dir(metadata.name)
+            if self._server is not None:
+                instance._server = self._server  # type: ignore[attr-defined]
+            instance.data = PluginDataManager(instance.data_dir)
             metadata.plugin_instance = instance
             metadata.module = module
             metadata.module_path = import_path
@@ -1246,15 +1262,67 @@ class PluginManager:
     async def retry_failed_plugin(self, dir_name: str) -> PluginMetadata:
         """重试加载之前失败的插件。
 
+        流程：移除旧条目 → 重新加载元数据 → 若之前已启用则重新激活。
+        激活成功才算重试成功。
+
         :param dir_name: 插件目录名
-        :return: 插件元数据
-        :raises CorePluginLoadException: 重试仍然失败
+        :return: 插件元数据（已激活）
+        :raises CorePluginLoadException: 重试仍然失败（加载或激活失败）
+        :raises CorePluginNotFoundException: 插件不在失败列表
         """
         if dir_name not in self._failed_plugins:
             raise CorePluginNotFoundException(dir_name)
 
+        # 先从 _plugins 中移除旧条目
+        to_remove = [name for name, meta in self._plugins.items()
+                     if meta.root_dir_name == dir_name]
+        for name in to_remove:
+            del self._plugins[name]
+            _log.debug("已移除旧条目以重新加载: {}", name)
+
+        self._failed_plugins.pop(dir_name, None)
+
         _log.info("正在重试加载插件: {}", dir_name)
-        return await self.load_plugin(dir_name)  # type: ignore[return-value]
+
+        # 1. 重新加载元数据
+        metadata = await self.load_plugin(dir_name)
+        if metadata is None:
+            raise CorePluginLoadException(dir_name, "load_plugin 返回 None")
+
+        # 2. 重新激活（包含 initialize 调用），激活成功才算重试成功
+        metadata.enabled = True
+        try:
+            await self._activate_plugin(metadata)
+        except CorePluginLoadException:
+            # _activate_plugin 已将失败记录到 _failed_plugins
+            raise
+
+        _log.info("插件重试成功: {}", metadata)
+        self._notify_state_changed()
+        return metadata  # type: ignore[return-value]
+
+    def discard_failed_plugin(self, dir_name: str) -> None:
+        """放弃加载失败的插件，将其回退到禁用状态。
+
+        失败插件的元数据仍保留在插件列表中（``enabled=False``），
+        可从失败筛选器中看到并可重试。目录文件保留不删除。
+
+        :param dir_name: 插件目录名
+        :raises CorePluginNotFoundException: 插件不在失败列表
+        """
+        if dir_name not in self._failed_plugins:
+            raise CorePluginNotFoundException(dir_name)
+
+        _log.info("放弃加载插件，回退到禁用状态: {}", dir_name)
+        # 将插件设为禁用状态
+        for meta in self._plugins.values():
+            if meta.root_dir_name == dir_name:
+                meta.enabled = False
+                if meta.plugin_instance is not None:
+                    self._unload_plugin_instance(meta)
+        # 从失败列表移除
+        self._failed_plugins.pop(dir_name, None)
+        self._notify_state_changed()
 
     def _record_failed_plugin(
         self,

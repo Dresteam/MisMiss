@@ -14,6 +14,7 @@ from interfaces.plugin.miss_config import MissConfig
 
 if TYPE_CHECKING:
     from interfaces.plugin.plugin import Plugin as _Plugin
+    from core.plugin.data_manager import PluginDataManager
 
 # ------------------------------------------------------------------ #
 # 插件上下文 —— 用于在执行事件处理器时追踪当前插件，
@@ -96,6 +97,19 @@ class Plugin(Listener, ABC):
 
     插件可将自定义数据文件（数据库、缓存等）存储在此目录下。
     目录在插件加载时自动创建，卸载时可通过 ``delete_data=True`` 清理。
+    """
+
+    data: "PluginDataManager | None" = None
+    """插件数据文件管理器（:class:`~core.plugin.data_manager.PluginDataManager`）。
+
+    由 PluginManager 在实例化后注入。插件应通过该实例进行所有数据文件
+    的读写操作，而非直接使用 ``open()`` / ``json.load()`` 等底层 API。
+    管理器确保所有文件操作限制在插件的 ``data_dir`` 目录内（路径沙箱）。
+
+    用法::
+
+        songs = self.data.read_json("playlist.json") or []
+        self.data.write_json("playlist.json", songs)
     """
 
     # ------------------------------------------------------------------ #

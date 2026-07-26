@@ -44,11 +44,10 @@
   - 通过环境变量 `MISMISS_DEV=1` 启用
   - 复杂度：中
 
-- [ ] **插件 KV 存储**
-  - 为每个插件提供 `put_kv(key, value)` / `get_kv(key)` 持久化键值存储
-  - 参照 AstrBot 的 `PluginKVStoreMixin` 模式
-  - 数据存储在 `data/{plugin_name}/kv.json`
-  - 复杂度：低
+- [x] **插件 KV 存储** ✅ 已完成
+  - `PluginDataManager` 提供 `read_json/write_json/read_text/write_text/delete/exists` 方法
+  - 注入为 `self.data` 属性，所有路径锁定于 `data/{plugin_name}/`
+  - 详见 `src/core/plugin/data_manager.py`
 
 - [ ] **插件市场集成**
   - 对接远端 registry 获取可用插件列表
@@ -66,10 +65,9 @@
   - 卸载时检查是否有其他插件依赖自己
   - 复杂度：中
 
-- [ ] **插件沙箱隔离**
-  - 每个插件独立 venv
-  - 限制导入路径、资源配额
-  - 复杂度：高
+- [x] **插件沙箱隔离** 🟡 路径沙箱已完成，venv 沙箱待定
+  - ✅ 路径沙箱：`PluginDataManager._resolve()` 拒绝 `../` 逃逸和绝对路径
+  - ⬜ venv 沙箱：每个插件独立 venv（复杂度：高，优先级低）
 
 - [ ] **插件更新检测**
   - 对比本地版本与远端 registry/marketplace 版本
@@ -126,7 +124,7 @@
 | LivestreamManager | ✅ | ❌ | ❌ | 30% |
 | Bot (消息/礼物/背包) | ✅ | ✅ | ❌ | 70% |
 | Bot (私信) | ✅ | ❌ | ❌ | 30% |
-| Server | ✅ | ⚠️ | ❌ | 60% |
-| Plugin 系统 | ❌ | ⚠️ | ❌ | 10% |
+| Server | ✅ | ✅ | ❌ | 75% |
+| Plugin 系统 | ✅ | ✅ | ❌ | 85% |
 | 日志系统 | — | ✅ | ❌ | 80% |
 | WebSocket / HTTP | — | ✅ | ❌ | 80% |
