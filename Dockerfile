@@ -1,9 +1,15 @@
 # ============================================================
 # MisMiss — 企业级多阶段 Docker 构建
 # ============================================================
-# Stage 1: 前端构建 (Node)
-# Stage 2: 生产镜像 (Python + Gunicorn + 前端产物)
+# 启用 BuildKit 以获得缓存加速:
+#   set DOCKER_BUILDKIT=1                           (Windows)
+#   export DOCKER_BUILDKIT=1                         (Linux)
+#   docker compose up -d --build
+#
+# 仅源代码变化时跳过依赖重装（层缓存自动生效）。
 # ============================================================
+
+# syntax=docker/dockerfile:1
 
 # ------------------------------------------------------------------ #
 # Stage 1 — 前端构建
@@ -12,8 +18,10 @@ FROM node:22-alpine AS frontend-builder
 
 WORKDIR /src/web/frontend
 
+# npm 缓存挂载 —— 重复构建时跳过下载
 COPY web/frontend/package.json web/frontend/package-lock.json ./
-RUN npm ci --legacy-peer-deps
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 
 COPY web/frontend/ ./
 RUN npm run build
@@ -26,27 +34,27 @@ FROM python:3.13-slim
 LABEL org.opencontainers.image.title="MisMiss"
 LABEL org.opencontainers.image.description="MIST 标准实现 · 猫耳FM 直播场控机器人框架"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
-LABEL org.opencontainers.image.source="https://github.com/dikxingmengya/MisMiss"
 
-# 系统依赖 + 安全补丁
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir --upgrade pip
+    && rm -rf /var/lib/apt/lists/*
 
-# — 非 root 用户 —
+# 非 root 用户
 RUN groupadd -r mismiss && useradd -r -g mismiss -d /app mismiss
 
 WORKDIR /app
 
 # ------------------------------------------------------------------ #
-# Python 依赖（利用 Docker 层缓存）
+# Python 依赖 —— pip 缓存挂载
 # ------------------------------------------------------------------ #
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY web/backend/requirements.txt web/backend/
-RUN pip install --no-cache-dir -r web/backend/requirements.txt
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
+    && pip install -r requirements.txt \
+    && pip install -r web/backend/requirements.txt
 
 # ------------------------------------------------------------------ #
 # 源码 + 配置
@@ -54,22 +62,16 @@ RUN pip install --no-cache-dir -r web/backend/requirements.txt
 COPY src/        ./src/
 COPY web/backend/ ./web/backend/
 COPY mismiss_cli.py pyproject.toml ./
-
-# config.yml 作为模板，运行时由 entrypoint 复制到持久卷
 COPY config.yml ./config.yml.dist
 
-# ------------------------------------------------------------------ #
 # 前端产物（Stage 1）
-# ------------------------------------------------------------------ #
 COPY --from=frontend-builder /src/web/frontend/dist/ ./web/frontend/dist/
 
-# ------------------------------------------------------------------ #
 # Entrypoint
-# ------------------------------------------------------------------ #
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# 运行时目录（可被 volume 覆盖）
+# 运行时目录
 RUN mkdir -p /app/data /app/logs /app/plugins /app/permissions /app/config \
     && chown -R mismiss:mismiss /app
 
@@ -85,6 +87,5 @@ ENV MISMISS_PROD=1
 ENV API_PORT=8080
 ENV WORKERS=4
 
-# tini 作为 init 进程，正确处理信号和僵尸进程
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/usr/local/bin/docker-entrypoint.sh"]

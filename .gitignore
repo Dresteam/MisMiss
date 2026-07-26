@@ -244,6 +244,7 @@ web/frontend/tsconfig.*.tsbuildinfo
 # Build artifacts
 *.tar
 *.tar.gz
+release/
 
 # IDE
 .idea/pyProjectModel.xml
