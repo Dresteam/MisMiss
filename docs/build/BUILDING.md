@@ -441,6 +441,19 @@ MisMiss/
 
 一条命令构建所有分发格式，用于发布 GitHub Release。
 
+### 命名规范
+
+```
+mismiss-<version>[-<platform>][-<hash>].<ext>
+```
+
+| 占位符 | 规则 | 示例 |
+|--------|------|------|
+| `version` | `pyproject.toml` → git tag → 日期 | `1.0.0` |
+| `platform` | 仅 PyInstaller：`win` / `linux` / `macos` | `win` |
+| `hash` | git short hash，仅开发版 | `abc1234` |
+| `ext` | `.zip` `.tar.gz` `.whl` `.exe` | |
+
 ```bash
 # Windows
 powershell -File scripts/release.ps1
@@ -449,15 +462,16 @@ powershell -File scripts/release.ps1
 bash scripts/release.sh
 ```
 
-### 产物
+### 产物示例
 
 ```
 release/
-├── mismiss-2025.7.26.tar.gz          # 源码归档
-├── mismiss-2025.7.26.zip             # 源码归档
-├── mismiss-1.0.0-py3-none-any.whl    # pip wheel
-├── mismiss.exe                        # PyInstaller 独立 exe
-└── checksums_2025.7.26.txt            # SHA256 校验
+├── mismiss-1.0.0.tar.gz              # 源码归档
+├── mismiss-1.0.0.zip                 # 源码归档
+├── mismiss-1.0.0-py3-none-any.whl    # pip wheel（PEP 427）
+├── mismiss-1.0.0-win.exe             # PyInstaller Windows
+├── mismiss-1.0.0-linux               # PyInstaller Linux
+└── checksums-1.0.0.txt               # SHA256 校验
 ```
 
 ### 参数
