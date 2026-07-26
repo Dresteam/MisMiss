@@ -1,7 +1,7 @@
 import { forwardRef } from 'react';
 import { Loader2 } from 'lucide-react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'destructive' | 'success' | 'ghost' | 'outline';
+export type ButtonVariant = 'primary' | 'secondary' | 'destructive' | 'danger' | 'warning' | 'success' | 'ghost' | 'outline';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -21,6 +21,12 @@ const variantStyles: Record<ButtonVariant, string> = {
   destructive:
     'bg-red-600 text-white hover:bg-red-700 active:bg-red-800 ' +
     'focus:ring-red-500',
+  danger:
+    'bg-red-600 text-white hover:bg-red-700 active:bg-red-800 ' +
+    'focus:ring-red-500',
+  warning:
+    'bg-amber-500 text-white hover:bg-amber-600 active:bg-amber-700 ' +
+    'focus:ring-amber-500',
   success:
     'bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 ' +
     'focus:ring-emerald-500',

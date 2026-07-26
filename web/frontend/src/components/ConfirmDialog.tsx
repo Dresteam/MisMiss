@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { Button } from './Button';
+import { Button, type ButtonVariant } from './Button';
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -7,7 +7,8 @@ export interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  danger?: boolean;
+  variant?: 'primary' | 'danger' | 'warning' | 'default';
+  danger?: boolean;           // deprecated, kept for backward compat
   loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -25,8 +26,13 @@ export interface ConfirmDialogProps {
  */
 export function ConfirmDialog({
   open, title, message, confirmLabel = '确定', cancelLabel = '取消',
-  danger = false, loading = false, onConfirm, onCancel,
+  variant = 'default', danger = false, loading = false, onConfirm, onCancel,
 }: ConfirmDialogProps) {
+  const btnVariant = (
+    danger ? 'danger' :
+    variant && variant !== 'default' ? variant :
+    'primary'
+  ) as ButtonVariant;
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center">
@@ -44,7 +50,7 @@ export function ConfirmDialog({
         </div>
         <div className="flex justify-end gap-2 px-5 pb-4">
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>{cancelLabel}</Button>
-          <Button variant={danger ? 'danger' : 'primary'} size="sm" onClick={onConfirm} loading={loading}>
+          <Button variant={btnVariant} size="sm" onClick={onConfirm} loading={loading}>
             {confirmLabel}
           </Button>
         </div>
