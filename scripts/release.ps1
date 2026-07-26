@@ -9,10 +9,12 @@
 #   powershell -File scripts/release.ps1
 #   powershell -File scripts/release.ps1 -Version 1.2.0
 #   powershell -File scripts/release.ps1 -SkipPyInstaller
+#   powershell -File scripts/release.ps1 -SkipDocker
 # ============================================================
 
 param(
     [string]$Version = "",
+    [switch]$SkipDocker,
     [switch]$SkipPyInstaller
 )
 
@@ -54,8 +56,10 @@ function Get-ShortHash {
 
 $Version = Get-ProjectVersion
 $ShortHash = Get-ShortHash
-$VersionClean = $Version -replace '[^0-9.]', ''
-$IsDev = $Version -match '^\d{4}\.\d{1,2}\.\d{1,2}$'  # date-based = dev build
+
+# SemVer clean: strip leading 'v', preserve pre-release (-beta.2) and build (+hash)
+$SemVer = $Version -replace '^v', '' -replace '\s', ''
+$IsDev = $SemVer -notmatch '^\d+\.\d+\.\d+'  # non-SemVer = date-based dev build
 
 # ------------------------------------------------------------------ #
 # Platform detection (for PyInstaller)
@@ -68,9 +72,9 @@ else { $Platform = "win" }
 # ------------------------------------------------------------------ #
 # Archive names
 # ------------------------------------------------------------------ #
-$SrcName     = "mismiss-$VersionClean"
-$ExeName     = if ($ShortHash) { "mismiss-${VersionClean}-win-${ShortHash}" } else { "mismiss-${VersionClean}-win" }
-$WheelPrefix = "mismiss-$VersionClean"
+$SrcName     = "mismiss-$SemVer"
+$ExeName     = if ($ShortHash) { "mismiss-${SemVer}-win-${ShortHash}" } else { "mismiss-${SemVer}-win" }
+$WheelPrefix = "mismiss-$SemVer"
 
 Write-Host ""
 Write-Host "  ==========================================" -ForegroundColor Cyan
@@ -105,7 +109,7 @@ if (Test-Path "$ProjectRoot\build") { Remove-Item -Recurse -Force "$ProjectRoot\
 # ------------------------------------------------------------------ #
 # 1. Build frontend
 # ------------------------------------------------------------------ #
-Write-Step "[1/5] Building frontend ..."
+Write-Step "[1/6] Building frontend ..."
 Check node; Check npm
 
 Push-Location "$ProjectRoot\web\frontend"
@@ -118,7 +122,7 @@ Write-OK "dist ready"
 # ------------------------------------------------------------------ #
 # 2. Source archives (.tar.gz + .zip)
 # ------------------------------------------------------------------ #
-Write-Step "[2/5] Building source archives ..."
+Write-Step "[2/6] Building source archives ..."
 
 $BuildDir = "$ProjectRoot\build\$SrcName"
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
@@ -171,7 +175,7 @@ Remove-Item -Recurse -Force $BuildDir
 # ------------------------------------------------------------------ #
 # 3. pip wheel
 # ------------------------------------------------------------------ #
-Write-Step "[3/5] Building pip wheel ..."
+Write-Step "[3/6] Building pip wheel ..."
 Check python
 
 python -m pip install -q --upgrade pip build 2>$null
@@ -179,6 +183,14 @@ python -m build --wheel --outdir "$ReleaseDir" "$ProjectRoot"
 if ($LASTEXITCODE -ne 0) { Write-ERR "Wheel build failed" }
 
 $whl = Get-ChildItem "$ReleaseDir\mismiss-*-py3-none-any.whl" | Select-Object -First 1
+
+# PEP 427 normalizes 1.0.0-beta.2 → 1.0.0b2, rename to SemVer
+$whlSemVer = "mismiss-${SemVer}-py3-none-any.whl"
+if ($whl.Name -ne $whlSemVer) {
+    Rename-Item -Path $whl.FullName -NewName $whlSemVer
+    $whl = Get-Item "$ReleaseDir\$whlSemVer"
+}
+
 Write-OK "wheel          $($whl.Name)  ($('{0:N1}' -f ($whl.Length / 1MB)) MB)"
 
 # ------------------------------------------------------------------ #
@@ -187,7 +199,7 @@ Write-OK "wheel          $($whl.Name)  ($('{0:N1}' -f ($whl.Length / 1MB)) MB)"
 if ($SkipPyInstaller) {
     Write-Step "[4/5] PyInstaller -- SKIPPED"
 } else {
-    Write-Step "[4/5] Building PyInstaller standalone exe ..."
+    Write-Step "[4/6] Building PyInstaller standalone exe ..."
     Check python
 
     python -m pip install -q pyinstaller 2>$null
@@ -243,9 +255,36 @@ if ($SkipPyInstaller) {
 # ------------------------------------------------------------------ #
 # 5. Checksums
 # ------------------------------------------------------------------ #
-Write-Step "[5/5] Generating checksums ..."
+# ------------------------------------------------------------------ #
+# 5. Docker image
+# ------------------------------------------------------------------ #
+if ($SkipDocker) {
+    Write-Step "[5/6] Docker image -- SKIPPED"
+} else {
+    Write-Step "[5/6] Building Docker image ..."
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Write-Host "         WARN: Docker not found, skipping" -ForegroundColor Yellow
+    } else {
+        $dockerTag  = "mismiss:${SemVer}"
+        $dockerFile = "mismiss-${SemVer}-docker.tar"
 
-$ChecksumName = "checksums-${VersionClean}.txt"
+        docker build -t $dockerTag -f "$ProjectRoot\Dockerfile" "$ProjectRoot"
+        if ($LASTEXITCODE -ne 0) { Write-ERR "Docker build failed" }
+
+        docker save -o "$ReleaseDir\$dockerFile" $dockerTag
+        if ($LASTEXITCODE -ne 0) { Write-ERR "Docker save failed" }
+
+        $dockerSize = (Get-Item "$ReleaseDir\$dockerFile").Length
+        Write-OK "docker        $dockerFile  ($('{0:N1}' -f ($dockerSize / 1MB)) MB)"
+    }
+}
+
+# ------------------------------------------------------------------ #
+# 6. Checksums
+# ------------------------------------------------------------------ #
+Write-Step "[6/6] Generating checksums ..."
+
+$ChecksumName = "checksums-${SemVer}.txt"
 Push-Location $ReleaseDir
 Get-ChildItem -File | Where-Object { $_.Name -ne $ChecksumName } | ForEach-Object {
     $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash

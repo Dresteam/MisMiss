@@ -443,35 +443,40 @@ MisMiss/
 
 ### 命名规范
 
+遵循 **SemVer 2.0**（语义化版本），格式：
+
 ```
-mismiss-<version>[-<platform>][-<hash>].<ext>
+mismiss-<semver>[-<platform>][-<hash>].<ext>
 ```
 
 | 占位符 | 规则 | 示例 |
 |--------|------|------|
-| `version` | `pyproject.toml` → git tag → 日期 | `1.0.0` |
+| `semver` | `MAJOR.MINOR.PATCH[-prerelease][+build]` | `1.0.0-beta.2` |
 | `platform` | 仅 PyInstaller：`win` / `linux` / `macos` | `win` |
-| `hash` | git short hash，仅开发版 | `abc1234` |
+| `hash` | git short hash，仅非 tag 开发版 | `abc1234` |
 | `ext` | `.zip` `.tar.gz` `.whl` `.exe` | |
+
+版本号来源优先级：`-v` 参数 → `pyproject.toml` → git tag → 日期（`2026.7.26`）
 
 ```bash
 # Windows
-powershell -File scripts/release.ps1
+powershell -File scripts/release.ps1 -Version 1.0.0-beta.2
 
 # Linux / macOS
-bash scripts/release.sh
+bash scripts/release.sh -v 1.0.0-rc.1
 ```
 
 ### 产物示例
 
 ```
 release/
-├── mismiss-1.0.0.tar.gz              # 源码归档
-├── mismiss-1.0.0.zip                 # 源码归档
-├── mismiss-1.0.0-py3-none-any.whl    # pip wheel（PEP 427）
-├── mismiss-1.0.0-win.exe             # PyInstaller Windows
-├── mismiss-1.0.0-linux               # PyInstaller Linux
-└── checksums-1.0.0.txt               # SHA256 校验
+├── mismiss-1.0.0-beta.2.tar.gz              # 源码归档
+├── mismiss-1.0.0-beta.2.zip                 # 源码归档
+├── mismiss-1.0.0-beta.2-py3-none-any.whl    # pip wheel
+├── mismiss-1.0.0-beta.2-win.exe             # PyInstaller Windows
+├── mismiss-1.0.0-beta.2-linux               # PyInstaller Linux
+├── mismiss-1.0.0-beta.2-docker.tar          # Docker 镜像
+└── checksums-1.0.0-beta.2.txt               # SHA256 校验
 ```
 
 ### 参数
