@@ -8,6 +8,7 @@ import { showToast } from '../hooks/useToast';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
 import { PluginDrawer } from '../components/PluginDrawer';
+import { InstallModal } from '../components/InstallModal';
 import { ReadmeModal } from '../components/ReadmeModal';
 import { UninstallDialog } from '../components/UninstallDialog';
 import { UpdateDialog } from '../components/UpdateDialog';
@@ -29,6 +30,8 @@ export function PluginPage() {
   const updateFileRef = useRef<File | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedPlugin, setSelectedPlugin] = useState('');
+  const [installModalOpen, setInstallModalOpen] = useState(false);
+  const installFileRef = useRef<File | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -74,38 +77,15 @@ export function PluginPage() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const token = localStorage.getItem('auth_token');
-      const res = await fetch('/api/plugin/install', {
-        method: 'POST', body: form,
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
-      const data = await res.json();
+    e.target.value = '';
+    installFileRef.current = file;
+    setInstallModalOpen(true);
+  };
 
-      if (data.action === 'update') {
-        // 需要确认更新
-        updateFileRef.current = file;
-        setUpdateInfo({ name: data.name, oldVersion: data.old_version, newVersion: data.new_version, enabled: data.enabled });
-        setUploading(false);
-        e.target.value = '';
-        return;
-      }
-
-      showToast('success', `${data.plugin.name} 安装成功`);
-      await load();
-      if (data.readme) {
-        setReadmeModal({ title: data.plugin.display_name || data.plugin.name, content: data.readme });
-      }
-    } catch (e: any) {
-      showToast('error', '安装失败', e.message);
-    } finally {
-      setUploading(false);
-      e.target.value = '';
-    }
+  const handleInstallDone = () => {
+    setInstallModalOpen(false);
+    installFileRef.current = null;
+    load();
   };
 
   const handleConfirmUpdate = async () => {
@@ -346,6 +326,7 @@ export function PluginPage() {
           </div>
         </div>
       )}
+      <InstallModal open={installModalOpen} file={installFileRef.current} onDone={handleInstallDone} />
       <UninstallDialog open={!!uninstallTarget} pluginName={uninstallTarget || ''}
         onConfirm={handleUninstall}
         onCancel={() => setUninstallTarget(null)}
