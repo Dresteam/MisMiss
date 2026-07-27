@@ -99,7 +99,7 @@ export function InstallModal({ open, file, onDone }: Props) {
             </button>
           )}
         </div>
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 bg-gray-50 dark:bg-gray-900 font-mono text-xs leading-relaxed space-y-0.5 min-h-[200px]">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 bg-gray-50 dark:bg-gray-900 font-mono text-xs leading-relaxed space-y-0.5 min-h-[200px] rounded-b-xl">
           {logs.map((line, i) => (
             <p key={i} className={line.startsWith('错误') || line.startsWith('❌') ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'}>
               {line}
