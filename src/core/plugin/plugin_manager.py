@@ -350,7 +350,24 @@ class PluginManager:
             # 刷新 import 缓存，确保 find_spec 能看到新安装的包
             import importlib
             importlib.invalidate_caches()
-            # 验证：逐个确认包是否真正可导入
+            # 验证：检查 pip 安装位置并确保在 sys.path 中
+            # pip show <pkg> 输出 Location 字段
+            for pkg_spec in missing:
+                pkg = PluginManager._parse_package_name(pkg_spec)
+                info = subprocess.run(
+                    [sys.executable, "-m", "pip", "show", pkg],
+                    capture_output=True, text=True)
+                location = "unknown"
+                for line in info.stdout.splitlines():
+                    if line.startswith("Location:"):
+                        location = line.split(":", 1)[1].strip()
+                        break
+                _log.debug("插件 [{}] pip show {} → Location: {}", plugin_name, pkg, location)
+                # 如果 pip 安装到了 user site，确保在 sys.path 中
+                if location != "unknown" and location not in sys.path:
+                    sys.path.insert(0, location)
+                    _log.info("插件 [{}] 已将 {} 添加到 sys.path: {}", plugin_name, pkg, location)
+            # 再次验证
             still_missing = [p for p in missing if not PluginManager._is_package_installed(
                 PluginManager._parse_package_name(p))]
             if still_missing:
