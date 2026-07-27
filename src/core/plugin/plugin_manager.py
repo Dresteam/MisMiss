@@ -373,20 +373,34 @@ class PluginManager:
     def _is_package_installed(pkg_name: str) -> bool:
         """检查指定的 Python 包是否已安装。
 
+        优先使用 importlib.util.find_spec 检查（无副作用），
+        失败时回退到 importlib.metadata（pip 注册名可能与 import 名不同）。
+
         :param pkg_name: 规范化的包名（小写、下划线）
         :return: 已安装返回 ``True``
         """
+        import importlib.util
+        # 1. 检查模块是否可被发现（无副作用，最快）
+        spec = importlib.util.find_spec(pkg_name)
+        if spec is not None:
+            return True
+        # 2. 检查包名与 import 名不同的情况（如 pkg-name → pkg_name）
+        dash_name = pkg_name.replace("_", "-")
+        if dash_name != pkg_name:
+            spec = importlib.util.find_spec(dash_name)
+            if spec is not None:
+                return True
+        # 3. 回退：通过 pip 元数据检查
         try:
             import importlib.metadata
             importlib.metadata.distribution(pkg_name)
             return True
-        except importlib.metadata.PackageNotFoundError:
+        except Exception:
             pass
-        # 兼容纯顶级模块名（如 ``pypinyin`` 既是包名也是模块名）
         try:
-            __import__(pkg_name)
+            importlib.metadata.distribution(dash_name)
             return True
-        except ImportError:
+        except Exception:
             pass
         return False
 
