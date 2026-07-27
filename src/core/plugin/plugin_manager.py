@@ -334,7 +334,7 @@ class PluginManager:
             # PyInstaller exe 中不能 import pip（会导致 distlib 错误），
             # 统一用 subprocess 调用系统 pip
             import subprocess
-            cmd = [sys.executable, "-m", "pip", "install", "-i", mirror, *missing]
+            cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-i", mirror, *missing]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 err = (result.stderr + result.stdout).strip()
@@ -344,8 +344,10 @@ class PluginManager:
                     plugin_name,
                     f"依赖安装失败 (exit {result.returncode}): {err[:300]}",
                 )
-            else:
-                _log.info("插件 [{}] 依赖安装完成 ({}/{} 个)", plugin_name, len(missing), len(packages))
+            _log.info("插件 [{}] 依赖安装完成 ({}/{} 个)", plugin_name, len(missing), len(packages))
+            # 刷新 import 缓存，确保 find_spec 能看到新安装的包
+            import importlib
+            importlib.invalidate_caches()
         except CorePluginDependencyException:
             raise
         except Exception as e:
