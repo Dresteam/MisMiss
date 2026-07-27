@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import tempfile
 import shutil
@@ -12,6 +14,7 @@ import zipfile
 import yaml
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 
 from core import MissevanServer
 from core.exceptions import (
@@ -33,6 +36,9 @@ from api.schemas import (
 )
 
 router = APIRouter()
+
+# 安装互斥锁——同一时间只允许一个安装操作
+_install_lock = asyncio.Lock()
 
 
 # ------------------------------------------------------------------ #
@@ -130,6 +136,109 @@ def _plugin_to_detail(s: MissevanServer, meta) -> PluginDetailResponse:
 # ================================================================== #
 # 路由 —— 列表 & 详情
 # ================================================================== #
+
+
+async def _install_stream(file: UploadFile, s: MissevanServer):
+    """SSE 流式安装——逐步骤推送日志到前端。"""
+    async def send(msg: str, done: bool = False):
+        data = json.dumps({"message": msg, "done": done}, ensure_ascii=False)
+        yield f"data: {data}\n\n"
+
+    if not file.filename or not file.filename.endswith('.zip'):
+        async for chunk in send("错误：仅支持 .zip 文件", True):
+            yield chunk
+        return
+
+    async for chunk in send(f"开始安装 {file.filename} ..."):
+        yield chunk
+
+    tmp_path = None
+    tmp_dir = None
+    try:
+        # 1. 保存上传文件
+        async for chunk in send("正在保存上传文件 ..."):
+            yield chunk
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as tmp:
+            content = await file.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        # 2. 解压 + 读 metadata
+        async for chunk in send("正在解压并读取元数据 ..."):
+            yield chunk
+        tmp_dir = tempfile.mkdtemp()
+        with zipfile.ZipFile(tmp_path, 'r') as zf:
+            zf.extractall(tmp_dir)
+
+        plugin_name = None
+        for root, _dirs, files in os.walk(tmp_dir):
+            for name in ('metadata.yaml', 'metadata.yml'):
+                if name in files:
+                    with open(os.path.join(root, name), 'r', encoding='utf-8') as f:
+                        meta = yaml.safe_load(f) or {}
+                        plugin_name = meta.get('name')
+                    break
+            if plugin_name:
+                break
+        if not plugin_name:
+            async for chunk in send("错误：无法从 zip 中读取有效的 metadata.yaml", True):
+                yield chunk
+            return
+
+        new_version = meta.get('version', '0.0.0')
+
+        # 3. 检测重名
+        installed = s.plugins
+        existing = next((p for p in installed if p.name == plugin_name), None)
+        if existing:
+            old_ver = tuple(int(x) for x in str(existing.version).split('.'))
+            new_ver = tuple(int(x) for x in str(new_version).split('.'))
+            if new_ver <= old_ver:
+                async for chunk in send(f"错误：插件 '{plugin_name}' v{existing.version} 已安装，上传版本 v{new_version} 不高于现有版本", True):
+                    yield chunk
+                return
+
+        # 4. 安装
+        async for chunk in send(f"正在安装插件: {plugin_name} v{new_version} ..."):
+            yield chunk
+        metadata = await s.install_plugin_from_local(tmp_path)
+
+        # 5. 启用
+        async for chunk in send(f"正在启用插件: {plugin_name} ..."):
+            yield chunk
+        try:
+            await s._plugin_manager.enable_plugin(metadata.name)
+            s._save_state()
+            async for chunk in send(f"插件 {plugin_name} 已启用", True):
+                yield chunk
+        except Exception as e:
+            async for chunk in send(f"插件已安装但启用失败: {e}", True):
+                yield chunk
+
+    except Exception as e:
+        async for chunk in send(f"错误: {e}", True):
+            yield chunk
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        if tmp_dir and os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@router.post("/install/stream")
+async def plugin_install_stream(file: UploadFile = File(...), s: MissevanServer = Depends(get_server)):
+    """流式安装插件（SSE），前端实时显示进度日志。
+
+    安装过程受互斥锁保护，同一时间只允许一个安装操作。
+    """
+    if _install_lock.locked():
+        raise HTTPException(status_code=409, detail="另一个插件安装正在进行中，请稍候")
+    async with _install_lock:
+        return StreamingResponse(
+            _install_stream(file, s),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
 
 @router.post("/install")
