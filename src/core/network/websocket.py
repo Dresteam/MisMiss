@@ -118,28 +118,10 @@ class LiveWebSocket:
 
     async def _do_connect(self) -> None:
         """实际建立 WebSocket 连接（获取 Cookie + 握手）。"""
-        cookie = await self._get_cookie()
+        cookie = await DefaultCookieAPI().api()
+        if not cookie:
+            raise CoreWebSocketException("无法获取 Cookie（请确认服务器能访问 fm.missevan.com）")
         headers = self._build_headers(cookie)
-
-    async def _get_cookie(self) -> str:
-        """获取用于 WebSocket 连接的 Cookie。
-
-        优先使用 livestream 关联的 bot cookie（已配置）。
-        若不可用则回退到 DefaultCookieAPI。
-        """
-        # 通过 _livestream 或 _stream 查找关联的 livestream
-        for attr in ('_livestream', '_stream'):
-            stream = getattr(self, attr, None)
-            if stream is not None:
-                bot = getattr(stream, '_bot', None)
-                if bot is not None:
-                    try:
-                        c = bot.get_cookie()
-                        if c and len(c) > 10:
-                            return c
-                    except Exception:
-                        pass
-        return await DefaultCookieAPI().api() or ""
 
         try:
             self._ws = await websockets.connect(
