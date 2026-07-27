@@ -348,6 +348,12 @@ class PluginManager:
             # 刷新 import 缓存，确保 find_spec 能看到新安装的包
             import importlib
             importlib.invalidate_caches()
+            # 验证：逐个确认包是否真正可导入
+            still_missing = [p for p in missing if not PluginManager._is_package_installed(
+                PluginManager._parse_package_name(p))]
+            if still_missing:
+                _log.error("插件 [{}] pip 成功但包仍不可见: {} (sys.prefix={})",
+                           plugin_name, still_missing, sys.prefix)
         except CorePluginDependencyException:
             raise
         except Exception as e:
