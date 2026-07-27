@@ -263,18 +263,30 @@ class MissevanServer(ServerInterface):
                 meta.enabled = should_enable
 
     async def _ensure_bot_restored(self) -> None:
-        """异步恢复 bot（供 bot 相关端点调用）。
+        """异步恢复 bot 和直播间（供端点调用）。
 
-        _ensure_state_fresh 只负责同步状态；bot 的 refresh() 是异步 API 调用，
-        必须由端点 await 完成。
+        _ensure_state_fresh 只负责同步状态；bot 的 refresh() 和 livestream 的
+        _refresh() 是异步 API 调用，必须由端点 await 完成。
         """
-        if self._bot.id != 0:
-            return
         state = self._load_state() or {}
-        bot_state = state.get("bot", {})
-        if bot_state:
-            _log.info("bot 状态从磁盘异步恢复（多 worker）")
-            await self._restore_bot(bot_state)
+
+        # 1. Bot 恢复
+        if self._bot.id == 0:
+            bot_state = state.get("bot", {})
+            if bot_state:
+                _log.info("bot 状态从磁盘异步恢复（多 worker）")
+                await self._restore_bot(bot_state)
+
+        # 2. 直播间恢复——其他 worker 添加的直播间可能不在当前 _livestreams 中
+        saved_ids = set(state.get("livestreams", []))
+        missing_ids = saved_ids - set(self._livestreams.keys())
+        for lid in missing_ids:
+            _log.info("直播间 {} 从磁盘异步恢复（多 worker）", lid)
+            await self._restore_livestream(lid)
+        # 同步启用状态
+        enabled = set(state.get("enabled_livestreams", []))
+        if enabled != self._enabled_livestreams:
+            self._enabled_livestreams = enabled
 
     @property
     def bot(self) -> MissevanBot:
