@@ -15,6 +15,7 @@ router = APIRouter()
 @router.get("/status", response_model=ServerStatusResponse)
 async def server_status(s: MissevanServer = Depends(get_server)):
     """获取服务器运行状态。"""
+    await s._ensure_bot_restored()
     bot = s.bot
     plugins = s.plugins
     return ServerStatusResponse(

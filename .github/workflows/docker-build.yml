@@ -65,6 +65,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ---------------------------------------------------------------- #
+      # 设置 Buildx（docker-container 驱动支持 GHA 缓存）
+      # ---------------------------------------------------------------- #
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
+      # ---------------------------------------------------------------- #
       # 构建 & 推送
       # ---------------------------------------------------------------- #
       - name: Build and push

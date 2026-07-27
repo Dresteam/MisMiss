@@ -28,8 +28,12 @@ export function useAuthState(): AuthContextType {
       fetch('/api/auth/check', { headers: { Authorization: `Bearer ${state.token}` } })
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-          if (d) setState(s => ({ ...s, username: d.username, firstLogin: d.first_login }));
-          else { localStorage.removeItem('auth_token'); setState({ token: null, username: null, firstLogin: false }); }
+          if (d && d.valid !== false) {
+            setState(s => ({ ...s, username: d.username, firstLogin: d.first_login }));
+          } else {
+            localStorage.removeItem('auth_token');
+            setState({ token: null, username: null, firstLogin: false });
+          }
         })
         .finally(() => setLoading(false));
     } else {
