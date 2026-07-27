@@ -15,7 +15,7 @@ services:
     container_name: mismiss
     restart: unless-stopped
     ports:
-      - "18080:18080"
+      - "18080:8080"
     volumes:
       # 持久化数据（Bot 状态、直播间状态、插件配置等）
       - ./data:/app/data

@@ -14,7 +14,7 @@ APP_DIR="${APP_DIR:-/app}"
 CONFIG_SRC="$APP_DIR/config.yml.dist"
 CONFIG_DST="$APP_DIR/config/config.yml"
 PORT="${API_PORT:-8080}"
-WORKERS="${WORKERS:-4}"
+WORKERS="${WORKERS:-1}"
 
 # ------------------------------------------------------------------ #
 # 首次引导：将 config.yml 复制到持久化目录

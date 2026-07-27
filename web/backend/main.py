@@ -114,7 +114,7 @@ app.add_middleware(
 # 认证中间件 —— 保护所有 /api/* 路由（/api/auth/* 和 /api/health 除外）
 # ------------------------------------------------------------------ #
 
-PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/health"}
+PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/auth/skip-first-login", "/api/health"}
 PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/", "/api/ws", "/api/plugin/install", "/api/config/pip-install")
 
 
@@ -159,6 +159,22 @@ app.include_router(config.router, prefix="/api", tags=["Config"])
 app.include_router(proxy.router, prefix="/api", tags=["Proxy"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
 
+
+# ------------------------------------------------------------------ #
+# 健康检查（必须在 SPA fallback 之前注册，避免被兜底路由拦截）
+# ------------------------------------------------------------------ #
+
+@app.get("/api/health")
+async def health():
+    cfg = ServerConfig.load()
+    return {
+        "status": "ok",
+        "server_running": _server is not None,
+        "api_port": cfg.get_int("server.api_port", 18080),
+        "web_port": cfg.get_int("server.web_port", 15173),
+    }
+
+
 # 静态文件 & SPA fallback
 # 开发模式：Vite(:5173) HMR 代理到本后端
 # 单端口模式：npm run build 后，直接访问 8080 即可同时提供前端和 API
@@ -183,21 +199,6 @@ if _FRONTEND_DIST.exists():
         if index.is_file():
             return FileResponse(index)
         raise HTTPException(status_code=404, detail="Not Found")
-
-
-# ------------------------------------------------------------------ #
-# 健康检查
-# ------------------------------------------------------------------ #
-
-@app.get("/api/health")
-async def health():
-    cfg = ServerConfig.load()
-    return {
-        "status": "ok",
-        "server_running": _server is not None,
-        "api_port": cfg.get_int("server.api_port", 18080),
-        "web_port": cfg.get_int("server.web_port", 15173),
-    }
 
 
 # ------------------------------------------------------------------ #
