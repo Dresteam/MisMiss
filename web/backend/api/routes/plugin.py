@@ -283,6 +283,7 @@ async def plugin_update(file: UploadFile = File(...), s: MissevanServer = Depend
 @router.get("/list", response_model=list[PluginSummary])
 async def plugin_list(s: MissevanServer = Depends(get_server)):
     """列出所有已加载插件。"""
+    await s._ensure_bot_restored()
     plugins = s.plugins
     return [_plugin_to_summary(p) for p in plugins]
 

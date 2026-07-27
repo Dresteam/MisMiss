@@ -15,6 +15,7 @@ router = APIRouter()
 @router.get("/dashboard", response_model=DashboardResponse)
 async def dashboard(s: MissevanServer = Depends(get_server)):
     """仪表盘聚合数据——Bot、直播间、插件统计。"""
+    await s._ensure_bot_restored()
     bot = s.bot
     lives = s.livestreams
     plugins = s.plugins

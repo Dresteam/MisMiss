@@ -85,7 +85,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 ENV PYTHONUNBUFFERED=1
 ENV MISMISS_PROD=1
 ENV API_PORT=8080
-ENV WORKERS=4
+ENV WORKERS=1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/usr/local/bin/docker-entrypoint.sh"]

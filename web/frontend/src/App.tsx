@@ -37,6 +37,9 @@ function App() {
 
   const { toasts, removeToast } = useToast();
 
+  // 本地控制首次登录对话框——跳过即隐藏，不依赖 server 端 first_login 标志
+  const [showAccountSetup, setShowAccountSetup] = useState(true);
+
   if (auth.loading) {
     return <div className="min-h-screen bg-gray-100 dark:bg-gray-950" />;
   }
@@ -45,10 +48,21 @@ function App() {
     return <LoginPage onLogin={() => window.location.reload()} />;
   }
 
+  const handleAccountDone = async () => {
+    setShowAccountSetup(false);
+    // 告知后端跳过首次登录引导，下次不再弹出
+    try {
+      await fetch('/api/auth/skip-first-login', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + auth.token },
+      });
+    } catch { /* ignore */ }
+  };
+
   return (
     <AuthContext.Provider value={auth}>
-      {auth.firstLogin && (
-        <AccountSetup firstLogin token={auth.token} onDone={() => window.location.reload()} />
+      {auth.firstLogin && showAccountSetup && (
+        <AccountSetup firstLogin token={auth.token} onDone={handleAccountDone} />
       )}
       <BrowserRouter
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}

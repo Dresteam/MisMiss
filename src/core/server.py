@@ -58,6 +58,7 @@ class MissevanServer(ServerInterface):
         self._event_bus: EventBus = EventBus()
         self._plugin_manager: PluginManager = PluginManager("", EventBus(), "")
         self._app = None  # FastAPI app 引用，由 lifespan 在 start() 前注入
+        self._state_mtime: float = 0.0  # state 文件最后加载时间戳
 
     # ================================================================== #
     # 生命周期
@@ -219,6 +220,61 @@ class MissevanServer(ServerInterface):
         old_perms = self._bot.permissions
         _log.info("更新 Bot Cookie ...")
         return await self.create_bot(new_cookie, permissions=old_perms)
+
+    # ------------------------------------------------------------------ #
+    # 跨 worker 状态同步（Docker 多 worker 兼容）
+    # ------------------------------------------------------------------ #
+
+    def _ensure_state_fresh(self) -> None:
+        """通过检查 state 文件的修改时间判断是否需要重新加载。
+
+        Docker 多 worker 模式（4× UvicornWorker）下，每个 worker 有独立内存。
+        此方法在每次 API 请求时被 :func:`get_server` 依赖调用，
+        通过对比 state 文件的 mtime 判断是否有其他 worker 修改了状态。
+
+        仅当 mtime 变化时才重新加载，避免频繁磁盘 I/O。
+        """
+        try:
+            current_mtime = os.path.getmtime(self._state_path)
+        except OSError:
+            return  # state 文件不存在（首次启动）
+        if current_mtime <= self._state_mtime:
+            return  # 未变化，无需刷新
+
+        _log.debug("检测到 state 文件更新 (mtime: {} → {})，重新加载",
+                   self._state_mtime, current_mtime)
+        self._state_mtime = current_mtime
+
+        state = self._load_state() or {}
+
+        # Bot（异步恢复需配合 _ensure_bot_restored）
+
+        # 直播间启用状态
+        enabled_livestreams = set(state.get("enabled_livestreams", []))
+        if enabled_livestreams != self._enabled_livestreams:
+            self._enabled_livestreams = enabled_livestreams
+
+        # 插件启用状态
+        enabled_plugins: list[str] = state.get("enabled_plugins", [])
+        pm = self._plugin_manager
+        for meta in pm.list_plugins():
+            should_enable = meta.name in enabled_plugins
+            if meta.enabled != should_enable:
+                meta.enabled = should_enable
+
+    async def _ensure_bot_restored(self) -> None:
+        """异步恢复 bot（供 bot 相关端点调用）。
+
+        _ensure_state_fresh 只负责同步状态；bot 的 refresh() 是异步 API 调用，
+        必须由端点 await 完成。
+        """
+        if self._bot.id != 0:
+            return
+        state = self._load_state() or {}
+        bot_state = state.get("bot", {})
+        if bot_state:
+            _log.info("bot 状态从磁盘异步恢复（多 worker）")
+            await self._restore_bot(bot_state)
 
     @property
     def bot(self) -> MissevanBot:

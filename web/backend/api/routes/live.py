@@ -78,6 +78,7 @@ async def live_refresh(live_id: int, s: MissevanServer = Depends(get_server)):
 @router.get("/list", response_model=LiveListResponse)
 async def live_list(s: MissevanServer = Depends(get_server)):
     """列出所有直播间。"""
+    await s._ensure_bot_restored()
     lives = s.livestreams
     items = [_live_to_info(live) for live in lives.values()]
     return LiveListResponse(livestreams=items, total=len(items))
@@ -86,6 +87,7 @@ async def live_list(s: MissevanServer = Depends(get_server)):
 @router.get("/{live_id}", response_model=LivestreamInfo)
 async def live_info(live_id: int, s: MissevanServer = Depends(get_server)):
     """获取直播间详情。"""
+    await s._ensure_bot_restored()
     lives = s.livestreams
     if live_id not in lives:
         raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")

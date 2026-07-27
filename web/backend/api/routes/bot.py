@@ -85,12 +85,14 @@ async def create_bot(req: BotCreateRequest, s: MissevanServer = Depends(get_serv
 @router.get("/info", response_model=BotInfoResponse)
 async def bot_info(s: MissevanServer = Depends(get_server)):
     """获取当前 Bot 信息。"""
+    await s._ensure_bot_restored()
     return _bot_to_response(s)
 
 
 @router.post("/refresh", response_model=StatusResponse)
 async def bot_refresh(s: MissevanServer = Depends(get_server)):
     """刷新 Bot 信息（验证 Cookie）。"""
+    await s._ensure_bot_restored()
     try:
         await s.bot.refresh()
         return StatusResponse(success=True, message=f"刷新完成: {s.bot.name}")
@@ -103,6 +105,7 @@ async def bot_refresh(s: MissevanServer = Depends(get_server)):
 @router.get("/cookie", response_model=BotCookieResponse)
 async def bot_cookie(s: MissevanServer = Depends(get_server)):
     """获取 Bot Cookie（需要 EXPOSE_COOKIE 权限）。"""
+    await s._ensure_bot_restored()
     try:
         cookie = s.bot.get_cookie()
         return BotCookieResponse(cookie=cookie, length=len(cookie))
@@ -115,6 +118,7 @@ async def bot_cookie(s: MissevanServer = Depends(get_server)):
 @router.post("/verify", response_model=StatusResponse)
 async def bot_verify(s: MissevanServer = Depends(get_server)):
     """验证 Cookie 是否有效。"""
+    await s._ensure_bot_restored()
     ok = await s.verify_bot()
     if ok:
         return StatusResponse(success=True, message="Cookie 有效")
@@ -125,6 +129,7 @@ async def bot_verify(s: MissevanServer = Depends(get_server)):
 @router.post("/enable", response_model=StatusResponse)
 async def bot_enable(s: MissevanServer = Depends(get_server)):
     """启用 Bot，恢复所有标记为已启用的插件。"""
+    await s._ensure_bot_restored()
     try:
         await s.enable_bot()
         s._plugin_manager.resume_all()

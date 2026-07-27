@@ -25,14 +25,66 @@ else:
     _HOME = Path(__file__).resolve().parent.parent.parent.parent.parent
 
 AUTH_FILE = _HOME / "data" / "auth.json"
-
-# In-memory token store: token -> {"username": str, "expires": float}
-_tokens: dict[str, dict] = {}
+TOKEN_DIR = _HOME / "data" / "tokens"
 TOKEN_TTL = 30 * 24 * 3600  # 30 days
 
 
 def _hash(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
+
+
+# ------------------------------------------------------------------ #
+# 文件级 token 存储（多 worker 共享）
+# ------------------------------------------------------------------ #
+# Gunicorn 多 worker 模式下每个 worker 有独立内存，必须落盘才能在
+# worker 间共享 session。每个 token 存为一个文件，文件名 = token，
+# 内容 = JSON {username, expires}。
+# ------------------------------------------------------------------ #
+TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _save_token(token: str, username: str, expires: float) -> None:
+    """持久化 token 到文件。"""
+    path = TOKEN_DIR / token
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"username": username, "expires": expires}, f)
+
+
+def _load_token(token: str) -> dict | None:
+    """从文件加载 token 数据，过期自动删除。"""
+    path = TOKEN_DIR / token
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if time.time() > data.get("expires", 0):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return None
+    return data
+
+
+def _delete_token(token: str) -> None:
+    """删除单个 token 文件。"""
+    try:
+        os.remove(TOKEN_DIR / token)
+    except OSError:
+        pass
+
+
+def _clear_all_tokens() -> None:
+    """清除所有 token。"""
+    try:
+        for f in TOKEN_DIR.iterdir():
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except FileNotFoundError:
+        pass
 
 
 def _load_auth() -> dict:
@@ -62,13 +114,10 @@ def _save_auth(data: dict) -> None:
 
 def verify_token(token: str) -> str | None:
     """Return username if token is valid, else None."""
-    entry = _tokens.get(token)
-    if not entry:
+    data = _load_token(token)
+    if data is None:
         return None
-    if time.time() > entry["expires"]:
-        del _tokens[token]
-        return None
-    return entry["username"]
+    return data.get("username")
 
 
 # ---- Middleware helper ----
@@ -96,7 +145,7 @@ async def login(body: dict):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     token = secrets.token_hex(32)
-    _tokens[token] = {"username": username, "expires": time.time() + TOKEN_TTL}
+    _save_token(token, username, time.time() + TOKEN_TTL)
 
     return {
         "token": token,
@@ -135,7 +184,7 @@ async def change_password(body: dict):
     _save_auth(auth)
 
     # 清除所有 token，强制重新登录
-    _tokens.clear()
+    _clear_all_tokens()
 
     msg = "已更新，请重新登录"
     if new_username: msg = f"用户名已改为 {new_username}，请重新登录"
@@ -143,10 +192,22 @@ async def change_password(body: dict):
 
 
 @router.get("/auth/check")
-async def check_auth(username: str = Header(default="")):
-    """Check if auth is still needed / if this is first login."""
+async def check_auth(authorization: str = Header(default="")):
+    """验证 token 有效性并返回 first_login 状态。"""
+    token = authorization.removeprefix("Bearer ")
+    username = verify_token(token) if token else None
     auth = _load_auth()
     return {
+        "valid": username is not None,
         "username": auth["username"],
         "first_login": auth.get("first_login", False),
     }
+
+
+@router.post("/auth/skip-first-login")
+async def skip_first_login():
+    """跳过首次登录的密码修改提示（标记 first_login=False）。"""
+    auth = _load_auth()
+    auth["first_login"] = False
+    _save_auth(auth)
+    return {"success": True, "message": "已跳过首次登录引导"}
