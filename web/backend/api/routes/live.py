@@ -133,6 +133,7 @@ async def live_disable(live_id: int, s: MissevanServer = Depends(get_server)):
 @router.post("/{live_id}/join", response_model=StatusResponse)
 async def live_join(live_id: int, s: MissevanServer = Depends(get_server)):
     """进入直播间（建立 WebSocket 连接）。"""
+    await s._ensure_bot_restored()
     lives = s.livestreams
     if live_id not in lives:
         raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在，请先添加")
