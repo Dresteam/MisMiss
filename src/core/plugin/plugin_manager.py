@@ -334,7 +334,9 @@ class PluginManager:
             # PyInstaller exe 中不能 import pip（会导致 distlib 错误），
             # 统一用 subprocess 调用系统 pip
             import subprocess
-            cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "-i", mirror, *missing]
+            # 非 root 用户需要 --user 安装到 ~/.local
+            cmd = [sys.executable, "-m", "pip", "install", "--user", "--no-cache-dir",
+                   "-i", mirror, *missing]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 err = (result.stderr + result.stdout).strip()
