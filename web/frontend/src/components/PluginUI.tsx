@@ -496,7 +496,7 @@ export function PluginUI({ schema, pluginName }: Props) {
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" icon={<RefreshCw />} onClick={load}>刷新</Button>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 lg:gap-3">
           {schema.fields.map((field) => (
             <div key={field.key} className="p-4 rounded-lg bg-gray-50 dark:bg-gray-900">
               <p className="text-[10px] text-gray-500 uppercase">{field.label}</p>

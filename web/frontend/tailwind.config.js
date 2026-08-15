@@ -36,6 +36,8 @@ export default {
         'fade-in': 'fadeIn 0.2s ease-out',
         'slide-in-right': 'slideInRight 0.3s ease-out',
         'slide-in-up': 'slideInUp 0.3s ease-out',
+        'slide-in-left': 'slideInLeft 0.3s ease-out',
+        'marquee': 'marquee 8s linear infinite',
         'pulse-dot': 'pulseDot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
       keyframes: {
@@ -50,6 +52,22 @@ export default {
         slideInUp: {
           '0%': { transform: 'translateY(10px)', opacity: '0' },
           '100%': { transform: 'translateY(0)', opacity: '1' },
+        },
+        slideInLeft: {
+          '0%': { transform: 'translateX(-100%)', opacity: '0' },
+          '100%': { transform: 'translateX(0)', opacity: '1' },
+        },
+        marquee: {
+          '0%': { transform: 'translateX(0)' },
+          '10%': { transform: 'translateX(0)' },
+          '60%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(-100%)' },
+        },
+        marqueeScroll: {
+          '0%': { transform: 'translateX(0)' },
+          '10%': { transform: 'translateX(0)' },
+          '60%': { transform: 'translateX(var(--marquee-distance, -100%))' },
+          '100%': { transform: 'translateX(var(--marquee-distance, -100%))' },
         },
         pulseDot: {
           '0%, 100%': { opacity: '1' },

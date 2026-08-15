@@ -3,6 +3,7 @@ import {
   X, Puzzle, Zap, Shield, Settings, FileText, BookOpen, History, Loader2,
 } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { MarqueeText } from './MarqueeText';
 import {
   fetchPluginDetail,
   fetchPluginPermissions,
@@ -148,9 +149,9 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
         <div className="flex items-center justify-between px-6 py-4
                         bg-white dark:bg-surface-800 border-b border-surface-200 dark:border-surface-700"
              style={{ flexShrink: 0 }}>
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-surface-900 dark:text-white truncate">
-              {displayName}
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-semibold text-surface-900 dark:text-white">
+              <MarqueeText text={displayName} />
             </h2>
             <p className="text-xs text-surface-500 truncate">
               {detail?.plugin_id} · v{detail?.version}
@@ -176,9 +177,9 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
             const Icon = tab.icon;
             return (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors whitespace-nowrap
+                className={`flex items-center gap-1 px-2.5 lg:px-3 py-2 lg:py-2.5 text-[11px] lg:text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0
                   ${activeTab === tab.id ? 'border-primary-500 text-primary-600 dark:text-primary-400' : 'border-transparent text-surface-500 hover:text-surface-700 dark:hover:text-surface-300'}`}>
-                <Icon className="w-3.5 h-3.5" />{tab.label}
+                <Icon className="w-3.5 h-3.5 shrink-0" />{tab.label}
               </button>
             );
           })}

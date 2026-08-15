@@ -11,6 +11,8 @@ import type { LivestreamInfo } from '../api/types';
 import { showToast } from '../hooks/useToast';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
+import { MarqueeText } from '../components/MarqueeText';
+import { RoomSelect } from '../components/RoomSelect';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 export function LivePage() {
@@ -178,14 +180,16 @@ export function LivePage() {
 
       {/* Add form */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-end gap-3">
-          <div className="flex-1">
+        <div className="flex items-end gap-2 lg:gap-3">
+          <div className="flex-1 min-w-0">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">添加直播间</label>
             <input type="number" value={newLiveId} onChange={(e) => setNewLiveId(e.target.value)}
-              placeholder="输入直播间 ID..." className="input"
+              placeholder="输入直播间 ID..." className="input text-sm"
+              inputMode="numeric"
               onKeyDown={(e) => e.key === 'Enter' && handleAdd()} />
           </div>
-          <Button variant="primary" icon={<Plus />} onClick={handleAdd} loading={adding}>添加</Button>
+          <Button variant="primary" icon={<Plus />} onClick={handleAdd} loading={adding}
+            className="shrink-0 px-3 lg:px-4">添加</Button>
         </div>
       </div>
 
@@ -221,8 +225,10 @@ export function LivePage() {
                     <tr key={live.live_id}
                       className={`hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors ${isBusy ? 'opacity-70' : ''}`}>
                       <td className="px-4 py-3 font-mono text-xs">{live.live_id}</td>
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-gray-900 dark:text-white">{live.room_name || '(未知)'}</p>
+                      <td className="px-4 py-3 max-w-[200px]">
+                        <p className="font-medium text-gray-900 dark:text-white">
+                          <MarqueeText text={live.room_name || '(未知)'} />
+                        </p>
                         <p className="text-[10px] text-gray-400 flex items-center gap-1">
                           <span className={`inline-block w-1.5 h-1.5 rounded-full ${live.creator_is_online ? 'bg-emerald-500' : 'bg-gray-400'}`} />
                           {live.creator_name || '-'}
@@ -309,9 +315,11 @@ export function LivePage() {
               const action = processingMap[live.live_id];
               return (
                 <div key={live.live_id} className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 ${isBusy ? 'opacity-70' : ''}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <p className="font-medium text-gray-900 dark:text-white">{live.room_name || '(未知)'}</p>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-medium text-gray-900 dark:text-white">
+                        <MarqueeText text={live.room_name || '(未知)'} />
+                      </p>
                       <p className="text-[11px] text-gray-400 flex items-center gap-1 mt-0.5">
                         <span className={`inline-block w-1.5 h-1.5 rounded-full ${live.creator_is_online ? 'bg-emerald-500' : 'bg-gray-400'}`} />
                         {live.creator_name || '-'} · ID {live.live_id}
@@ -355,33 +363,35 @@ export function LivePage() {
           <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-900 dark:text-white">
             发送弹幕
           </div>
-          <div className="p-6">
-            <div className="flex items-end gap-3">
-              <div className="w-40">
-                <label className="block text-xs text-gray-500 mb-1">目标直播间</label>
-                <select value={msgLiveId || ''} onChange={(e) => setMsgLiveId(parseInt(e.target.value) || null)}
-                  className="input text-xs">
-                  {lives.map((l) => (
-                    <option key={l.live_id} value={l.live_id}>[{l.live_id}] {l.room_name}</option>
-                  ))}
-                </select>
+          <div className="p-4 lg:p-6">
+            <div className="flex flex-col gap-3">
+              {/* 直播间 + 优先级：移动端一行两个，桌面端正常 */}
+              <div className="flex gap-3">
+                <div className="flex-1 min-w-0">
+                  <label className="block text-xs text-gray-500 mb-1">目标直播间</label>
+                  <RoomSelect
+                    lives={lives}
+                    selectedId={msgLiveId}
+                    onSelect={(id) => setMsgLiveId(id)} />
+                </div>
+                <div className="w-24 lg:w-20 shrink-0">
+                  <label className="block text-xs text-gray-500 mb-1">优先级</label>
+                  <input type="number" value={msgPriority}
+                    onChange={(e) => setMsgPriority(parseInt(e.target.value) || 0)}
+                    className="input text-xs" min={0} />
+                </div>
               </div>
-              <div className="w-20">
-                <label className="block text-xs text-gray-500 mb-1">优先级</label>
-                <input type="number" value={msgPriority}
-                  onChange={(e) => setMsgPriority(parseInt(e.target.value) || 0)}
-                  className="input text-xs" min={0} />
-              </div>
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">消息内容</label>
+              {/* 消息输入 + 发送：移动端输入框全宽、发送按钮在下方 */}
+              <div className="flex gap-2">
                 <input type="text" value={msgText}
                   onChange={(e) => setMsgText(e.target.value)}
                   placeholder="输入要发送的弹幕..."
-                  className="input"
+                  className="input flex-1 min-w-0 text-sm"
                   onKeyDown={(e) => e.key === 'Enter' && handleSendMsg()} />
+                <Button variant="primary" icon={<Send />} onClick={handleSendMsg}
+                  loading={sending} disabled={!msgText.trim()}
+                  className="shrink-0 px-3 lg:px-4">发送</Button>
               </div>
-              <Button variant="primary" icon={<Send />} onClick={handleSendMsg}
-                loading={sending} disabled={!msgText.trim()}>发送</Button>
             </div>
           </div>
         </div>
