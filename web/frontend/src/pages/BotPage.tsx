@@ -9,6 +9,7 @@ import type { BotInfo } from '../api/types';
 import { showToast } from '../hooks/useToast';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
+import { MarqueeText } from '../components/MarqueeText';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 const ALL_PERMISSIONS = [
@@ -137,21 +138,23 @@ export function BotPage() {
       {/* Bot Info Card */}
       {bot && bot.user_id > 0 ? (
         <div className="card">
-          <div className="card-header flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center overflow-hidden">
+          <div className="card-header flex items-center justify-between gap-2">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center overflow-hidden shrink-0">
                 {bot.icon_url ? (
                   <img src={`/api/proxy/image?url=${encodeURIComponent(bot.icon_url)}`} alt="" className="w-full h-full object-cover" />
                 ) : (
                   <User className="w-5 h-5 text-primary-600" />
                 )}
               </div>
-              <div>
-                <h3 className="font-semibold">{bot.name}</h3>
+              <div className="min-w-0">
+                <h3 className="font-semibold">
+                  <MarqueeText text={bot.name} />
+                </h3>
                 <p className="text-xs text-surface-500">ID: {bot.user_id}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 shrink-0 whitespace-nowrap">
               <StatusBadge status={bot.enabled ? 'enabled' : 'disabled'} />
               <StatusBadge
                 status={bot.available ? 'online' : 'offline'}

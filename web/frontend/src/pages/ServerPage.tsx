@@ -130,29 +130,29 @@ export function ServerPage() {
         </div>
         <div className="card-body space-y-4">
           {/* Reload */}
-          <div className="flex items-center justify-between p-4 rounded-lg bg-surface-50 dark:bg-surface-900">
-            <div>
+          <div className="flex items-center justify-between gap-2 p-4 rounded-lg bg-surface-50 dark:bg-surface-900">
+            <div className="min-w-0">
               <p className="font-medium text-surface-900 dark:text-white">重载服务器</p>
-              <p className="text-xs text-surface-500 mt-0.5">
+              <p className="text-xs text-surface-500 mt-0.5 line-clamp-2">
                 关闭后重新启动，刷新所有插件和连接
               </p>
             </div>
             <Button variant="primary" icon={<RefreshCw />}
               onClick={() => setShowReload(true)}
-              loading={actionLoading}>重载</Button>
+              loading={actionLoading} className="shrink-0 whitespace-nowrap">重载</Button>
           </div>
 
           {/* Shutdown */}
-          <div className="flex items-center justify-between p-4 rounded-lg bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800">
-            <div>
+          <div className="flex items-center justify-between gap-2 p-4 rounded-lg bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-800">
+            <div className="min-w-0">
               <p className="font-medium text-red-800 dark:text-red-300">关闭服务器</p>
-              <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
+              <p className="text-xs text-red-600 dark:text-red-400 mt-0.5 line-clamp-2">
                 停用所有 Bot、断开所有直播间、卸载所有插件
               </p>
             </div>
             <Button variant="destructive" icon={<Power />}
               onClick={() => setShowShutdown(true)}
-              loading={actionLoading}>关闭</Button>
+              loading={actionLoading} className="shrink-0 whitespace-nowrap">关闭</Button>
           </div>
         </div>
       </div>

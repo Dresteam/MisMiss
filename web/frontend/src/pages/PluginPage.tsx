@@ -9,6 +9,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
 import { PluginDrawer } from '../components/PluginDrawer';
 import { InstallModal } from '../components/InstallModal';
+import { MarqueeText } from '../components/MarqueeText';
 import { ReadmeModal } from '../components/ReadmeModal';
 import { UninstallDialog } from '../components/UninstallDialog';
 import { UpdateDialog } from '../components/UpdateDialog';
@@ -220,7 +221,9 @@ export function PluginPage() {
                 <div className="p-5 flex-1">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold text-gray-900 dark:text-white truncate">{plugin.display_name || plugin.name}</h3>
+                      <h3 className="font-semibold text-gray-900 dark:text-white">
+                        <MarqueeText text={plugin.display_name || plugin.name} />
+                      </h3>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-xs font-mono text-gray-400 dark:text-gray-500">v{plugin.version}</span>
                         <span className="text-gray-300 dark:text-gray-600">&middot;</span>
@@ -239,25 +242,30 @@ export function PluginPage() {
                     {isToggling ? (<span className="absolute inset-0 flex items-center justify-center"><Loader2 className="w-4 h-4 text-white animate-spin" /></span>)
                     : (<span className={'inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ' + (plugin.enabled ? 'translate-x-6' : 'translate-x-1')} />)}
                   </button>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-0.5 lg:gap-1.5 flex-nowrap">
                     <Button variant="ghost" size="sm" icon={<Eye />}
-                      onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name); }}>详情</Button>
+                      onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name); }}>
+                      <span className="hidden lg:inline">详情</span></Button>
                     {plugin.has_ui && (
                       <Link to={`/plugin/${encodeURIComponent(plugin.name)}/page`}
                         onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" size="sm" icon={<ExternalLink />}>主页</Button>
+                        <Button variant="ghost" size="sm" icon={<ExternalLink />}>
+                          <span className="hidden lg:inline">主页</span></Button>
                       </Link>
                     )}
                     {plugin.has_readme && (
                       <Button variant="ghost" size="sm" icon={<BookOpen />}
-                        onClick={(e) => { e.stopPropagation(); handleViewReadme(plugin); }}>文档</Button>
+                        onClick={(e) => { e.stopPropagation(); handleViewReadme(plugin); }}>
+                        <span className="hidden lg:inline">文档</span></Button>
                     )}
                     <Button variant="ghost" size="sm" icon={<RefreshCw />}
                       onClick={(e) => { e.stopPropagation(); handleReload(plugin.name); }}
-                      loading={isReloading} disabled={isBusy}>重载</Button>
+                      loading={isReloading} disabled={isBusy}>
+                      <span className="hidden lg:inline">重载</span></Button>
                     <Button variant="ghost" size="sm" icon={<Trash2 />}
                       onClick={(e) => { e.stopPropagation(); setUninstallTarget(plugin.name); }}
-                      disabled={isBusy}>卸载</Button>
+                      disabled={isBusy}>
+                      <span className="hidden lg:inline">卸载</span></Button>
                   </div>
                 </div>
               </div>);})}
