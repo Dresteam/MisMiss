@@ -123,6 +123,38 @@ class MissConfig:
             return val
         return default
 
+    def get_int_list(self, key: str, default: list[int] | None = None) -> list[int]:
+        """获取整数列表类型的配置项。
+
+        自动将列表中的数字字符串（如 ``"140216322"``）转为 ``int``，
+        忽略无法转换的项。用于 ``enabled_rooms`` 等直播间 ID 列表，
+        兼容 Web 面板以字符串保存数组的场景。
+
+        :param key: 配置键名
+        :param default: 键不存在时的默认值
+        :return: 整数列表
+        """
+        if default is None:
+            default = []
+        val = self._data.get(key)
+        if val is None:
+            return default
+        if not isinstance(val, list):
+            return default
+        result: list[int] = []
+        for item in val:
+            if isinstance(item, bool):
+                continue
+            if isinstance(item, int):
+                result.append(item)
+            elif isinstance(item, float) and item.is_integer():
+                result.append(int(item))
+            elif isinstance(item, str):
+                s = item.strip()
+                if s.lstrip("-").isdigit():
+                    result.append(int(s))
+        return result
+
     # ------------------------------------------------------------------ #
     # 数据访问
     # ------------------------------------------------------------------ #

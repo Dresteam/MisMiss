@@ -326,12 +326,20 @@ class MissevanBot(Bot):
                     )
                 )
             except CoreApiException as e:
-                _log.warning(
-                    "消息发送失败 直播间={} 内容={} 原因={}",
-                    item.live_id,
-                    item.message,
-                    e,
-                )
+                err_str = str(e)
+                # 直播间未开播（主播休息）——静默忽略，仅 debug 级记录
+                if "500030011" in err_str or "主播休息" in err_str:
+                    _log.debug(
+                        "直播间未开播，消息已忽略 直播间={} 内容={}",
+                        item.live_id, item.message,
+                    )
+                else:
+                    _log.warning(
+                        "消息发送失败 直播间={} 内容={} 原因={}",
+                        item.live_id,
+                        item.message,
+                        e,
+                    )
             except CoreCookieException:
                 _log.error("Cookie 已过期，清空消息队列（{} 条）",
                            len(self._message_queue) + 1)
@@ -558,7 +566,11 @@ class MissevanBot(Bot):
                     msg_id, entry.live_id, entry.message[:30],
                 )
             except CoreApiException as e:
-                _log.warning("定时消息发送失败 id={}: {}", msg_id, e)
+                err_str = str(e)
+                if "500030011" in err_str or "主播休息" in err_str:
+                    _log.debug("直播间未开播，定时消息已忽略 id={}", msg_id)
+                else:
+                    _log.warning("定时消息发送失败 id={}: {}", msg_id, e)
             except CoreCookieException:
                 _log.error("Cookie 已过期，停止定时消息循环")
                 self._timer_cycle.clear()
