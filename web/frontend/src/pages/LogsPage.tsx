@@ -40,12 +40,10 @@ export function LogsPage() {
 
   // wrap loadMore to deduplicate calls
   const loadingMore = useRef(false);
-  const handleLoadMore = useCallback(async () => {
-    if (loadingMore.current || !hasMore) return;
-    loadingMore.current = true;
-    await loadMore();
-    loadingMore.current = false;
-  }, [hasMore, loadMore]);
+  // 锚定滚动位置：加载更早日志时 firstItemIndex 递减，视图不跳动
+  const [firstItemIndex, setFirstItemIndex] = useState(0);
+  const prevFilteredLength = useRef(0);
+  const loadingAnchor = useRef(false); // 标记正在 loadMore，避免 WS 新日志误触锚定
 
   // Filter
   const toggleLevel = (lv: string) => {
@@ -65,6 +63,62 @@ export function LogsPage() {
     }
     return arr;
   }, [entries, filterLevels, keyword]);
+
+  // filtered 增长时锚定视图（仅 loadMore 前置插入时）
+  useEffect(() => {
+    const prev = prevFilteredLength.current;
+    const curr = filtered.length;
+    if (curr > prev && loadingAnchor.current) {
+      setFirstItemIndex((idx) => idx - (curr - prev));
+      loadingAnchor.current = false;
+    }
+    prevFilteredLength.current = curr;
+  }, [filtered.length]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (loadingMore.current || !hasMore) return;
+    loadingMore.current = true;
+    loadingAnchor.current = true; // 标记本次增长来自 loadMore
+    await loadMore();
+    loadingMore.current = false;
+  }, [hasMore, loadMore]);
+
+  // 闲时自动加载：浏览器空闲时逐批加载历史，直到全部加载完毕
+  const idleLoading = useRef(false);
+  useEffect(() => {
+    if (!hasMore || idleLoading.current) return;
+    idleLoading.current = true;
+    let cancelled = false;
+
+    const idleLoop = (deadline: IdleDeadline) => {
+      if (cancelled || !hasMore) { idleLoading.current = false; return; }
+      // 仅当剩余空闲时间充足时加载一批
+      if (deadline.timeRemaining() > 10 || deadline.didTimeout) {
+        loadingAnchor.current = true;
+        loadMore().then((more) => {
+          if (!more) { idleLoading.current = false; return; }
+          // 继续下一轮闲时加载
+          (window as any).requestIdleCallback?.(idleLoop, { timeout: 1000 })
+            ?? setTimeout(() => idleLoop({ timeRemaining: () => 50, didTimeout: true } as IdleDeadline), 200);
+        });
+      } else {
+        (window as any).requestIdleCallback?.(idleLoop, { timeout: 1000 })
+          ?? setTimeout(() => idleLoop({ timeRemaining: () => 50, didTimeout: true } as IdleDeadline), 200);
+      }
+    };
+
+    // 首轮延迟 1s，优先渲染实时日志
+    const startTimer = setTimeout(() => {
+      if ((window as any).requestIdleCallback) {
+        (window as any).requestIdleCallback(idleLoop, { timeout: 1000 });
+      } else {
+        idleLoop({ timeRemaining: () => 50, didTimeout: true } as IdleDeadline);
+      }
+    }, 1000);
+
+    return () => { cancelled = true; clearTimeout(startTimer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore]);
 
   // Auto-follow
   useEffect(() => {
@@ -175,6 +229,7 @@ export function LogsPage() {
           <Virtuoso
             ref={virtuosoRef}
             data={filtered}
+            firstItemIndex={firstItemIndex}
             followOutput="smooth"
             atBottomStateChange={setAtBottom}
             initialTopMostItemIndex={filtered.length - 1}

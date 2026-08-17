@@ -874,13 +874,12 @@ class PluginManager:
         _log.info("插件已暂停: {}", plugin_name)
 
     def resume_plugin(self, plugin_name: str) -> None:
-        """恢复暂停的插件——同步完成路由注册，异步初始化。"""
+        """恢复暂停的插件——全部后台异步执行，不阻塞调用方。"""
         metadata = self._get_plugin(plugin_name)
         if metadata.plugin_instance is None:
-            self._ensure_plugin_loaded(metadata)
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._finish_activation(metadata))
+                loop.create_task(self._background_activate(metadata))
             except RuntimeError:
                 pass
         elif not metadata.initialized:
@@ -971,6 +970,15 @@ class PluginManager:
                 _log.debug("插件 [{}] 有 register_routes 但 _app 未设置，将在 set_app 时补注册", metadata.name)
         except Exception as e:
             _log.error("插件 [{}] 同步加载失败: {}", metadata.name, e)
+
+    async def _background_activate(self, metadata: PluginMetadata) -> None:
+        """后台完整激活：加载模块 + 初始化 + 注册事件。不阻塞调用方。"""
+        try:
+            if metadata.plugin_instance is None:
+                self._ensure_plugin_loaded(metadata)
+            await self._finish_activation(metadata)
+        except Exception as e:
+            _log.error("插件 [{}] 后台激活失败: {}", metadata.name, e)
 
     async def _finish_activation(self, metadata: PluginMetadata) -> None:
         """完成插件的异步激活部分（调用 initialize + 注册到事件总线）。

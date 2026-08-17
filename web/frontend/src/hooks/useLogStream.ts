@@ -13,7 +13,7 @@ interface UseLogStreamReturn {
   latestSeq: number;
   total: number;
   hasMore: boolean;
-  loadMore: () => Promise<void>;
+  loadMore: () => Promise<boolean>;
   refresh: () => void;
 }
 
@@ -29,6 +29,7 @@ export function useLogStream(): UseLogStreamReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(0);
   const fetchedSeqRef = useRef(0);
+  const entriesRef = useRef<LogEntry[]>([]);
   const oldestSeqRef = useRef(0);
   const loadingMore = useRef(false);
 
@@ -44,7 +45,9 @@ export function useLogStream(): UseLogStreamReturn {
         setEntries((prev) => {
           const existing = new Set(prev.map((e) => e.seq_id));
           const fresh = data.entries.filter((e: LogEntry) => !existing.has(e.seq_id));
-          return [...fresh, ...prev].sort((a, b) => a.seq_id - b.seq_id);
+          const merged = [...fresh, ...prev].sort((a, b) => a.seq_id - b.seq_id);
+          entriesRef.current = merged;
+          return merged;
         });
         fetchedSeqRef.current = Math.max(fetchedSeqRef.current, since);
       }
@@ -56,15 +59,39 @@ export function useLogStream(): UseLogStreamReturn {
   }, []);
 
   const loadMore = useCallback(async () => {
-    if (!hasMore || loadingMore.current) return;
+    if (loadingMore.current) return false;
     loadingMore.current = true;
-    const oldest = entries.length > 0 ? entries[0].seq_id : 0;
-    await loadHistory(oldest);
-    loadingMore.current = false;
-  }, [hasMore, entries, loadHistory]);
+    try {
+      const oldest = entriesRef.current.length > 0 ? entriesRef.current[0].seq_id : 0;
+      if (oldest <= 0) return false;
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch(`/api/logs/history?since=${oldest}&limit=${PAGE_SIZE}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (!data.entries?.length) return false;
+      setEntries((prev) => {
+        const existing = new Set(prev.map((e) => e.seq_id));
+        const fresh = data.entries.filter((e: LogEntry) => !existing.has(e.seq_id));
+        const merged = [...fresh, ...prev].sort((a, b) => a.seq_id - b.seq_id);
+        entriesRef.current = merged;
+        return merged;
+      });
+      setLatestSeq(data.latest_seq || 0);
+      setTotal(data.total || 0);
+      oldestSeqRef.current = data.oldest_seq || 0;
+      setHasMore(data.has_more || false);
+      return data.has_more || false;
+    } catch {
+      return false;
+    } finally {
+      loadingMore.current = false;
+    }
+  }, []);
 
   const refresh = useCallback(() => {
     setEntries([]);
+    entriesRef.current = [];
     setLatestSeq(0);
     setTotal(0);
     setHasMore(false);
@@ -112,7 +139,9 @@ export function useLogStream(): UseLogStreamReturn {
               setLatestSeq((prev) => Math.max(prev, msg.seq_id));
               setEntries((prev) => {
                 if (prev.some((e) => e.seq_id === msg.seq_id)) return prev;
-                return [...prev.slice(-1999), msg as LogEntry];
+                const merged = [...prev.slice(-1999), msg as LogEntry];
+                entriesRef.current = merged;
+                return merged;
               });
             }
           } catch { /* ignore */ }

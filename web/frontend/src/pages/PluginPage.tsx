@@ -50,12 +50,19 @@ export function PluginPage() {
 
   const handleToggle = async (plugin: PluginSummary) => {
     if (processingMap[plugin.name]) return;
+    // 乐观更新：立即翻转开关状态，不等待 API
+    setPlugins((prev) => prev.map((p) =>
+      p.name === plugin.name ? { ...p, enabled: !p.enabled } : p));
     setProcessing(plugin.name, 'toggle');
     try {
-      if (plugin.enabled) { await disablePlugin(plugin.name); showToast('success', plugin.name + ' 已禁用'); }
-      else { await enablePlugin(plugin.name); showToast('success', plugin.name + ' 已启用'); }
-    } catch (e: any) { showToast('error', '操作失败', e.message); }
-    finally { setProcessing(plugin.name, null); await load(); }
+      if (plugin.enabled) { await disablePlugin(plugin.name); }
+      else { await enablePlugin(plugin.name); }
+    } catch (e: any) {
+      showToast('error', '操作失败', e.message);
+      // 失败回滚
+      setPlugins((prev) => prev.map((p) =>
+        p.name === plugin.name ? { ...p, enabled: plugin.enabled } : p));
+    } finally { setProcessing(plugin.name, null); }
   };
 
   const handleReload = async (pluginName: string) => {
@@ -237,10 +244,15 @@ export function PluginPage() {
                 </div>
                 <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-xl">
                   <button onClick={(e) => { e.stopPropagation(); handleToggle(plugin); }} disabled={isBusy}
-                    className={'relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed ' + (plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600')}
+                    className={'relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed ' + (isToggling ? (!plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600') : (plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'))}
                     title={plugin.enabled ? '点击禁用' : '点击启用'}>
-                    {isToggling ? (<span className="absolute inset-0 flex items-center justify-center"><Loader2 className="w-4 h-4 text-white animate-spin" /></span>)
-                    : (<span className={'inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ' + (plugin.enabled ? 'translate-x-6' : 'translate-x-1')} />)}
+                    <span
+                      className={'inline-block h-4 w-4 rounded-full bg-white shadow-sm flex items-center justify-center transition-transform duration-200 '
+                        + (isToggling
+                          ? (plugin.enabled ? 'translate-x-1' : 'translate-x-6')  // loading 期间保持原位置
+                          : (plugin.enabled ? 'translate-x-6' : 'translate-x-1'))}>
+                      {isToggling && <Loader2 className="w-3 h-3 text-primary-600 animate-spin" />}
+                    </span>
                   </button>
                   <div className="flex items-center gap-0.5 lg:gap-1.5 flex-nowrap">
                     <Button variant="ghost" size="sm" icon={<Eye />}
