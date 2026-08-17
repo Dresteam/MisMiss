@@ -60,6 +60,16 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
   const [loading, setLoading] = useState(true);
   const [permLoading, setPermLoading] = useState<string | null>(null);
 
+  // 监听外部 tab 切换事件（卡片按钮直达指定 tab）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent).detail as TabId;
+      if (tab) setActiveTab(tab);
+    };
+    window.addEventListener('plugin-drawer-tab', handler);
+    return () => window.removeEventListener('plugin-drawer-tab', handler);
+  }, []);
+
   useEffect(() => {
     if (!open || !pluginName) return;
     loadAll();
@@ -143,14 +153,14 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
       {/* Overlay */}
       <div className="drawer-overlay" onClick={onClose} />
 
-      {/* Drawer panel */}
-      <div className="drawer-panel" style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}>
+      {/* Drawer panel —— 居中弹窗样式 */}
+      <div className="drawer-panel" style={{ display: 'flex', flexDirection: 'column' }}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4
-                        bg-white dark:bg-surface-800 border-b border-surface-200 dark:border-surface-700"
+        <div className="flex items-center justify-between px-4 lg:px-6 py-3 lg:py-4
+                        bg-white dark:bg-surface-800 border-b border-surface-200 dark:border-surface-700 rounded-t-2xl"
              style={{ flexShrink: 0 }}>
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-semibold text-surface-900 dark:text-white">
+            <h2 className="text-base lg:text-lg font-semibold text-surface-900 dark:text-white">
               <MarqueeText text={displayName} />
             </h2>
             <p className="text-xs text-surface-500 truncate">
@@ -186,7 +196,7 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
         </div>
 
         {/* Content */}
-        <div className="overflow-y-auto p-6" style={{ flex: 1, minHeight: 0 }}>
+        <div className="overflow-y-auto p-4 lg:p-6" style={{ flex: 1, minHeight: 0 }}>
           {loading ? (
             <div className="flex justify-center py-12">
               <div className="w-6 h-6 border-2 border-primary-600 border-t-transparent rounded-full animate-spin" />
@@ -196,7 +206,7 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
               {/* Info Tab */}
               {activeTab === 'info' && (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <InfoItem label="名称" value={detail.name} />
                     <InfoItem label="版本" value={detail.version} />
                     <InfoItem label="作者" value={detail.author} />
@@ -291,7 +301,7 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
 
               {/* Config Tab */}
               {activeTab === 'config' && (
-                <div>
+                <div className="h-full min-h-0">
                   {config?.schema && Object.keys(config.schema).length > 0 ? (
                     <DynamicConfigForm
                       schema={config.schema}

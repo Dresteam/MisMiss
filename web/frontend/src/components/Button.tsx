@@ -9,6 +9,8 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
   loading?: boolean;
   icon?: React.ReactNode;
+  /** 自定义悬浮提示文字，显示在按钮上方，主题自适应 */
+  tooltip?: string;
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
@@ -61,6 +63,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       children,
       className = '',
       disabled,
+      tooltip,
       ...props
     },
     ref,
@@ -72,7 +75,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={isDisabled}
         className={[
-          'inline-flex items-center justify-center font-medium rounded-lg',
+          'relative group inline-flex items-center justify-center font-medium rounded-lg',
           'transition-all duration-200',
           'focus:outline-none focus:ring-2 focus:ring-offset-2',
           'disabled:opacity-50 disabled:cursor-not-allowed',
@@ -88,6 +91,17 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           <span className={`${iconSizes[size]} shrink-0`}>{icon}</span>
         ) : null}
         {children && <span>{children}</span>}
+        {tooltip && !isDisabled && (
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
+                       whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
+                       bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
+                       opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+          >
+            {tooltip}
+          </span>
+        )}
       </button>
     );
   },
