@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Puzzle, RefreshCw, AlertTriangle, Eye, FolderSync, Loader2, Upload, BookOpen, Trash2, X, ExternalLink } from 'lucide-react';
+import { Puzzle, RefreshCw, AlertTriangle, Eye, FolderSync, Loader2, Upload, BookOpen, Trash2, X, ExternalLink, Settings } from 'lucide-react';
 import { fetchPluginList, enablePlugin, disablePlugin, reloadPlugin,
   fetchFailedPlugins, retryFailedPlugin, refreshPlugins, fetchPluginReadme, uninstallPlugin } from '../api/client';
 import type { PluginSummary, FailedPluginInfo } from '../api/types';
@@ -164,7 +164,15 @@ export function PluginPage() {
     } catch (e: any) { showToast('error', '操作失败', e.message); }
   };
 
-  const openDrawer = (name: string) => { setSelectedPlugin(name); setDrawerOpen(true); };
+  const openDrawer = (name: string, tab?: string) => {
+    setSelectedPlugin(name);
+    setDrawerOpen(true);
+    if (tab) {
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('plugin-drawer-tab', { detail: tab }));
+      }, 100);
+    }
+  };
 
   const filteredPlugins = activeFilter === 'failed' ? []
     : activeFilter === 'enabled' ? plugins.filter((p) => p.enabled)
@@ -254,30 +262,29 @@ export function PluginPage() {
                       {isToggling && <Loader2 className="w-3 h-3 text-primary-600 animate-spin" />}
                     </span>
                   </button>
-                  <div className="flex items-center gap-0.5 lg:gap-1.5 flex-nowrap">
-                    <Button variant="ghost" size="sm" icon={<Eye />}
-                      onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name); }}>
-                      <span className="hidden lg:inline">详情</span></Button>
+                  <div className="flex items-center gap-0.5 lg:gap-1 flex-nowrap">
+                    <Button variant="ghost" size="sm" icon={<Eye />} tooltip="基本信息"
+                      onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name, 'info'); }} />
+                    {plugin.has_config && (
+                      <Button variant="ghost" size="sm" icon={<Settings />} tooltip="配置"
+                        onClick={(e) => { e.stopPropagation(); openDrawer(plugin.name, 'config'); }} />
+                    )}
                     {plugin.has_ui && (
                       <Link to={`/plugin/${encodeURIComponent(plugin.name)}/page`}
                         onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" size="sm" icon={<ExternalLink />}>
-                          <span className="hidden lg:inline">主页</span></Button>
+                        <Button variant="ghost" size="sm" icon={<ExternalLink />} tooltip="插件主页" />
                       </Link>
                     )}
                     {plugin.has_readme && (
-                      <Button variant="ghost" size="sm" icon={<BookOpen />}
-                        onClick={(e) => { e.stopPropagation(); handleViewReadme(plugin); }}>
-                        <span className="hidden lg:inline">文档</span></Button>
+                      <Button variant="ghost" size="sm" icon={<BookOpen />} tooltip="文档"
+                        onClick={(e) => { e.stopPropagation(); handleViewReadme(plugin); }} />
                     )}
-                    <Button variant="ghost" size="sm" icon={<RefreshCw />}
+                    <Button variant="ghost" size="sm" icon={<RefreshCw />} tooltip="重载"
                       onClick={(e) => { e.stopPropagation(); handleReload(plugin.name); }}
-                      loading={isReloading} disabled={isBusy}>
-                      <span className="hidden lg:inline">重载</span></Button>
-                    <Button variant="ghost" size="sm" icon={<Trash2 />}
+                      loading={isReloading} disabled={isBusy} />
+                    <Button variant="ghost" size="sm" icon={<Trash2 />} tooltip="卸载"
                       onClick={(e) => { e.stopPropagation(); setUninstallTarget(plugin.name); }}
-                      disabled={isBusy}>
-                      <span className="hidden lg:inline">卸载</span></Button>
+                      disabled={isBusy} />
                   </div>
                 </div>
               </div>);})}

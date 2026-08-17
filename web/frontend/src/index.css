@@ -268,16 +268,25 @@
   }
   .drawer-panel {
     position: fixed;
-    right: 0;
-    top: 0;
-    height: 100%;
-    width: 100%;
-    max-width: 32rem;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    height: 85vh;
+    width: calc(100% - 2rem);
+    max-width: 40rem;
     background-color: #fff;
+    border-radius: 1rem;
     box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
     z-index: 50;
-    animation: slideInRight 0.3s ease-out;
+    animation: modalIn 0.25s ease-out;
     overflow: visible;
+  }
+  .dark .drawer-panel {
+    background-color: #1e293b;
+  }
+  @keyframes modalIn {
+    from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   }
   .dark .drawer-panel {
     background-color: #1e293b;

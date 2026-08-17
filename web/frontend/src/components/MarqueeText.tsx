@@ -22,7 +22,8 @@ function injectKeyframes(animationName: string, distance: number, total: number)
     document.head.appendChild(styleEl);
   }
 
-  styleEl.textContent = `
+  // 追加而非覆盖——多个 MarqueeText 实例各自拥有独立 keyframes
+  styleEl.textContent += `
     @keyframes ${animationName} {
       0% { transform: translateX(0); }
       ${scrollStart}% { transform: translateX(0); }
@@ -45,22 +46,26 @@ export function MarqueeText({ text, className = '' }: Props) {
     const container = containerRef.current;
     const textEl = textRef.current;
     if (!container || !textEl) return;
-    const overflow = textEl.getBoundingClientRect().width - container.getBoundingClientRect().width;
-    setDistance(overflow > 1 ? overflow : 0);
-  }, [text]);
 
-  // 窗口尺寸变化时重新测量
-  useEffect(() => {
     const measure = () => {
-      const container = containerRef.current;
-      const textEl = textRef.current;
-      if (!container || !textEl) return;
       const overflow = textEl.getBoundingClientRect().width - container.getBoundingClientRect().width;
       setDistance(overflow > 1 ? overflow : 0);
     };
+
+    // 等布局稳定后测量（表格/flex 首帧宽度可能未确定）
+    const raf = requestAnimationFrame(() => requestAnimationFrame(measure));
+
+    // ResizeObserver 监听容器尺寸变化（表格列宽、窗口缩放等）
+    const ro = new ResizeObserver(measure);
+    ro.observe(container);
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [text]);
 
   // 根据距离生成动态动画
   useEffect(() => {

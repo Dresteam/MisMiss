@@ -300,13 +300,15 @@ export function DynamicConfigForm({ schema, values, onSave, loading }: Props) {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-5">
+    <div className="flex flex-col h-full min-h-0">
+      {/* 配置项滚动区 */}
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-5 pr-1">
         {fields.map(([key, field]) => renderField(key, field))}
       </div>
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-2 pt-2 border-t border-surface-200 dark:border-surface-700">
+      {/* 按钮区 —— 固定底部、不悬浮、不遮挡（占独立空间） */}
+      <div className="shrink-0 flex items-center gap-2 pt-3 mt-3
+                      border-t border-surface-200 dark:border-surface-700">
         <Button variant="primary" size="sm" icon={<Save />}
           onClick={handleSave}
           loading={saving} disabled={loading}>
