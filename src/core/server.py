@@ -23,6 +23,7 @@ from core.plugin.permission_manager import PluginPermissionManager
 from core.exceptions import (
     CoreApiException,
     CoreCookieException,
+    CoreDisabledException,
     CorePluginLoadException,
     CorePluginNotFoundException,
     CorePluginPermissionException,
@@ -335,6 +336,7 @@ class MissevanServer(ServerInterface):
         if live_id in self._livestreams:
             return self._livestreams[live_id]
         livestream = MissevanLivestream(live_id, self._bot, self._event_bus)
+        livestream.enabled = False  # 新添加默认停用，等待用户显式启用（启用时自动连接）
         await livestream._refresh()  # type: ignore[attr-defined]
         self._livestreams[live_id] = livestream
         self._save_state()
@@ -347,7 +349,10 @@ class MissevanServer(ServerInterface):
         if live_id not in self._livestreams:
             raise KeyError(f"直播间 {live_id} 不存在")
         livestream = self._livestreams[live_id]
-        await livestream.quit()
+        try:
+            await livestream.quit()
+        except CoreDisabledException:
+            pass  # 已停用的直播间直接移除
         del self._livestreams[live_id]
         self._enabled_livestreams.discard(live_id)
         self._save_state()
@@ -367,9 +372,16 @@ class MissevanServer(ServerInterface):
         """停用直播间并断开连接。"""
         import asyncio
         livestream = self._livestreams[live_id]
+
+        async def _safe_quit() -> None:
+            try:
+                await livestream.quit()
+            except CoreDisabledException:
+                pass  # 已停用/已断开，视为成功
+
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(livestream.quit())
+            loop.create_task(_safe_quit())
         except RuntimeError:
             pass
         livestream.enabled = False
