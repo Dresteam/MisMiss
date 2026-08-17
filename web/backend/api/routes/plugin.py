@@ -24,6 +24,7 @@ from core.exceptions import (
     CorePluginConfigException,
 )
 from api.deps import get_server
+from core.logging import get_logger
 from api.schemas import (
     PluginSummary,
     PluginDetailResponse,
@@ -36,6 +37,7 @@ from api.schemas import (
 )
 
 router = APIRouter()
+_log = get_logger("api.plugin")
 
 # 安装互斥锁——同一时间只允许一个安装操作
 _install_lock = asyncio.Lock()
@@ -544,16 +546,30 @@ async def plugin_update_config(
     req: PluginConfigUpdateRequest,
     s: MissevanServer = Depends(get_server),
 ):
-    """更新插件配置。"""
+    """更新插件配置。若插件运行中，保存后立即重载以热加载配置。"""
     pm = s._plugin_manager
     meta = pm.get_plugin(plugin_name)
     if meta is None:
         raise HTTPException(status_code=404, detail=f"插件 '{plugin_name}' 不存在")
     try:
         pm.config_manager.save_config(plugin_name, req.config)
-        # 同步更新 metadata 中的 config 缓存
         meta.config = req.config
-        return StatusResponse(success=True, message=f"配置已保存: {plugin_name}")
+
+        # 插件运行中 → 重载以热加载新配置
+        reloaded = False
+        if meta.enabled and meta.plugin_instance is not None:
+            try:
+                await pm.reload_plugin(plugin_name)
+                meta = pm.get_plugin(plugin_name)
+                if meta:
+                    meta.enabled = True
+                    await pm.enable_plugin(plugin_name)
+                reloaded = True
+            except Exception as e:
+                _log.warning("配置保存后重载插件失败 [{}]: {}", plugin_name, e)
+
+        msg = f"配置已保存: {plugin_name}" + ("（已热重载）" if reloaded else "")
+        return StatusResponse(success=True, message=msg)
     except CorePluginConfigException as e:
         raise HTTPException(status_code=500, detail=str(e))
 
