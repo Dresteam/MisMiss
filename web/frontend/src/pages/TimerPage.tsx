@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Clock, Plus, Trash2, ChevronUp, ChevronDown, SkipForward,
-  Pencil, Loader2, RefreshCw, X, Globe, Radio, Timer,
+  Pencil, Loader2, RefreshCw, X, Globe, Radio, Timer, Send,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
@@ -43,9 +43,9 @@ export function TimerPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  // 直播间筛选（0 = 全部，具体 ID = 只看该直播间）
+  // 直播间筛选（0 = 未选中）
   const [roomFilter, setRoomFilter] = useState<number>(0);
-  const [countdownBase, setCountdownBase] = useState<number>(Date.now());
+  const [tick, setTick] = useState<number>(0);
   const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 添加 / 编辑对话框
@@ -72,8 +72,13 @@ export function TimerPage() {
       if (d && typeof d === 'object') {
         setData(d as TimerData);
         setIntervalInput(String(d.interval || ''));
-        // 倒计时基准：服务器返回的 next_tick_in 相对于当前时刻
-        setCountdownBase(Date.now());
+        setTick(0);  // 重置本地倒计时递减基准
+        // 若当前筛选的直播间已不存在，回退到第一个
+        setRoomFilter(prev => {
+          if (prev === 0) return (d as TimerData).rooms[0]?.live_id ?? 0;
+          return (d as TimerData).rooms.some(r => r.live_id === prev)
+            ? prev : (d as TimerData).rooms[0]?.live_id ?? 0;
+        });
       }
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -81,11 +86,17 @@ export function TimerPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // 每秒刷新倒计时（本地递减，避免频繁请求）
+  // 每秒刷新一次（本地递减倒计时）
   useEffect(() => {
-    tickerRef.current = setInterval(() => setCountdownBase(Date.now()), 1000);
+    tickerRef.current = setInterval(() => setTick(t => t + 1), 1000);
     return () => { if (tickerRef.current) clearInterval(tickerRef.current); };
   }, []);
+
+  // 每 30 秒从服务器重新同步一次（校准倒计时）
+  useEffect(() => {
+    const sync = setInterval(() => load(), 30000);
+    return () => clearInterval(sync);
+  }, [load]);
 
   const api = async (path: string, method: string, body?: any) => {
     const token = localStorage.getItem('auth_token');
@@ -104,9 +115,9 @@ export function TimerPage() {
     return res.json();
   };
 
-  const openAdd = (prefillLiveId: string) => {
+  const openAdd = () => {
     setEditingId(null);
-    setEditLiveId(prefillLiveId);
+    setEditLiveId(roomFilter > 0 ? String(roomFilter) : '');
     setEditMessage('');
     setEditorOpen(true);
   };
@@ -161,12 +172,22 @@ export function TimerPage() {
     finally { setBusyId(null); }
   };
 
+  const handleSendNow = async (e: TimerEntry) => {
+    setBusyId(e.message_id);
+    try {
+      await api(`/${e.message_id}/send`, 'POST', { live_id: roomFilter });
+      showToast('success', '已立即发送');
+      await load();
+    } catch (err: any) { showToast('error', '发送失败', err.message); }
+    finally { setBusyId(null); }
+  };
+
   const handleSaveInterval = async () => {
     setSavingInterval(true);
     try {
       const res = await api('/interval', 'PUT', { interval: Number(intervalInput) });
       showToast('success', res.message);
-      await load(); // 刷新以获取新的 next_tick_in
+      await load();
     } catch (e: any) { showToast('error', '保存失败', e.message); }
     finally { setSavingInterval(false); }
   };
@@ -175,21 +196,14 @@ export function TimerPage() {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>;
   }
 
-  // 当前筛选的直播间（0 = 显示全部房间）
-  const filteredRooms = roomFilter === 0
-    ? data.rooms
-    : data.rooms.filter(r => r.live_id === roomFilter);
+  // 当前选中的直播间
+  const currentRoom = data.rooms.find(r => r.live_id === roomFilter) || null;
 
   const totalCount = data.global.length + data.rooms.reduce((s, r) => s + r.messages.length, 0);
 
-  // 倒计时递减计算：服务器返回的 seconds_until_next 减去已流逝的时间
-  const elapsed = Math.floor((Date.now() - countdownBase) / 1000);
-  const liveCountdown = (entry: TimerEntry) => Math.max(0, entry.seconds_until_next - elapsed);
-
-  /** 渲染一条消息卡片 */
-  const renderEntry = (e: TimerEntry, entriesCount: number) => {
-    const cd = liveCountdown(e);
-    const isNext = e.index === (entriesCount > 0 ? e.index : 0) && cd <= (data.next_tick_in || 0);
+  /** 渲染一条消息卡片。isNext: 是否为即将执行的消息（仅该消息可跳过/立即发送） */
+  const renderEntry = (e: TimerEntry, isNext: boolean, entriesCount: number, scope: 'global' | 'room') => {
+    const cd = Math.max(0, e.seconds_until_next - tick);
     return (
       <div key={e.message_id}
         className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
@@ -197,7 +211,8 @@ export function TimerPage() {
         <div className="min-w-0 flex-1">
           <p className="text-sm text-gray-800 dark:text-gray-200 truncate">{e.message}</p>
           <p className="text-[10px] text-gray-400 font-mono mt-0.5">
-            {e.live_id === 0 ? '全局 · 所有直播间轮播' : `直播间 ${e.live_id}`} · {e.message_id}
+            {scope === 'global' ? '全局 · 所有直播间轮播' : `直播间 ${e.live_id}`} · {e.message_id}
+            {isNext && <span className="ml-2 text-primary-500 font-semibold">▶ 即将执行</span>}
           </p>
         </div>
         <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold ${
@@ -219,8 +234,14 @@ export function TimerPage() {
             className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
             <ChevronDown className="w-4 h-4" />
           </button>
-          <button title="跳过一次" onClick={() => handleSkip(e)}
-            className="p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 transition-colors">
+          <button title="立即发送" disabled={!isNext || busyId === e.message_id}
+            onClick={() => handleSendNow(e)}
+            className="p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+            <Send className="w-4 h-4" />
+          </button>
+          <button title="跳过一次" disabled={!isNext || busyId === e.message_id}
+            onClick={() => handleSkip(e)}
+            className="p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
             <SkipForward className="w-4 h-4" />
           </button>
           <button title="编辑" onClick={() => openEdit(e)}
@@ -242,14 +263,14 @@ export function TimerPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">定时消息队列</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            {totalCount} 条消息 · 每个直播间先播全局消息，再播独立消息
+            {totalCount} 条消息 · 先播全局消息，再播直播间消息
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="ghost" icon={<RefreshCw />} onClick={load}>刷新</Button>
-          <Button variant="primary" icon={<Plus />} onClick={() => openAdd(roomFilter === 0 ? '0' : String(roomFilter))}>
-            {roomFilter === 0 ? '添加全局消息' : '添加消息'}
-          </Button>
+          {roomFilter > 0 && (
+            <Button variant="primary" icon={<Plus />} onClick={openAdd}>添加消息</Button>
+          )}
         </div>
       </div>
 
@@ -269,57 +290,61 @@ export function TimerPage() {
         </div>
       </div>
 
-      {/* 全局定时消息 */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Globe className="w-4 h-4 text-primary-500" /> 全局定时消息
-            <span className="text-xs text-gray-400 font-normal">（{data.global.length} 条 · 距下次播报 {formatCountdown(Math.max(0, data.next_tick_in - elapsed))}）</span>
-          </h2>
-        </div>
-        {data.global.length === 0 ? (
-          <p className="text-center text-gray-400 py-6 text-sm">暂无全局消息</p>
-        ) : data.global.map(e => renderEntry(e, data.global.length))}
+      {/* 直播间筛选 */}
+      <div className="flex items-center gap-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 px-5 py-4">
+        <Radio className="w-5 h-5 text-emerald-500 shrink-0" />
+        <span className="text-sm font-medium text-gray-800 dark:text-gray-200">直播间</span>
+        <select value={roomFilter} onChange={e => setRoomFilter(Number(e.target.value))}
+          className="flex-1 max-w-xs px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300 outline-none">
+          {data.rooms.length === 0 ? (
+            <option value={0}>暂无直播间</option>
+          ) : data.rooms.map(r => (
+            <option key={r.live_id} value={r.live_id}>
+              直播间 {r.live_id}（{r.messages.length} 条独立消息）
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* 直播间筛选 + 独立消息 */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Radio className="w-4 h-4 text-emerald-500" /> 直播间定时消息
-          </h2>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">筛选直播间：</span>
-            <select value={roomFilter} onChange={e => setRoomFilter(Number(e.target.value))}
-              className="px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300 outline-none">
-              <option value={0}>全部（{data.rooms.length} 个直播间）</option>
-              {data.rooms.map(r => (
-                <option key={r.live_id} value={r.live_id}>直播间 {r.live_id}（{r.messages.length} 条）</option>
-              ))}
-            </select>
+      {data.rooms.length === 0 ? (
+        <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-500 dark:text-gray-400">暂无直播间定时消息</p>
+          <p className="text-xs text-gray-400 mt-1">插件注册的直播间定时消息会显示在这里</p>
+        </div>
+      ) : currentRoom ? (
+        <div className="space-y-4">
+          {/* 全局消息（合并显示，先于直播间消息执行） */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-3">
+              <Globe className="w-4 h-4 text-primary-500" /> 全局定时消息
+              <span className="text-xs text-gray-400 font-normal">
+                （{data.global.length} 条 · 指针 #{currentRoom.position.global + 1}）
+              </span>
+            </h2>
+            {data.global.length === 0 ? (
+              <p className="text-center text-gray-400 py-6 text-sm">暂无全局消息</p>
+            ) : data.global.map(e =>
+              renderEntry(e, e.index === currentRoom.position.global, data.global.length, 'global')
+            )}
+          </div>
+
+          {/* 直播间独立消息 */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-3">
+              <Radio className="w-4 h-4 text-emerald-500" /> 直播间 {currentRoom.live_id} 独立消息
+              <span className="text-xs text-gray-400 font-normal">
+                （{currentRoom.messages.length} 条 · 指针 #{currentRoom.position.room + 1}）
+              </span>
+            </h2>
+            {currentRoom.messages.length === 0 ? (
+              <p className="text-center text-gray-400 py-6 text-sm">该直播间暂无独立消息</p>
+            ) : currentRoom.messages.map(e =>
+              renderEntry(e, e.index === currentRoom.position.room, currentRoom.messages.length, 'room')
+            )}
           </div>
         </div>
-
-        {data.rooms.length === 0 ? (
-          <div className="text-center py-12">
-            <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-500 dark:text-gray-400">暂无直播间定时消息</p>
-            <p className="text-xs text-gray-400 mt-1">插件注册的直播间定时消息会显示在这里</p>
-          </div>
-        ) : filteredRooms.map((room) => (
-          <div key={room.live_id} className="mb-4 last:mb-0">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                直播间 {room.live_id}
-              </span>
-              <span className="text-[10px] text-gray-400 font-mono">
-                全局指针 #{room.position.global + 1} · 独立指针 #{room.position.room + 1}
-              </span>
-            </div>
-            {room.messages.map(e => renderEntry(e, room.messages.length))}
-          </div>
-        ))}
-      </div>
+      ) : null}
 
       {/* 添加/编辑对话框 */}
       {editorOpen && (

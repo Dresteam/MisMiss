@@ -119,3 +119,27 @@ async def timer_skip(message_id: str, s: MissevanServer = Depends(get_server)):
     if not s.skip_timer_message_once(message_id):
         raise HTTPException(status_code=404, detail=f"定时消息 {message_id} 不存在")
     return StatusResponse(success=True, message="已跳过下一次播报")
+
+
+@router.post("/{message_id}/send", response_model=StatusResponse)
+async def timer_send_now(message_id: str, body: dict, s: MissevanServer = Depends(get_server)):
+    """立即发送一条定时消息（视为立即执行，指针推进）。
+
+    请求体：``{"live_id": 12345}``（全局消息需要目标直播间 ID）
+    """
+    _require_bot(s)
+    target = body.get("live_id")
+    try:
+        target = int(target) if target not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        target = None
+    try:
+        ok = await s.send_timer_message_now(message_id, target)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"发送失败: {e}")
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="发送失败（消息不存在，或全局消息未指定目标直播间）",
+        )
+    return StatusResponse(success=True, message="已立即发送")
