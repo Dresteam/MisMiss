@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Clock, Plus, Trash2, ChevronUp, ChevronDown, SkipForward,
-  Pencil, Loader2, RefreshCw, X,
+  Pencil, Loader2, RefreshCw, X, Globe, Radio,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
@@ -14,9 +14,20 @@ interface TimerEntry {
   index: number;
 }
 
+interface RoomQueue {
+  live_id: number;
+  messages: TimerEntry[];
+  position: { global: number; room: number };
+}
+
+interface TimerData {
+  global: TimerEntry[];
+  rooms: RoomQueue[];
+}
+
 /** 定时消息队列管理页面 */
 export function TimerPage() {
-  const [entries, setEntries] = useState<TimerEntry[]>([]);
+  const [data, setData] = useState<TimerData>({ global: [], rooms: [] });
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -36,8 +47,8 @@ export function TimerPage() {
       const res = await fetch('/api/timer/list', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      const data = await res.json();
-      if (Array.isArray(data)) setEntries(data);
+      const d = await res.json();
+      if (d && typeof d === 'object') setData(d as TimerData);
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
@@ -61,16 +72,16 @@ export function TimerPage() {
     return res.json();
   };
 
-  const openAdd = () => {
+  const openAdd = (prefillLiveId: string) => {
     setEditingId(null);
-    setEditLiveId('');
+    setEditLiveId(prefillLiveId);
     setEditMessage('');
     setEditorOpen(true);
   };
 
   const openEdit = (e: TimerEntry) => {
     setEditingId(e.message_id);
-    setEditLiveId(String(e.live_id));
+    setEditLiveId(e.live_id === 0 ? '' : String(e.live_id));
     setEditMessage(e.message);
     setEditorOpen(true);
   };
@@ -81,7 +92,7 @@ export function TimerPage() {
         await api(`/${editingId}`, 'PUT', { message: editMessage });
         showToast('success', '定时消息已更新');
       } else {
-        await api('/add', 'POST', { live_id: Number(editLiveId), message: editMessage });
+        await api('/add', 'POST', { live_id: Number(editLiveId) || 0, message: editMessage });
         showToast('success', '定时消息已添加');
       }
       setEditorOpen(false);
@@ -121,64 +132,111 @@ export function TimerPage() {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>;
   }
 
+  const totalCount = data.global.length + data.rooms.reduce((s, r) => s + r.messages.length, 0);
+
+  /** 渲染一个队列（消息列表 + 操作） */
+  const renderQueue = (entries: TimerEntry[], roomId: number, position?: { global: number; room: number }) => {
+    const isGlobal = roomId === 0;
+    return (
+      <div className="space-y-1">
+        {entries.length === 0 ? (
+          <p className="text-center text-gray-400 py-6 text-sm">暂无消息</p>
+        ) : entries.map((e) => (
+          <div key={e.message_id}
+            className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
+            <span className="text-xs font-bold text-gray-400 w-8 text-center shrink-0">#{e.index + 1}</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-gray-800 dark:text-gray-200 truncate">{e.message}</p>
+              <p className="text-[10px] text-gray-400 font-mono mt-0.5">
+                {isGlobal ? '全局 · 所有直播间轮播' : `直播间 ${e.live_id}`} · {e.message_id}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button title="上移" disabled={busyId === e.message_id || e.index === 0}
+                onClick={() => handleMove(e, -1)}
+                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
+                <ChevronUp className="w-4 h-4" />
+              </button>
+              <button title="下移" disabled={busyId === e.message_id || e.index === entries.length - 1}
+                onClick={() => handleMove(e, 1)}
+                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
+                <ChevronDown className="w-4 h-4" />
+              </button>
+              <button title="跳过一次" onClick={() => handleSkip(e)}
+                className="p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 transition-colors">
+                <SkipForward className="w-4 h-4" />
+              </button>
+              <button title="编辑" onClick={() => openEdit(e)}
+                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                <Pencil className="w-4 h-4" />
+              </button>
+              <button title="删除" onClick={() => setDeleteTarget(e.message_id)}
+                className="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">定时消息队列</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            {entries.length} 条消息 · 按列表顺序轮转播报
+            {totalCount} 条消息 · 每个直播间先播全局消息，再播独立消息
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="ghost" icon={<RefreshCw />} onClick={load}>刷新</Button>
-          <Button variant="primary" icon={<Plus />} onClick={openAdd}>添加消息</Button>
         </div>
       </div>
 
-      {entries.length === 0 ? (
-        <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+      {/* 全局定时消息 */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+            <Globe className="w-4 h-4 text-primary-500" /> 全局定时消息
+            <span className="text-xs text-gray-400 font-normal">
+              （所有直播间轮播，{data.global.length} 条）
+            </span>
+          </h2>
+          <Button variant="primary" size="sm" icon={<Plus />} onClick={() => openAdd('0')}>
+            添加全局消息
+          </Button>
+        </div>
+        {renderQueue(data.global, 0)}
+      </div>
+
+      {/* 各直播间独立消息 */}
+      {data.rooms.length === 0 ? (
+        <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
           <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-500 dark:text-gray-400">暂无定时消息</p>
-          <p className="text-xs text-gray-400 mt-1">插件注册的定时消息会显示在这里</p>
+          <p className="text-gray-500 dark:text-gray-400">暂无直播间定时消息</p>
+          <p className="text-xs text-gray-400 mt-1">插件注册的直播间定时消息会显示在这里</p>
         </div>
       ) : (
-        <div className="space-y-1">
-          {entries.map((e) => (
-            <div key={e.message_id}
-              className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
-              <span className="text-xs font-bold text-gray-400 w-8 text-center shrink-0">#{e.index + 1}</span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm text-gray-800 dark:text-gray-200 truncate">{e.message}</p>
-                <p className="text-[10px] text-gray-400 font-mono mt-0.5">直播间 {e.live_id} · {e.message_id}</p>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button title="上移" disabled={busyId === e.message_id || e.index === 0}
-                  onClick={() => handleMove(e, -1)}
-                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
-                  <ChevronUp className="w-4 h-4" />
-                </button>
-                <button title="下移" disabled={busyId === e.message_id || e.index === entries.length - 1}
-                  onClick={() => handleMove(e, 1)}
-                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
-                  <ChevronDown className="w-4 h-4" />
-                </button>
-                <button title="跳过一次" onClick={() => handleSkip(e)}
-                  className="p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 transition-colors">
-                  <SkipForward className="w-4 h-4" />
-                </button>
-                <button title="编辑" onClick={() => openEdit(e)}
-                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button title="删除" onClick={() => setDeleteTarget(e.message_id)}
-                  className="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
+        data.rooms.map((room) => (
+          <div key={room.live_id}
+            className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                <Radio className="w-4 h-4 text-emerald-500" /> 直播间 {room.live_id}
+                <span className="text-xs text-gray-400 font-normal">
+                  （{room.messages.length} 条 · 全局指针 #{room.position.global + 1} · 独立指针 #{room.position.room + 1}）
+                </span>
+              </h2>
+              <Button variant="primary" size="sm" icon={<Plus />}
+                onClick={() => openAdd(String(room.live_id))}>
+                添加消息
+              </Button>
             </div>
-          ))}
-        </div>
+            {renderQueue(room.messages, room.live_id)}
+          </div>
+        ))
       )}
 
       {/* 添加/编辑对话框 */}
@@ -198,9 +256,11 @@ export function TimerPage() {
             <div className="p-5 space-y-3">
               {!editingId && (
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">直播间 ID</label>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    直播间 ID（0 = 全局消息）
+                  </label>
                   <input type="number" value={editLiveId} onChange={e => setEditLiveId(e.target.value)}
-                    placeholder="如 12345"
+                    placeholder="如 12345，或 0 表示全局"
                     className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm outline-none focus:ring-2 focus:ring-primary-500" />
                 </div>
               )}

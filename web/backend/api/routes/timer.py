@@ -41,16 +41,18 @@ async def timer_add(body: dict, s: MissevanServer = Depends(get_server)):
     """添加一条定时消息。
 
     请求体：``{"live_id": 12345, "message": "..."}``
+    ``live_id`` 为 ``0`` 时添加全局消息（适用于所有直播间）。
     """
     _require_bot(s)
     live_id = int(body.get("live_id", 0))
     message = str(body.get("message", "")).strip()
-    if live_id <= 0:
-        raise HTTPException(status_code=400, detail="live_id 必须为正数")
+    if live_id < 0:
+        raise HTTPException(status_code=400, detail="live_id 不能为负数")
     if not message:
         raise HTTPException(status_code=400, detail="消息内容不能为空")
     mid = s.register_timer_message(live_id, message)
-    return StatusResponse(success=True, message=f"已添加定时消息 {mid}")
+    scope = "全局" if live_id == 0 else f"直播间 {live_id}"
+    return StatusResponse(success=True, message=f"已添加{scope}定时消息 {mid}")
 
 
 @router.put("/{message_id}", response_model=StatusResponse)
