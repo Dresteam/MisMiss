@@ -622,6 +622,12 @@ class MissevanServer(ServerInterface):
         """跳过某条定时消息的下一次播报。"""
         return self._bot.skip_timer_message_once(message_id)
 
+    async def send_timer_message_now(
+        self, message_id: str, target_live_id: int | None = None
+    ) -> bool:
+        """立即发送一条定时消息。"""
+        return await self._bot.send_timer_message_now(message_id, target_live_id)
+
     def set_timer_interval(self, interval: float) -> None:
         """设置定时消息发送间隔（秒），实时生效，不重置位置指针。"""
         self._bot.timer_interval = interval

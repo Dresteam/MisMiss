@@ -694,6 +694,48 @@ class MissevanBot(Bot):
         _log.info("定时消息下次播报已跳过: id={}", message_id)
         return True
 
+    async def send_timer_message_now(
+        self, message_id: str, target_live_id: int | None = None
+    ) -> bool:
+        """立即发送一条定时消息，并推进对应指针（视为立即执行）。
+
+        - 直播间消息：发送到其所属直播间，其指针推进到该消息之后
+        - 全局消息：发送到 ``target_live_id``（必须提供），
+          该直播间的全局指针推进到该消息之后
+
+        :param message_id: 消息 ID
+        :param target_live_id: 全局消息的目标直播间 ID
+        :return: 是否成功发送
+        """
+        entry = self._find_timer_entry(message_id)
+        if entry is None:
+            return False
+
+        # 清除跳过一次的标记（本次已手动执行）
+        self._skip_pending.discard(message_id)
+
+        if entry.live_id == 0:
+            # 全局消息 → 目标直播间
+            if not target_live_id or target_live_id <= 0:
+                _log.warning("全局定时消息立即发送需要目标直播间: id={}", message_id)
+                return False
+            send_entry = _TimerEntry(entry.message_id, target_live_id, entry.message)
+            # 推进该直播间的全局指针越过这条消息
+            pos = self._room_positions.get(target_live_id)
+            if pos is not None and self._global_timer_cycle:
+                idx = self._global_timer_cycle.index(message_id)
+                pos["global"] = (idx + 1) % len(self._global_timer_cycle)
+        else:
+            send_entry = entry
+            pos = self._room_positions.get(entry.live_id)
+            cycle = self._room_timer_cycles.get(entry.live_id, [])
+            if pos is not None and cycle:
+                idx = cycle.index(message_id)
+                pos["room"] = (idx + 1) % len(cycle)
+
+        _log.info("定时消息立即发送: id={} live={}", message_id, send_entry.live_id)
+        return await self._send_message_entry(send_entry)
+
     # ------------------------------------------------------------------ #
     # 定时消息 —— 内部
     # ------------------------------------------------------------------ #
