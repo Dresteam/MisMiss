@@ -9,6 +9,14 @@ if not defined MISMISS_API_PORT set MISMISS_API_PORT=18080
 if not defined MISMISS_WEB_PORT set MISMISS_WEB_PORT=15173
 
 :: ------------------------------------------------------------------ %
+:: Port cleanup - 启动前清理占用端口的旧进程，防止重复启动
+:: ------------------------------------------------------------------ %
+call :cleanup_port %MISMISS_API_PORT% "MisMiss API"
+call :cleanup_port %MISMISS_WEB_PORT% "MisMiss Web"
+
+echo.
+
+:: ------------------------------------------------------------------ %
 :: Mode detection
 :: ------------------------------------------------------------------ %
 set MODE=dev
@@ -85,3 +93,31 @@ echo   API:    http://localhost:%MISMISS_API_PORT%/docs
 echo ========================================
 echo.
 pause
+exit /b 0
+
+:: ------------------------------------------------------------------ %
+:: cleanup_port <port> <window_title>
+::   1. 按窗口标题关闭旧进程窗口
+::   2. 查找占用端口的 LISTENING 进程并强制结束
+:: ------------------------------------------------------------------ %
+:cleanup_port
+setlocal
+set _PORT=%~1
+set _TITLE=%~2
+
+:: 1. 关闭同名窗口的旧进程
+taskkill /f /fi "WINDOWTITLE eq %_TITLE%*" >nul 2>&1
+
+:: 2. 查找占用端口的 PID 并结束
+set _KILLED=0
+for /f "tokens=5" %%p in ('netstat -aon ^| findstr ":%_PORT%" ^| findstr "LISTENING"') do (
+    taskkill /f /pid %%p >nul 2>&1
+    if not errorlevel 1 set _KILLED=1
+)
+if "%_KILLED%"=="1" (
+    echo [OK] Port %_PORT% cleared ^(old process stopped^)
+) else (
+    echo [OK] Port %_PORT% is free
+)
+endlocal & goto :eof
+
