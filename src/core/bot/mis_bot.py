@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections import namedtuple
 from typing import TYPE_CHECKING, Optional
@@ -98,6 +99,7 @@ class MissevanBot(Bot):
         self._timer_task: asyncio.Task[None] | None = None
         self._timer_interval: float = timer_interval
         self._skip_pending: set[str] = set()  # 跳过一次的标记集合
+        self._next_tick_at: float = 0.0  # 下一次播报的 monotonic 时间戳
 
         # 权限：创建后不可修改
         self.__permissions: BotPermission = permissions
@@ -554,27 +556,57 @@ class MissevanBot(Bot):
     # 定时消息队列管理（Web 控制台）
     # ------------------------------------------------------------------ #
 
-    def list_timer_messages(self) -> dict:
-        """列出全局与各直播间的定时消息（含执行位置指针）。
+    def timer_next_tick_in(self) -> float:
+        """距下一次播报的剩余秒数。"""
+        if self._next_tick_at <= 0:
+            return 0.0
+        return max(0.0, self._next_tick_at - time.monotonic())
 
-        :return: ``{"global": [...], "rooms": [{"live_id", "messages": [...], "position": {...}}]}``
+    def list_timer_messages(self) -> dict:
+        """列出全局与各直播间的定时消息（含执行位置指针与倒计时）。
+
+        :return: ``{"interval", "next_tick_in", "global": [...], "rooms": [...]}``
         """
+        interval = self._timer_interval
+        next_tick_in = self.timer_next_tick_in()
+
+        def _countdown(idx: int, pos: int, length: int) -> int:
+            """计算消息距下一次执行的秒数。
+
+            :param idx: 消息在队列中的索引
+            :param pos: 当前执行指针
+            :param length: 队列长度
+            """
+            if length <= 0:
+                return 0
+            ticks = (idx - pos) % length
+            return int(next_tick_in + ticks * interval)
+
         global_list = []
         for idx, mid in enumerate(self._global_timer_cycle):
             entry = self._global_timer_entries.get(mid)
             if entry is None:
                 continue
+            # 全局消息的倒计时取所有直播间中最近的执行时刻
+            min_cd = None
+            for live_id, pos in self._room_positions.items():
+                cd = _countdown(idx, pos.get("global", 0), len(self._global_timer_cycle))
+                if min_cd is None or cd < min_cd:
+                    min_cd = cd
             global_list.append({
                 "message_id": entry.message_id,
                 "live_id": 0,
                 "message": entry.message,
                 "index": idx,
+                "seconds_until_next": min_cd if min_cd is not None else 0,
             })
 
         rooms = []
         for live_id in sorted(self._room_timer_cycles.keys()):
             messages = []
-            for idx, mid in enumerate(self._room_timer_cycles[live_id]):
+            cycle = self._room_timer_cycles[live_id]
+            pos = self._room_positions.get(live_id, {"global": 0, "room": 0})
+            for idx, mid in enumerate(cycle):
                 entry = self._room_timer_entries.get(live_id, {}).get(mid)
                 if entry is None:
                     continue
@@ -583,14 +615,19 @@ class MissevanBot(Bot):
                     "live_id": live_id,
                     "message": entry.message,
                     "index": idx,
+                    "seconds_until_next": _countdown(idx, pos.get("room", 0), len(cycle)),
                 })
-            pos = self._room_positions.get(live_id, {"global": 0, "room": 0})
             rooms.append({
                 "live_id": live_id,
                 "messages": messages,
                 "position": dict(pos),
             })
-        return {"global": global_list, "rooms": rooms}
+        return {
+            "interval": interval,
+            "next_tick_in": int(next_tick_in),
+            "global": global_list,
+            "rooms": rooms,
+        }
 
     def _find_timer_entry(self, message_id: str) -> _TimerEntry | None:
         """在全局和各直播间队列中查找消息。"""
@@ -684,7 +721,9 @@ class MissevanBot(Bot):
         2. 按该直播间的独立指针发送一条直播间消息
         """
         while self._has_any_timer_messages():
+            self._next_tick_at = time.monotonic() + self._timer_interval
             await asyncio.sleep(self._timer_interval)
+            self._next_tick_at = 0.0
             if not self._has_any_timer_messages():
                 break
 

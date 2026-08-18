@@ -622,6 +622,10 @@ class MissevanServer(ServerInterface):
         """跳过某条定时消息的下一次播报。"""
         return self._bot.skip_timer_message_once(message_id)
 
+    def set_timer_interval(self, interval: float) -> None:
+        """设置定时消息发送间隔（秒），实时生效，不重置位置指针。"""
+        self._bot.timer_interval = interval
+
     def get_plugin_data_dir(self, plugin_name: str) -> str:
         pm = self._require_plugin_manager()
         if pm.get_plugin(plugin_name) is None:
