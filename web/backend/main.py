@@ -57,7 +57,7 @@ from core.logging import get_logger
 from core import MissevanServer
 from core.config import ServerConfig
 from api.deps import set_server
-from api.routes import bot, live, plugin, server, dashboard, ws, config, proxy, auth
+from api.routes import bot, live, plugin, server, dashboard, ws, config, proxy, auth, timer, update
 
 _log = get_logger("web.api")
 
@@ -158,6 +158,8 @@ app.include_router(ws.router, prefix="/api", tags=["WebSocket"])
 app.include_router(config.router, prefix="/api", tags=["Config"])
 app.include_router(proxy.router, prefix="/api", tags=["Proxy"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
+app.include_router(timer.router, prefix="/api/timer", tags=["Timer"])
+app.include_router(update.router, prefix="/api/update", tags=["Update"])
 
 
 # ------------------------------------------------------------------ #

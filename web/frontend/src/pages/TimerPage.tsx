@@ -1,0 +1,227 @@
+import { useEffect, useState, useCallback } from 'react';
+import {
+  Clock, Plus, Trash2, ChevronUp, ChevronDown, SkipForward,
+  Pencil, Loader2, RefreshCw, X,
+} from 'lucide-react';
+import { showToast } from '../hooks/useToast';
+import { Button } from '../components/Button';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+
+interface TimerEntry {
+  message_id: string;
+  live_id: number;
+  message: string;
+  index: number;
+}
+
+/** 定时消息队列管理页面 */
+export function TimerPage() {
+  const [entries, setEntries] = useState<TimerEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  // 添加 / 编辑对话框状态
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLiveId, setEditLiveId] = useState('');
+  const [editMessage, setEditMessage] = useState('');
+
+  // 删除确认
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const res = await fetch('/api/timer/list', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) setEntries(data);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const api = async (path: string, method: string, body?: any) => {
+    const token = localStorage.getItem('auth_token');
+    const res = await fetch('/api/timer' + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: '请求失败' }));
+      throw new Error(err.detail || '请求失败');
+    }
+    return res.json();
+  };
+
+  const openAdd = () => {
+    setEditingId(null);
+    setEditLiveId('');
+    setEditMessage('');
+    setEditorOpen(true);
+  };
+
+  const openEdit = (e: TimerEntry) => {
+    setEditingId(e.message_id);
+    setEditLiveId(String(e.live_id));
+    setEditMessage(e.message);
+    setEditorOpen(true);
+  };
+
+  const handleSave = async () => {
+    try {
+      if (editingId) {
+        await api(`/${editingId}`, 'PUT', { message: editMessage });
+        showToast('success', '定时消息已更新');
+      } else {
+        await api('/add', 'POST', { live_id: Number(editLiveId), message: editMessage });
+        showToast('success', '定时消息已添加');
+      }
+      setEditorOpen(false);
+      await load();
+    } catch (e: any) { showToast('error', '操作失败', e.message); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await api(`/${deleteTarget}`, 'DELETE');
+      showToast('success', '已删除');
+      setDeleteTarget(null);
+      await load();
+    } catch (e: any) { showToast('error', '删除失败', e.message); }
+  };
+
+  const handleMove = async (e: TimerEntry, direction: number) => {
+    setBusyId(e.message_id);
+    try {
+      await api(`/${e.message_id}/move`, 'POST', { direction });
+      await load();
+    } catch (err: any) { showToast('error', '移动失败', err.message); }
+    finally { setBusyId(null); }
+  };
+
+  const handleSkip = async (e: TimerEntry) => {
+    setBusyId(e.message_id);
+    try {
+      await api(`/${e.message_id}/skip`, 'POST');
+      showToast('success', '已跳过下一次播报');
+    } catch (err: any) { showToast('error', '操作失败', err.message); }
+    finally { setBusyId(null); }
+  };
+
+  if (loading) {
+    return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>;
+  }
+
+  return (
+    <div className="space-y-6 animate-fade-in max-w-5xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">定时消息队列</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            {entries.length} 条消息 · 按列表顺序轮转播报
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" icon={<RefreshCw />} onClick={load}>刷新</Button>
+          <Button variant="primary" icon={<Plus />} onClick={openAdd}>添加消息</Button>
+        </div>
+      </div>
+
+      {entries.length === 0 ? (
+        <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-500 dark:text-gray-400">暂无定时消息</p>
+          <p className="text-xs text-gray-400 mt-1">插件注册的定时消息会显示在这里</p>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {entries.map((e) => (
+            <div key={e.message_id}
+              className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
+              <span className="text-xs font-bold text-gray-400 w-8 text-center shrink-0">#{e.index + 1}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-gray-800 dark:text-gray-200 truncate">{e.message}</p>
+                <p className="text-[10px] text-gray-400 font-mono mt-0.5">直播间 {e.live_id} · {e.message_id}</p>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button title="上移" disabled={busyId === e.message_id || e.index === 0}
+                  onClick={() => handleMove(e, -1)}
+                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+                <button title="下移" disabled={busyId === e.message_id || e.index === entries.length - 1}
+                  onClick={() => handleMove(e, 1)}
+                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                <button title="跳过一次" onClick={() => handleSkip(e)}
+                  className="p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 transition-colors">
+                  <SkipForward className="w-4 h-4" />
+                </button>
+                <button title="编辑" onClick={() => openEdit(e)}
+                  className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button title="删除" onClick={() => setDeleteTarget(e.message_id)}
+                  className="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 添加/编辑对话框 */}
+      {editorOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={() => setEditorOpen(false)} />
+          <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 animate-slide-in-up">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+              <h3 className="font-semibold text-gray-900 dark:text-white">
+                {editingId ? '编辑定时消息' : '添加定时消息'}
+              </h3>
+              <button onClick={() => setEditorOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              {!editingId && (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">直播间 ID</label>
+                  <input type="number" value={editLiveId} onChange={e => setEditLiveId(e.target.value)}
+                    placeholder="如 12345"
+                    className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm outline-none focus:ring-2 focus:ring-primary-500" />
+                </div>
+              )}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">消息内容</label>
+                <textarea value={editMessage} onChange={e => setEditMessage(e.target.value)}
+                  rows={3} placeholder="定时播报的消息内容..."
+                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm outline-none focus:ring-2 focus:ring-primary-500 resize-y" />
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="ghost" size="sm" onClick={() => setEditorOpen(false)}>取消</Button>
+                <Button variant="primary" size="sm" onClick={handleSave} disabled={!editMessage.trim()}>保存</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog open={!!deleteTarget} title="删除定时消息"
+        message="确定删除这条定时消息吗？"
+        danger onConfirm={handleDelete} onCancel={() => setDeleteTarget(null)} />
+    </div>
+  );
+}

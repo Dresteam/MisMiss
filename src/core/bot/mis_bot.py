@@ -91,6 +91,7 @@ class MissevanBot(Bot):
         self._timer_cycle: list[str] = []  # message_id 轮转顺序
         self._timer_task: asyncio.Task[None] | None = None
         self._timer_interval: float = timer_interval
+        self._skip_pending: set[str] = set()  # 跳过一次的标记集合
 
         # 权限：创建后不可修改
         self.__permissions: BotPermission = permissions
@@ -520,6 +521,77 @@ class MissevanBot(Bot):
             self.unregister_timer_message(mid)
 
     # ------------------------------------------------------------------ #
+    # 定时消息队列管理（Web 控制台）
+    # ------------------------------------------------------------------ #
+
+    def list_timer_messages(self) -> list[dict]:
+        """按轮转顺序列出所有定时消息。
+
+        :return: ``[{message_id, live_id, message, index}, ...]``
+        """
+        result = []
+        for idx, mid in enumerate(self._timer_cycle):
+            entry = self._timer_entries.get(mid)
+            if entry is None:
+                continue
+            result.append({
+                "message_id": entry.message_id,
+                "live_id": entry.live_id,
+                "message": entry.message,
+                "index": idx,
+            })
+        return result
+
+    def update_timer_message(self, message_id: str, message: str) -> bool:
+        """编辑定时消息内容。
+
+        :param message_id: 消息 ID
+        :param message: 新消息文本
+        :return: 是否找到并更新
+        """
+        if message_id not in self._timer_entries:
+            return False
+        old = self._timer_entries[message_id]
+        self._timer_entries[message_id] = _TimerEntry(
+            message_id=old.message_id, live_id=old.live_id, message=message
+        )
+        _log.info("定时消息已更新: id={} msg={}", message_id, message[:30])
+        return True
+
+    def move_timer_message(self, message_id: str, direction: int) -> bool:
+        """在轮转队列中上移/下移一条定时消息。
+
+        :param message_id: 消息 ID
+        :param direction: ``-1`` 上移一位，``1`` 下移一位
+        :return: 是否成功移动
+        """
+        if message_id not in self._timer_cycle:
+            return False
+        idx = self._timer_cycle.index(message_id)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(self._timer_cycle):
+            return False  # 已在边界
+        self._timer_cycle[idx], self._timer_cycle[new_idx] = (
+            self._timer_cycle[new_idx], self._timer_cycle[idx]
+        )
+        _log.info("定时消息已移动: id={} {}→{}", message_id, idx, new_idx)
+        return True
+
+    def skip_timer_message_once(self, message_id: str) -> bool:
+        """跳过某条定时消息的下一次播报。
+
+        该消息到达队列头部时将被跳过一次（不发送），随后恢复正常轮转。
+
+        :param message_id: 消息 ID
+        :return: 是否成功标记
+        """
+        if message_id not in self._timer_entries:
+            return False
+        self._skip_pending.add(message_id)
+        _log.info("定时消息下次播报已跳过: id={}", message_id)
+        return True
+
+    # ------------------------------------------------------------------ #
     # 定时消息 —— 内部
     # ------------------------------------------------------------------ #
 
@@ -549,6 +621,14 @@ class MissevanBot(Bot):
             msg_id = self._timer_cycle.pop(0)
             entry = self._timer_entries.get(msg_id)
             if entry is None:
+                continue
+
+            # 跳过一次（不发送，仅清除标记）
+            if msg_id in self._skip_pending:
+                self._skip_pending.discard(msg_id)
+                _log.info("定时消息跳过一次: id={}", msg_id)
+                if entry.message_id in self._timer_entries:
+                    self._timer_cycle.append(msg_id)
                 continue
 
             # 发送（不抛异常阻塞循环）
