@@ -606,8 +606,8 @@ class MissevanServer(ServerInterface):
     def timer_message_count(self) -> int:
         return self._bot.timer_message_count
 
-    def list_timer_messages(self) -> list[dict]:
-        """按轮转顺序列出所有定时消息。"""
+    def list_timer_messages(self) -> dict:
+        """列出全局与各直播间的定时消息（含执行位置指针）。"""
         return self._bot.list_timer_messages()
 
     def update_timer_message(self, message_id: str, message: str) -> bool:

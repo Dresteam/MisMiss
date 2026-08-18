@@ -87,8 +87,14 @@ class MissevanBot(Bot):
         self._consumer_task: asyncio.Task[None] | None = None
 
         # 定时消息
-        self._timer_entries: dict[str, _TimerEntry] = {}
-        self._timer_cycle: list[str] = []  # message_id 轮转顺序
+        # 全局队列（live_id=0，适用于所有直播间）
+        self._global_timer_entries: dict[str, _TimerEntry] = {}
+        self._global_timer_cycle: list[str] = []
+        # 每个直播间独立的定时消息队列
+        self._room_timer_entries: dict[int, dict[str, _TimerEntry]] = {}
+        self._room_timer_cycles: dict[int, list[str]] = {}
+        # 每个直播间的执行位置指针: live_id -> {"global": int, "room": int}
+        self._room_positions: dict[int, dict[str, int]] = {}
         self._timer_task: asyncio.Task[None] | None = None
         self._timer_interval: float = timer_interval
         self._skip_pending: set[str] = set()  # 跳过一次的标记集合
@@ -472,21 +478,33 @@ class MissevanBot(Bot):
     def register_timer_message(self, live_id: int, message: str) -> str:
         """注册一条定时消息。
 
-        消息被加入轮转队列，每 ``timer_interval`` 秒发送一条，
-        确保不同插件的定时消息不会同时发送。
+        - ``live_id == 0`` → 加入全局队列（适用于所有直播间）
+        - ``live_id > 0`` → 加入该直播间的独立队列
 
-        :param live_id: 目标直播间 ID
+        每 ``timer_interval`` 秒对每个直播间先发送全局消息，
+        再发送该直播间的独立消息。
+
+        :param live_id: 目标直播间 ID（0 = 全局）
         :param message: 消息文本
         :return: 唯一消息 ID
         """
         message_id = uuid.uuid4().hex[:8]
         entry = _TimerEntry(message_id=message_id, live_id=live_id, message=message)
-        self._timer_entries[message_id] = entry
-        self._timer_cycle.append(message_id)
+
+        if live_id == 0:
+            self._global_timer_entries[message_id] = entry
+            self._global_timer_cycle.append(message_id)
+        else:
+            self._room_timer_entries.setdefault(live_id, {})[message_id] = entry
+            self._room_timer_cycles.setdefault(live_id, []).append(message_id)
+            # 初始化该直播间的执行位置指针
+            self._room_positions.setdefault(live_id, {"global": 0, "room": 0})
+
         self._ensure_timer_running()
         _log.info(
-            "定时消息已注册: id={} live={} msg={} 总数={}",
-            message_id, live_id, message[:30], len(self._timer_cycle),
+            "定时消息已注册: id={} live={} msg={} 全局={}",
+            message_id, live_id, message[:30],
+            "是" if live_id == 0 else "否",
         )
         return message_id
 
@@ -495,12 +513,24 @@ class MissevanBot(Bot):
 
         :param message_id: :meth:`register_timer_message` 返回的消息 ID
         """
-        if message_id in self._timer_entries:
-            del self._timer_entries[message_id]
-        self._timer_cycle = [m for m in self._timer_cycle if m != message_id]
-        _log.info(
-            "定时消息已取消: id={} 剩余={}", message_id, len(self._timer_cycle),
-        )
+        # 全局队列
+        if message_id in self._global_timer_entries:
+            del self._global_timer_entries[message_id]
+        self._global_timer_cycle = [m for m in self._global_timer_cycle if m != message_id]
+        # 各直播间队列
+        for live_id in list(self._room_timer_entries.keys()):
+            entries = self._room_timer_entries[live_id]
+            if message_id in entries:
+                del entries[message_id]
+            self._room_timer_cycles[live_id] = [
+                m for m in self._room_timer_cycles.get(live_id, []) if m != message_id
+            ]
+            # 直播间队列清空后清理位置指针
+            if not self._room_timer_cycles[live_id]:
+                self._room_timer_cycles.pop(live_id, None)
+                self._room_timer_entries.pop(live_id, None)
+                self._room_positions.pop(live_id, None)
+        _log.info("定时消息已取消: id={}", message_id)
 
     def register_timer_messages(
         self, entries: list[tuple[int, str]]
@@ -524,23 +554,52 @@ class MissevanBot(Bot):
     # 定时消息队列管理（Web 控制台）
     # ------------------------------------------------------------------ #
 
-    def list_timer_messages(self) -> list[dict]:
-        """按轮转顺序列出所有定时消息。
+    def list_timer_messages(self) -> dict:
+        """列出全局与各直播间的定时消息（含执行位置指针）。
 
-        :return: ``[{message_id, live_id, message, index}, ...]``
+        :return: ``{"global": [...], "rooms": [{"live_id", "messages": [...], "position": {...}}]}``
         """
-        result = []
-        for idx, mid in enumerate(self._timer_cycle):
-            entry = self._timer_entries.get(mid)
+        global_list = []
+        for idx, mid in enumerate(self._global_timer_cycle):
+            entry = self._global_timer_entries.get(mid)
             if entry is None:
                 continue
-            result.append({
+            global_list.append({
                 "message_id": entry.message_id,
-                "live_id": entry.live_id,
+                "live_id": 0,
                 "message": entry.message,
                 "index": idx,
             })
-        return result
+
+        rooms = []
+        for live_id in sorted(self._room_timer_cycles.keys()):
+            messages = []
+            for idx, mid in enumerate(self._room_timer_cycles[live_id]):
+                entry = self._room_timer_entries.get(live_id, {}).get(mid)
+                if entry is None:
+                    continue
+                messages.append({
+                    "message_id": entry.message_id,
+                    "live_id": live_id,
+                    "message": entry.message,
+                    "index": idx,
+                })
+            pos = self._room_positions.get(live_id, {"global": 0, "room": 0})
+            rooms.append({
+                "live_id": live_id,
+                "messages": messages,
+                "position": dict(pos),
+            })
+        return {"global": global_list, "rooms": rooms}
+
+    def _find_timer_entry(self, message_id: str) -> _TimerEntry | None:
+        """在全局和各直播间队列中查找消息。"""
+        if message_id in self._global_timer_entries:
+            return self._global_timer_entries[message_id]
+        for entries in self._room_timer_entries.values():
+            if message_id in entries:
+                return entries[message_id]
+        return None
 
     def update_timer_message(self, message_id: str, message: str) -> bool:
         """编辑定时消息内容。
@@ -549,43 +608,50 @@ class MissevanBot(Bot):
         :param message: 新消息文本
         :return: 是否找到并更新
         """
-        if message_id not in self._timer_entries:
+        old = self._find_timer_entry(message_id)
+        if old is None:
             return False
-        old = self._timer_entries[message_id]
-        self._timer_entries[message_id] = _TimerEntry(
+        new_entry = _TimerEntry(
             message_id=old.message_id, live_id=old.live_id, message=message
         )
+        if old.live_id == 0:
+            self._global_timer_entries[message_id] = new_entry
+        else:
+            self._room_timer_entries[old.live_id][message_id] = new_entry
         _log.info("定时消息已更新: id={} msg={}", message_id, message[:30])
         return True
 
     def move_timer_message(self, message_id: str, direction: int) -> bool:
-        """在轮转队列中上移/下移一条定时消息。
+        """在所属队列中上移/下移一条定时消息。
 
         :param message_id: 消息 ID
         :param direction: ``-1`` 上移一位，``1`` 下移一位
         :return: 是否成功移动
         """
-        if message_id not in self._timer_cycle:
+        old = self._find_timer_entry(message_id)
+        if old is None:
             return False
-        idx = self._timer_cycle.index(message_id)
+        cycle = (self._global_timer_cycle if old.live_id == 0
+                 else self._room_timer_cycles.get(old.live_id, []))
+        if message_id not in cycle:
+            return False
+        idx = cycle.index(message_id)
         new_idx = idx + direction
-        if new_idx < 0 or new_idx >= len(self._timer_cycle):
+        if new_idx < 0 or new_idx >= len(cycle):
             return False  # 已在边界
-        self._timer_cycle[idx], self._timer_cycle[new_idx] = (
-            self._timer_cycle[new_idx], self._timer_cycle[idx]
-        )
+        cycle[idx], cycle[new_idx] = cycle[new_idx], cycle[idx]
         _log.info("定时消息已移动: id={} {}→{}", message_id, idx, new_idx)
         return True
 
     def skip_timer_message_once(self, message_id: str) -> bool:
         """跳过某条定时消息的下一次播报。
 
-        该消息到达队列头部时将被跳过一次（不发送），随后恢复正常轮转。
+        该消息到达执行位置时将被跳过一次（不发送），随后恢复正常。
 
         :param message_id: 消息 ID
         :return: 是否成功标记
         """
-        if message_id not in self._timer_entries:
+        if self._find_timer_entry(message_id) is None:
             return False
         self._skip_pending.add(message_id)
         _log.info("定时消息下次播报已跳过: id={}", message_id)
@@ -611,64 +677,137 @@ class MissevanBot(Bot):
             _log.debug("定时消息循环已启动 间隔={}s", self._timer_interval)
 
     async def _run_timer(self) -> None:
-        """定时消息后台循环——每间隔发送一条，轮转队列。"""
-        while self._timer_cycle:
+        """定时消息后台循环。
+
+        每个间隔，对每个直播间：
+        1. 按该直播间的全局指针发送一条全局消息
+        2. 按该直播间的独立指针发送一条直播间消息
+        """
+        while self._has_any_timer_messages():
             await asyncio.sleep(self._timer_interval)
-            if not self._timer_cycle:
+            if not self._has_any_timer_messages():
                 break
 
-            # 取出队列头部
-            msg_id = self._timer_cycle.pop(0)
-            entry = self._timer_entries.get(msg_id)
-            if entry is None:
-                continue
+            room_ids = sorted(self._room_timer_cycles.keys())
+            for live_id in room_ids:
+                # 先全局，后独立
+                ok = await self._send_next_global(live_id)
+                if not ok:
+                    self._clear_all_timer_queues()
+                    return
+                ok = await self._send_next_room(live_id)
+                if not ok:
+                    self._clear_all_timer_queues()
+                    return
 
-            # 跳过一次（不发送，仅清除标记）
-            if msg_id in self._skip_pending:
-                self._skip_pending.discard(msg_id)
-                _log.info("定时消息跳过一次: id={}", msg_id)
-                if entry.message_id in self._timer_entries:
-                    self._timer_cycle.append(msg_id)
-                continue
+    def _has_any_timer_messages(self) -> bool:
+        """是否还有任何定时消息。"""
+        return bool(self._room_timer_cycles)
 
-            # 发送（不抛异常阻塞循环）
-            try:
-                self._check_enabled()
-                self._check_permission(BotPermission.SEND_LIVESTREAM_MESSAGE)
-                await self._ensure_initialized()
-                await self._safe_call(
-                    lambda: MessageSendAPI(self.__cookie).api(
-                        entry.live_id, entry.message
-                    )
+    def _advance_position(self, live_id: int, which: str, length: int) -> int:
+        """取当前位置并前进指针（循环轮转）。
+
+        :param live_id: 直播间 ID
+        :param which: ``"global"`` 或 ``"room"``
+        :param length: 队列长度
+        :return: 当前索引
+        """
+        pos = self._room_positions.setdefault(live_id, {"global": 0, "room": 0})
+        idx = pos[which] % max(1, length)
+        pos[which] = (idx + 1) % max(1, length)
+        return idx
+
+    async def _send_message_entry(self, entry: _TimerEntry) -> bool:
+        """发送一条定时消息（处理跳过与异常）。
+
+        :return: 是否正常发送（Cookie 过期返回 False 以停止循环）
+        """
+        msg_id = entry.message_id
+
+        # 跳过一次（不发送，仅清除标记）
+        if msg_id in self._skip_pending:
+            self._skip_pending.discard(msg_id)
+            _log.info("定时消息跳过一次: id={}", msg_id)
+            return True
+
+        try:
+            self._check_enabled()
+            self._check_permission(BotPermission.SEND_LIVESTREAM_MESSAGE)
+            await self._ensure_initialized()
+            await self._safe_call(
+                lambda: MessageSendAPI(self.__cookie).api(
+                    entry.live_id, entry.message
                 )
-                _log.info(
-                    "定时消息已发送: id={} live={} msg={}",
-                    msg_id, entry.live_id, entry.message[:30],
-                )
-            except CoreApiException as e:
-                err_str = str(e)
-                if "500030011" in err_str or "主播休息" in err_str:
-                    _log.debug("直播间未开播，定时消息已忽略 id={}", msg_id)
-                else:
-                    _log.warning("定时消息发送失败 id={}: {}", msg_id, e)
-            except CoreCookieException:
-                _log.error("Cookie 已过期，停止定时消息循环")
-                self._timer_cycle.clear()
-                self._timer_entries.clear()
-                return
-            except CoreDisabledException:
-                _log.warning("Bot 已停用，跳过定时消息 id={}", msg_id)
-            except Exception:
-                _log.exception("定时消息未预期异常 id={}", msg_id)
+            )
+            _log.info(
+                "定时消息已发送: id={} live={} msg={}",
+                msg_id, entry.live_id, entry.message[:30],
+            )
+        except CoreApiException as e:
+            err_str = str(e)
+            if "500030011" in err_str or "主播休息" in err_str:
+                _log.debug("直播间未开播，定时消息已忽略 id={}", msg_id)
+            else:
+                _log.warning("定时消息发送失败 id={}: {}", msg_id, e)
+        except CoreCookieException:
+            _log.error("Cookie 已过期，停止定时消息循环")
+            return False
+        except CoreDisabledException:
+            _log.warning("Bot 已停用，跳过定时消息 id={}", msg_id)
+        except Exception:
+            _log.exception("定时消息未预期异常 id={}", msg_id)
+        return True
 
-            # 放回队列尾部，循环轮转
-            if entry.message_id in self._timer_entries:
-                self._timer_cycle.append(msg_id)
+    async def _send_next_global(self, live_id: int) -> bool:
+        """按直播间指针发送下一条全局消息。
+
+        :return: 是否继续循环（Cookie 过期时返回 False）
+        """
+        if not self._global_timer_cycle:
+            return True
+        idx = self._advance_position(live_id, "global", len(self._global_timer_cycle))
+        msg_id = self._global_timer_cycle[idx]
+        entry = self._global_timer_entries.get(msg_id)
+        if entry is None:
+            return True
+        # 全局消息发送到目标直播间（entry.live_id == 0，重定向到 live_id）
+        if entry.message_id in self._skip_pending:
+            self._skip_pending.discard(entry.message_id)
+            _log.info("全局定时消息跳过一次: id={} live={}", entry.message_id, live_id)
+            return True
+        redirected = _TimerEntry(entry.message_id, live_id, entry.message)
+        return await self._send_message_entry(redirected)
+
+    async def _send_next_room(self, live_id: int) -> bool:
+        """按直播间指针发送下一条该直播间的独立消息。
+
+        :return: 是否继续循环（Cookie 过期时返回 False）
+        """
+        cycle = self._room_timer_cycles.get(live_id, [])
+        if not cycle:
+            return True
+        idx = self._advance_position(live_id, "room", len(cycle))
+        msg_id = cycle[idx]
+        entry = self._room_timer_entries.get(live_id, {}).get(msg_id)
+        if entry is None:
+            return True
+        return await self._send_message_entry(entry)
+
+    def _clear_all_timer_queues(self) -> None:
+        """清空所有定时消息队列（Cookie 过期时调用）。"""
+        self._global_timer_entries.clear()
+        self._global_timer_cycle.clear()
+        self._room_timer_entries.clear()
+        self._room_timer_cycles.clear()
+        self._room_positions.clear()
+        self._skip_pending.clear()
 
     @property
     def timer_message_count(self) -> int:
         """当前注册的定时消息数量（只读）。"""
-        return len(self._timer_cycle)
+        return len(self._global_timer_cycle) + sum(
+            len(c) for c in self._room_timer_cycles.values()
+        )
 
     # ------------------------------------------------------------------ #
     # 辅助方法
