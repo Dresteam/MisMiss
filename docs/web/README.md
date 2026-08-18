@@ -7,7 +7,7 @@
 ```
 web/
 ├── backend/                    # FastAPI 后端
-│   ├── main.py                 # 应用入口（lifespan、CORS、路由注册）
+│   ├── main.py                 # 应用入口（lifespan、CORS、认证中间件、路由注册、SPA fallback）
 │   ├── requirements.txt        # Python 依赖
 │   ├── api/
 │   │   ├── deps.py             # Server 单例依赖注入
@@ -18,38 +18,60 @@ web/
 │   │       ├── plugin.py       # 插件生命周期/权限/配置 API
 │   │       ├── server.py       # 服务器控制 API
 │   │       ├── dashboard.py    # 仪表盘聚合 API
+│   │       ├── timer.py        # 定时消息队列 API
+│   │       ├── update.py       # 程序更新 API（GitHub Releases）
+│   │       ├── auth.py         # 登录认证 API
+│   │       ├── config.py       # 服务器配置 & 日志等级 API
+│   │       ├── proxy.py        # 反向代理 API
 │   │       └── ws.py           # WebSocket 实时日志
 │   └── __init__.py
 ├── frontend/                   # React + TypeScript + Vite + Tailwind CSS
 │   ├── package.json
-│   ├── vite.config.ts
-│   ├── tailwind.config.js
+│   ├── vite.config.ts          # 端口 15173，/api 代理到 18080
+│   ├── tailwind.config.js      # zinc 中性灰 + primary 主题色
 │   ├── index.html
 │   └── src/
 │       ├── main.tsx            # React 入口
-│       ├── App.tsx             # 路由 & 全局状态
-│       ├── index.css           # Tailwind + 组件样式
+│       ├── App.tsx             # 路由 & 全局状态（登录/主题）
+│       ├── index.css           # Tailwind + 组件样式（卡片/按钮/徽章/Markdown）
 │       ├── api/
 │       │   ├── client.ts       # API 客户端（所有 REST 调用）
 │       │   └── types.ts        # TypeScript 类型定义
 │       ├── hooks/
-│       │   ├── useToast.ts     # Toast 通知系统
-│       │   └── useWebSocket.ts # WebSocket 日志连接
+│       │   ├── useAuth.ts      # 登录认证状态
+│       │   ├── useLogStream.ts # WebSocket 日志流
+│       │   └── useToast.ts     # Toast 通知系统
 │       ├── components/
-│       │   ├── Layout.tsx      # 全局布局（侧边栏 + 内容 + Toast + 日志）
-│       │   ├── Sidebar.tsx     # 左侧导航栏
+│       │   ├── Layout.tsx      # 全局布局（分组侧边栏 + 移动端抽屉 + Toast）
+│       │   ├── Sidebar.tsx     # 左侧分组导航栏（含版本号）
+│       │   ├── Button.tsx      # 按钮组件（含自定义悬浮提示）
+│       │   ├── HoverTip.tsx    # 自定义悬浮提示（替代原生 title）
 │       │   ├── Toast.tsx       # Toast 通知渲染
 │       │   ├── StatusBadge.tsx # 状态指示点组件
 │       │   ├── ConfirmDialog.tsx # 二次确认弹窗
-│       │   ├── LogViewer.tsx   # 底部日志抽屉
+│       │   ├── MarkdownRenderer.tsx # Markdown 渲染（GFM/数学/HTML）
+│       │   ├── MarqueeText.tsx # 文字跑马灯
+│       │   ├── RoomSelect.tsx  # 直播间选择器
 │       │   ├── PluginDrawer.tsx # 插件详情抽屉
+│       │   ├── PluginUI.tsx    # 插件声明式 UI 渲染器
+│       │   ├── InstallModal.tsx # 插件安装弹窗（SSE 实时日志）
+│       │   ├── ReadmeModal.tsx  # README/文档弹窗
+│       │   ├── UninstallDialog.tsx # 卸载确认弹窗
+│       │   ├── UpdateDialog.tsx # 插件更新弹窗
+│       │   ├── AccountSetup.tsx # 账户设置（首次改密）
 │       │   └── DynamicConfigForm.tsx # 动态配置表单生成器
 │       └── pages/
 │           ├── Dashboard.tsx   # 仪表盘（统计 + 饼图）
 │           ├── BotPage.tsx     # Bot 管理（创建/信息/权限/Cookie）
 │           ├── LivePage.tsx    # 直播间管理（列表/添加/弹幕）
 │           ├── PluginPage.tsx  # 插件中心（列表/启停/配置/权限）
-│           └── ServerPage.tsx  # 服务器设置（状态/重载/关闭）
+│           ├── PluginPageView.tsx # 插件自定义 UI 页面
+│           ├── TimerPage.tsx   # 定时消息队列（合并轮转/倒计时）
+│           ├── UpdatePage.tsx  # 程序更新（版本列表/镜像站/回滚）
+│           ├── LogsPage.tsx    # 服务器日志（虚拟滚动）
+│           ├── SettingsPage.tsx # 设置（账户/日志/端口/配置）
+│           ├── ServerPage.tsx  # 服务器设置（状态/重载/关闭）
+│           └── LoginPage.tsx   # 登录页
 └── README.md
 ```
 
@@ -77,8 +99,8 @@ npm install
 python -m web.backend.main
 ```
 
-API 将在 http://localhost:8000 启动。
-API 文档: http://localhost:8000/docs
+API 将在 http://localhost:18080 启动。
+API 文档: http://localhost:18080/docs
 
 ### 4. 启动前端开发服务器
 
@@ -87,7 +109,9 @@ cd web/frontend/
 npm run dev
 ```
 
-前端将在 http://localhost:5173 启动，自动代理 API 请求到后端。
+前端将在 http://localhost:15173 启动，自动代理 `/api` 请求到后端（18080）。
+
+也可以在项目根目录直接使用 `start.bat`（开发模式一键启动前后端）或 `start.bat prod`（生产单端口模式：:18080 同时提供前端与 API）。
 
 ### 5. 生产构建
 
@@ -161,10 +185,56 @@ npm run build
 |------|------|
 | `/api/ws` | 实时日志推送 |
 
+### 日志
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/logs/history?since=&limit=` | 历史日志分页查询 |
+| GET | `/api/logs/gap?from=&to=` | 断线补发 |
+| GET | `/api/logs/stats` | 环形缓冲区统计 |
+
+### 定时消息
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/timer/list` | 定时消息列表（合并轮转 + 倒计时） |
+| PUT | `/api/timer/interval` | 修改发送间隔（实时生效并持久化） |
+| POST | `/api/timer/add` | 添加消息（`live_id=0` 为全局） |
+| PUT | `/api/timer/{id}` | 编辑消息内容 |
+| DELETE | `/api/timer/{id}` | 删除消息 |
+| POST | `/api/timer/{id}/move` | 上移/下移 |
+| POST | `/api/timer/{id}/skip` | 跳过当前指针处消息（指针后移） |
+| POST | `/api/timer/{id}/send` | 立即发送 |
+
+### 程序更新
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/update/info` | 当前版本与更新配置 |
+| GET | `/api/update/check` | 检测最新版本（语义版本比较） |
+| GET | `/api/update/changelog/{version}` | 指定版本更新日志 |
+| POST | `/api/update/settings` | 保存更新配置（仓库/镜像/代理） |
+| POST | `/api/update/apply` | 执行更新（备份→下载→覆盖→重启） |
+| POST | `/api/update/rollback` | 回滚到备份版本 |
+
+### 认证
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/auth/login` | 登录（默认 MisMiss/MisMiss） |
+| GET | `/api/auth/check` | 验证 token |
+| POST | `/api/auth/skip-first-login` | 跳过首次登录引导 |
+
+### 配置
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/config` | 读取完整配置 |
+| PUT | `/api/config` | 合并写入配置 |
+| PUT | `/api/config/log-level` | 动态修改日志等级 |
+| PUT | `/api/config/ports` | 修改 API 端口并重启 |
+| GET | `/api/config/cookie` | 从持久化文件直读 Cookie |
+
 ## 技术栈
 
 - **后端**: Python FastAPI + Pydantic v2 + uvicorn
-- **前端**: React 18 + TypeScript + Vite + Tailwind CSS 3
+- **前端**: React 18 + TypeScript + Vite + Tailwind CSS 3（zinc 中性灰主题）
 - **图标**: Lucide React
 - **图表**: Recharts
-- **Markdown**: react-markdown
+- **Markdown**: react-markdown + remark-gfm/math + rehype-katex/raw（GFM、数学公式、内联 HTML）
+- **代码高亮**: react-syntax-highlighter

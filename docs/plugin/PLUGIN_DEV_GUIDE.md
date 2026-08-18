@@ -412,7 +412,7 @@ API 返回格式：`[{"name":"Alice","status":"活跃","score":98.6,...}]` 或 `
 
 #### playlist — 完整点播单
 
-扩展 `table`，提供：房间选择器、统计栏、批量操作工具栏、行内状态图标、每个状态的状态切换按钮。
+扩展 `table`，提供：房间选择器（按 `room_id` 隔离的多直播间点播单）、统计栏、批量操作工具栏（批量状态切换 + 批量删除 + 清空点播单二次确认，工具栏固定底部不挤压列表）、行内状态图标、每个状态的状态切换按钮（变更同步通知直播间）。
 
 ```json
 {
@@ -557,6 +557,26 @@ PluginManager                    PluginManager                    EventBus
 | `self.data_dir` | `str` | 实例化后 | 数据目录路径 |
 | `self.data` | `PluginDataManager\|None` | 实例化后 | 数据文件管理器 |
 | `self.permissions` | `dict\|None` | `__init__` | 运行时权限 |
+| `self._server` | `MissevanServer` | 实例化后 | 服务器引用（直播间列表、定时消息等） |
+
+### 服务引用（self._server）
+
+框架将 `MissevanServer` 实例注入插件，可用于查询直播间列表、注册定时消息等：
+
+```python
+async def initialize(self, config: MissConfig) -> None:
+    # 直播间列表（含已连接与事件中见过的直播间）
+    lives = self._server.livestreams  # dict[int, MissevanLivestream]
+
+    # 定时消息：live_id=0 为全局（所有直播间轮播），>0 为直播间独立消息
+    mid = self._server.register_timer_message(0, "全局轮播消息")
+    mid2 = self._server.register_timer_message(12345, "本直播间欢迎语")
+
+    # 取消注册
+    self._server.unregister_timer_message(mid)
+```
+
+**定时消息合并轮转**：每个直播间按「全局消息在前、独立消息在后」组成合并轮转，每 `timer_interval` 秒发送一条（间隔可通过 Web 控制台实时修改并持久化到 `config.yml`），确保各条消息不会同时发送。更多操作见 `MissevanServer` 的 `list_timer_messages()` / `update_timer_message()` / `move_timer_message()` / `skip_timer_message_once()` / `send_timer_message_now()`。
 
 ### Plugin 生命周期方法
 
