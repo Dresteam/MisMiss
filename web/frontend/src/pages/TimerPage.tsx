@@ -203,7 +203,11 @@ export function TimerPage() {
 
   /** 渲染一条消息卡片。isNext: 是否为即将执行的消息（仅该消息可跳过/立即发送） */
   const renderEntry = (e: TimerEntry, isNext: boolean, entriesCount: number, scope: 'global' | 'room') => {
-    const cd = Math.max(0, e.seconds_until_next - tick);
+    // 倒计时采用取模滚动：到达 0 后自动回到完整周期，
+    // 即使消息被立即发送/跳过（服务器指针推进）也能持续同步
+    const cycleSeconds = Math.max(1, entriesCount) * Math.max(1, data.interval);
+    const remaining = e.seconds_until_next - tick;
+    const cd = ((remaining % cycleSeconds) + cycleSeconds) % cycleSeconds;
     return (
       <div key={e.message_id}
         className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
