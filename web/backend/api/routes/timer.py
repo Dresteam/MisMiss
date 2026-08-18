@@ -32,8 +32,27 @@ def _require_bot(s: MissevanServer):
 
 @router.get("/list")
 async def timer_list(s: MissevanServer = Depends(get_server)):
-    """列出所有定时消息（按轮转顺序）。"""
+    """列出所有定时消息（含倒计时与执行指针）。"""
     return s.list_timer_messages()
+
+
+@router.put("/interval", response_model=StatusResponse)
+async def timer_set_interval(body: dict, s: MissevanServer = Depends(get_server)):
+    """修改定时消息发送间隔（秒）。
+
+    请求体：``{"interval": 120}``
+    实时生效，不重置各直播间的执行位置指针。
+    """
+    _require_bot(s)
+    interval = body.get("interval")
+    try:
+        interval = float(interval)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="interval 必须为数字")
+    if interval < 1:
+        raise HTTPException(status_code=400, detail="间隔必须 >= 1 秒")
+    s.set_timer_interval(interval)
+    return StatusResponse(success=True, message=f"定时消息间隔已设为 {interval:g} 秒")
 
 
 @router.post("/add", response_model=StatusResponse)
