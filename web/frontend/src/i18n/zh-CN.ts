@@ -35,6 +35,8 @@ const zhCN = {
     pluginCenter: '插件中心',
     server: '服务器',
     logs: '日志',
+    timer: '定时消息',
+    update: '程序更新',
     settings: '设置',
     lightMode: '浅色模式',
     darkMode: '深色模式',

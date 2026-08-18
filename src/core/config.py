@@ -31,6 +31,11 @@ _DEFAULTS: dict[str, Any] = {
     "plugin": {
         "pip_mirror": "https://pypi.tuna.tsinghua.edu.cn/simple",
     },
+    "update": {
+        "repo": "Dresteam/MisMiss",
+        "mirror": "",
+        "proxy": "",
+    },
     "logging": {
         "dir": "logs",
     },

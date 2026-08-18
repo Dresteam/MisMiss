@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Bot, Radio, Puzzle, Server, Settings,
   Moon, Sun, Terminal, ChevronLeft, ChevronRight, LogOut,
+  Clock, Download,
 } from 'lucide-react';
 import { t } from '../i18n';
 import { useAuth } from '../hooks/useAuth';
@@ -18,8 +19,10 @@ const navItems = [
   { to: '/bot', icon: Bot, label: t('sidebar.botManagement') },
   { to: '/live', icon: Radio, label: t('sidebar.livestream') },
   { to: '/plugin', icon: Puzzle, label: t('sidebar.pluginCenter') },
+  { to: '/timer', icon: Clock, label: t('sidebar.timer') },
   { to: '/server', icon: Server, label: t('sidebar.server') },
   { to: '/logs', icon: Terminal, label: t('sidebar.logs') },
+  { to: '/update', icon: Download, label: t('sidebar.update') },
   { to: '/settings', icon: Settings, label: t('sidebar.settings') },
 ];
 

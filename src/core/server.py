@@ -606,6 +606,22 @@ class MissevanServer(ServerInterface):
     def timer_message_count(self) -> int:
         return self._bot.timer_message_count
 
+    def list_timer_messages(self) -> list[dict]:
+        """按轮转顺序列出所有定时消息。"""
+        return self._bot.list_timer_messages()
+
+    def update_timer_message(self, message_id: str, message: str) -> bool:
+        """编辑定时消息内容。"""
+        return self._bot.update_timer_message(message_id, message)
+
+    def move_timer_message(self, message_id: str, direction: int) -> bool:
+        """上移/下移定时消息。"""
+        return self._bot.move_timer_message(message_id, direction)
+
+    def skip_timer_message_once(self, message_id: str) -> bool:
+        """跳过某条定时消息的下一次播报。"""
+        return self._bot.skip_timer_message_once(message_id)
+
     def get_plugin_data_dir(self, plugin_name: str) -> str:
         pm = self._require_plugin_manager()
         if pm.get_plugin(plugin_name) is None:
