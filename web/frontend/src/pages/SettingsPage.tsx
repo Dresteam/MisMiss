@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Settings, Save, RotateCcw, Loader2 } from 'lucide-react';
 import { Button } from '../components/Button';
+import { HoverTip } from '../components/HoverTip';
 import { AccountSetup } from '../components/AccountSetup';
 import { useAuth } from '../hooks/useAuth';
 import { showToast } from '../hooks/useToast';
@@ -201,27 +202,6 @@ export function SettingsPage() {
         </div>
       </div>
 
-      {/* Timer Interval Section */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-900 dark:text-white">
-          定时消息
-        </div>
-        <div className="p-6">
-          <div className="flex items-end gap-4">
-            <div className="w-48">
-              <label className="block text-xs text-gray-500 mb-1">发送间隔（秒）</label>
-              <input type="number" min={1}
-                value={editConfig?.bot?.timer_interval ?? 60}
-                onChange={(e) => updateField('bot', 'timer_interval', Number(e.target.value) || 60)}
-                className="input text-sm" />
-            </div>
-          </div>
-          <p className="text-xs text-gray-400 mt-2">
-            修改后立即生效，无需重启。
-          </p>
-        </div>
-      </div>
-
       {/* Server Config Section */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
         <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 font-semibold text-gray-900 dark:text-white flex items-center gap-2">
@@ -276,8 +256,9 @@ function ConfigSection({
       <div className="space-y-3 pl-2 border-l-2 border-gray-100 dark:border-gray-700">
         {Object.entries(fields).map(([key, value]) => (
           <div key={key} className="flex items-center gap-3">
-            <label className="w-32 text-xs text-gray-500 dark:text-gray-400 shrink-0 truncate" title={key}>
+            <label className="relative group w-32 text-xs text-gray-500 dark:text-gray-400 shrink-0 truncate">
               {FIELD_LABELS[key] || key}
+              <HoverTip text={key} />
             </label>
             {typeof value === 'boolean' ? (
               <button

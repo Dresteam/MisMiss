@@ -52,7 +52,7 @@ async def timer_set_interval(body: dict, s: MissevanServer = Depends(get_server)
     if interval < 1:
         raise HTTPException(status_code=400, detail="间隔必须 >= 1 秒")
     s.set_timer_interval(interval)
-    return StatusResponse(success=True, message=f"定时消息间隔已设为 {interval:g} 秒")
+    return StatusResponse(success=True, message=f"定时消息间隔已设为 {interval:g} 秒（已持久化）")
 
 
 @router.post("/add", response_model=StatusResponse)
@@ -113,12 +113,24 @@ async def timer_move(message_id: str, body: dict, s: MissevanServer = Depends(ge
 
 
 @router.post("/{message_id}/skip", response_model=StatusResponse)
-async def timer_skip(message_id: str, s: MissevanServer = Depends(get_server)):
-    """跳过某条定时消息的下一次播报。"""
+async def timer_skip(message_id: str, body: dict, s: MissevanServer = Depends(get_server)):
+    """跳过当前指针处的定时消息（指针后移一位，计时器保持）。
+
+    请求体：``{"live_id": 12345}``（全局消息需要目标直播间 ID）
+    """
     _require_bot(s)
-    if not s.skip_timer_message_once(message_id):
-        raise HTTPException(status_code=404, detail=f"定时消息 {message_id} 不存在")
-    return StatusResponse(success=True, message="已跳过下一次播报")
+    target = None
+    try:
+        t = body.get("live_id")
+        target = int(t) if t not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        target = None
+    if not s.skip_timer_message_once(message_id, target):
+        raise HTTPException(
+            status_code=400,
+            detail="无法跳过（消息不存在或不在当前指针处）",
+        )
+    return StatusResponse(success=True, message="已跳过，指针已后移")
 
 
 @router.post("/{message_id}/send", response_model=StatusResponse)
