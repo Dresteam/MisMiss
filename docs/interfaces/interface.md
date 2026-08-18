@@ -247,7 +247,7 @@ from interfaces.livestream import Livestream
 
 | 方法 | 参数 | 说明 |
 |------|------|------|
-| `send_message` | `message: str` | 发送消息（委托给 `bot.send_livestream_message`） |
+| `send_message` | `message: str, priority: int = 0` | 发送消息（委托给 `bot.send_livestream_message`，值越大越优先） |
 | `send_gift` | `gift_id: int, num: int` | 赠送礼物（委托给 `bot.send_livestream_gift`） |
 | `send_backpack` | `gift_id: int, num: int` | 赠送背包礼物（委托给 `bot.send_livestream_backpack`） |
 
@@ -272,17 +272,42 @@ from interfaces.livestream import LivestreamManager
 ### 6.1 Bot —— 机器人接口
 
 ```python
-from interfaces.bot import Bot
+from interfaces.bot import Bot, BotPermission
 ```
 
-继承 `User`。出于账号安全考虑，不暴露 Cookie。
+继承 `User`。出于账号安全考虑，Cookie 不直接暴露，获取需 `EXPOSE_COOKIE` 权限。
+
+**权限（`BotPermission` Flag，创建后不可修改）：**
+
+| 权限 | 说明 |
+|------|------|
+| `SEND_LIVESTREAM_MESSAGE` | 发送直播间消息（默认授予） |
+| `SEND_PRIVATE_MESSAGE` | 发送私信（预留） |
+| `SEND_BACKPACK_GIFT` | 赠送背包礼物 |
+| `SEND_GIFT` | 赠送直售礼物 |
+| `EXPOSE_COOKIE` | 获取 Cookie |
+
+**启停控制：** `enabled` 属性——停用后所有操作抛出禁用异常；权限不足时抛出权限异常。
 
 | 方法 | 参数 | 返回 | 说明 |
 |------|------|------|------|
-| `send_livestream_message` | `live_id: int`, `message: str` | `None` | 向直播间发送消息 |
+| `send_livestream_message` | `live_id: int`, `message: str`, `priority: int = 0` | `None` | 向直播间发送消息（优先级队列，值越大越优先） |
+| `send_private_message` | `user_id: int`, `message: str` | `None` | 发送私信（预留） |
 | `get_backpack_gifts` | `live_id: int` | `list[Gift]` | 获取机器人背包礼物列表 |
 | `send_livestream_gift` | `live_id: int`, `gift_id: int`, `num: int` | `None` | 通过礼物 ID 向直播间赠送礼物 |
 | `send_livestream_backpack` | `live_id: int`, `gift_id: int`, `num: int` | `None` | 向直播间赠送背包内礼物 |
+| `refresh` | — | `None` | 刷新机器人信息并验证 Cookie |
+| `get_cookie` | — | `str` | 获取 Cookie（需 `EXPOSE_COOKIE`） |
+| `register_timer_message` | `live_id: int`, `message: str` | `str` | 注册定时消息，返回消息 ID |
+| `unregister_timer_message` | `message_id: str` | `None` | 取消注册的定时消息 |
+| `register_timer_messages` | `entries: list[tuple[int, str]]` | `list[str]` | 批量注册定时消息 |
+| `unregister_timer_messages` | `message_ids: list[str]` | `None` | 批量取消定时消息 |
+
+**定时消息（合并轮转）：**
+
+- `live_id=0` 注册为全局消息，所有直播间轮播
+- `live_id>0` 注册为该直播间的独立消息
+- 每个直播间按「全局消息在前、独立消息在后」组成合并轮转，每 `timer_interval` 秒发送**一条**，确保各条消息不会同时发送
 
 ---
 
@@ -400,7 +425,7 @@ from interfaces import Event, Listener, event_handler, RequestFailedException
 | `Question` | `livestream`, `user`, `question_id`, `text`, `price` |
 | `Livestream` | `is_connected`, `live_id`, `room_name`, `room_description`, `score`, `creator`, `bot`, `send_message`, `send_gift`, `send_backpack` + EventManager 的 3 个方法 |
 | `LivestreamManager` | `livestream_list`, `get_livestream`, `get_livestream_if_absent`, `register_new_livestream`, `unregister_livestream` |
-| `Bot` | User 的 4 项 + `send_livestream_message`, `get_backpack_gifts`, `send_livestream_gift`, `send_livestream_backpack` |
+| `Bot` | User 的 4 项 + `enabled`, `permissions`, `send_livestream_message`, `send_private_message`, `get_backpack_gifts`, `send_livestream_gift`, `send_livestream_backpack`, `refresh`, `get_cookie`, `register_timer_message`, `unregister_timer_message`, `register_timer_messages`, `unregister_timer_messages` |
 | `LivestreamEvent` | `livestream` |
 | `LivestreamUserEvent` | 上述 1 项 + `user` |
 | `LiveMessageEvent` | 上述 2 项 + `message` |
