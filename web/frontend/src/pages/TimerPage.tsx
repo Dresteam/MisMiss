@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
+import { HoverTip } from '../components/HoverTip';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface TimerEntry {
@@ -18,7 +19,8 @@ interface TimerEntry {
 interface RoomQueue {
   live_id: number;
   messages: TimerEntry[];
-  position: { global: number; room: number };
+  /** 合并轮转位置（全局 + 独立消息，单指针） */
+  position: number;
 }
 
 interface TimerData {
@@ -61,8 +63,9 @@ export function TimerPage() {
   const [intervalInput, setIntervalInput] = useState('');
   const [savingInterval, setSavingInterval] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // soft=true 时静默更新列表数据，不显示整页加载动画（操作后局部刷新用）
+  const load = useCallback(async (soft = false) => {
+    if (!soft) setLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
       const res = await fetch('/api/timer/list', {
@@ -81,7 +84,7 @@ export function TimerPage() {
         });
       }
     } catch { /* ignore */ }
-    finally { setLoading(false); }
+    finally { if (!soft) setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -92,9 +95,9 @@ export function TimerPage() {
     return () => { if (tickerRef.current) clearInterval(tickerRef.current); };
   }, []);
 
-  // 每 30 秒从服务器重新同步一次（校准倒计时）
+  // 每 30 秒静默同步一次（校准倒计时，不闪烁整页）
   useEffect(() => {
-    const sync = setInterval(() => load(), 30000);
+    const sync = setInterval(() => load(true), 30000);
     return () => clearInterval(sync);
   }, [load]);
 
@@ -139,7 +142,7 @@ export function TimerPage() {
         showToast('success', '定时消息已添加');
       }
       setEditorOpen(false);
-      await load();
+      await load(true);
     } catch (e: any) { showToast('error', '操作失败', e.message); }
   };
 
@@ -149,7 +152,7 @@ export function TimerPage() {
       await api(`/${deleteTarget}`, 'DELETE');
       showToast('success', '已删除');
       setDeleteTarget(null);
-      await load();
+      await load(true);
     } catch (e: any) { showToast('error', '删除失败', e.message); }
   };
 
@@ -157,7 +160,7 @@ export function TimerPage() {
     setBusyId(e.message_id);
     try {
       await api(`/${e.message_id}/move`, 'POST', { direction });
-      await load();
+      await load(true);
     } catch (err: any) { showToast('error', '移动失败', err.message); }
     finally { setBusyId(null); }
   };
@@ -165,9 +168,10 @@ export function TimerPage() {
   const handleSkip = async (e: TimerEntry) => {
     setBusyId(e.message_id);
     try {
-      await api(`/${e.message_id}/skip`, 'POST');
-      showToast('success', '已跳过下一次播报');
-      await load();
+      // 跳过 = 指针后移一位（全局消息需指定目标直播间）
+      const res = await api(`/${e.message_id}/skip`, 'POST', { live_id: roomFilter });
+      showToast('success', res.message || '已跳过，指针已后移');
+      await load(true);
     } catch (err: any) { showToast('error', '操作失败', err.message); }
     finally { setBusyId(null); }
   };
@@ -177,7 +181,7 @@ export function TimerPage() {
     try {
       await api(`/${e.message_id}/send`, 'POST', { live_id: roomFilter });
       showToast('success', '已立即发送');
-      await load();
+      await load(true);
     } catch (err: any) { showToast('error', '发送失败', err.message); }
     finally { setBusyId(null); }
   };
@@ -187,7 +191,7 @@ export function TimerPage() {
     try {
       const res = await api('/interval', 'PUT', { interval: Number(intervalInput) });
       showToast('success', res.message);
-      await load();
+      await load(true);
     } catch (e: any) { showToast('error', '保存失败', e.message); }
     finally { setSavingInterval(false); }
   };
@@ -201,11 +205,15 @@ export function TimerPage() {
 
   const totalCount = data.global.length + data.rooms.reduce((s, r) => s + r.messages.length, 0);
 
+  // 合并轮转周期：全局 + 选中直播间独立消息，每间隔发送一条
+  const cycleSeconds = Math.max(1, data.global.length + (currentRoom?.messages.length ?? 0))
+    * Math.max(1, data.interval);
+
   /** 渲染一条消息卡片。isNext: 是否为即将执行的消息（仅该消息可跳过/立即发送） */
-  const renderEntry = (e: TimerEntry, isNext: boolean, entriesCount: number, scope: 'global' | 'room') => {
-    // 倒计时采用取模滚动：到达 0 后自动回到完整周期，
-    // 即使消息被立即发送/跳过（服务器指针推进）也能持续同步
-    const cycleSeconds = Math.max(1, entriesCount) * Math.max(1, data.interval);
+  const renderEntry = (e: TimerEntry, isNext: boolean, cycleSeconds: number,
+    entriesCount: number, scope: 'global' | 'room') => {
+    // 倒计时采用取模滚动：到达 0 后自动回到完整轮转周期
+    // （全局 + 独立消息合并轮转），消息被立即发送/跳过（指针推进）也能持续同步
     const remaining = e.seconds_until_next - tick;
     const cd = ((remaining % cycleSeconds) + cycleSeconds) % cycleSeconds;
     return (
@@ -228,33 +236,39 @@ export function TimerPage() {
           {formatCountdown(cd)}
         </span>
         <div className="flex items-center gap-1 shrink-0">
-          <button title="上移" disabled={busyId === e.message_id || e.index === 0}
+          <button disabled={busyId === e.message_id || e.index === 0}
             onClick={() => handleMove(e, -1)}
-            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
+            className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
             <ChevronUp className="w-4 h-4" />
+            {!(busyId === e.message_id || e.index === 0) && <HoverTip text="上移" />}
           </button>
-          <button title="下移" disabled={busyId === e.message_id || e.index === entriesCount - 1}
+          <button disabled={busyId === e.message_id || e.index === entriesCount - 1}
             onClick={() => handleMove(e, 1)}
-            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
+            className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
             <ChevronDown className="w-4 h-4" />
+            {!(busyId === e.message_id || e.index === entriesCount - 1) && <HoverTip text="下移" />}
           </button>
-          <button title="立即发送" disabled={!isNext || busyId === e.message_id}
+          <button disabled={!isNext || busyId === e.message_id}
             onClick={() => handleSendNow(e)}
-            className="p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+            className="relative group p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
             <Send className="w-4 h-4" />
+            {!(!isNext || busyId === e.message_id) && <HoverTip text="立即发送" />}
           </button>
-          <button title="跳过一次" disabled={!isNext || busyId === e.message_id}
+          <button disabled={!isNext || busyId === e.message_id}
             onClick={() => handleSkip(e)}
-            className="p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+            className="relative group p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
             <SkipForward className="w-4 h-4" />
+            {!(!isNext || busyId === e.message_id) && <HoverTip text="跳过当前待执行消息（指针后移）" />}
           </button>
-          <button title="编辑" onClick={() => openEdit(e)}
-            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+          <button onClick={() => openEdit(e)}
+            className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
             <Pencil className="w-4 h-4" />
+            <HoverTip text="编辑" />
           </button>
-          <button title="删除" onClick={() => setDeleteTarget(e.message_id)}
-            className="p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors">
+          <button onClick={() => setDeleteTarget(e.message_id)}
+            className="relative group p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors">
             <Trash2 className="w-4 h-4" />
+            <HoverTip text="删除" />
           </button>
         </div>
       </div>
@@ -271,10 +285,8 @@ export function TimerPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="ghost" icon={<RefreshCw />} onClick={load}>刷新</Button>
-          {roomFilter > 0 && (
-            <Button variant="primary" icon={<Plus />} onClick={openAdd}>添加消息</Button>
-          )}
+          <Button variant="ghost" icon={<RefreshCw />} onClick={() => load()}>刷新</Button>
+          <Button variant="primary" icon={<Plus />} onClick={openAdd}>添加消息</Button>
         </div>
       </div>
 
@@ -310,45 +322,59 @@ export function TimerPage() {
         </select>
       </div>
 
-      {data.rooms.length === 0 ? (
+      {data.rooms.length === 0 && data.global.length === 0 ? (
         <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
           <Clock className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-500 dark:text-gray-400">暂无直播间定时消息</p>
-          <p className="text-xs text-gray-400 mt-1">插件注册的直播间定时消息会显示在这里</p>
+          <p className="text-gray-500 dark:text-gray-400">暂无定时消息</p>
+          <p className="text-xs text-gray-400 mt-1">添加全局消息（直播间 ID 填 0）或指定直播间 ID</p>
+          <div className="mt-4 flex justify-center">
+            <Button variant="primary" icon={<Plus />} onClick={openAdd}>添加消息</Button>
+          </div>
         </div>
-      ) : currentRoom ? (
+      ) : (
         <div className="space-y-4">
           {/* 全局消息（合并显示，先于直播间消息执行） */}
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-3">
               <Globe className="w-4 h-4 text-primary-500" /> 全局定时消息
               <span className="text-xs text-gray-400 font-normal">
-                （{data.global.length} 条 · 指针 #{currentRoom.position.global + 1}）
+                （{data.global.length} 条{currentRoom && currentRoom.position < data.global.length
+                  ? ` · 指针 #${currentRoom.position + 1}` : ''}）
               </span>
             </h2>
             {data.global.length === 0 ? (
               <p className="text-center text-gray-400 py-6 text-sm">暂无全局消息</p>
             ) : data.global.map(e =>
-              renderEntry(e, e.index === currentRoom.position.global, data.global.length, 'global')
+              renderEntry(e,
+                currentRoom
+                  ? currentRoom.position < data.global.length && e.index === currentRoom.position
+                  : false,
+                cycleSeconds, data.global.length, 'global')
             )}
           </div>
 
           {/* 直播间独立消息 */}
+          {currentRoom && (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-3">
               <Radio className="w-4 h-4 text-emerald-500" /> 直播间 {currentRoom.live_id} 独立消息
               <span className="text-xs text-gray-400 font-normal">
-                （{currentRoom.messages.length} 条 · 指针 #{currentRoom.position.room + 1}）
+                （{currentRoom.messages.length} 条{currentRoom.position >= data.global.length
+                  ? ` · 指针 #${currentRoom.position - data.global.length + 1}` : ''}）
               </span>
             </h2>
             {currentRoom.messages.length === 0 ? (
               <p className="text-center text-gray-400 py-6 text-sm">该直播间暂无独立消息</p>
             ) : currentRoom.messages.map(e =>
-              renderEntry(e, e.index === currentRoom.position.room, currentRoom.messages.length, 'room')
+              renderEntry(e,
+                currentRoom.position >= data.global.length &&
+                  currentRoom.position - data.global.length === e.index,
+                cycleSeconds, currentRoom.messages.length, 'room')
             )}
           </div>
+          )}
         </div>
-      ) : null}
+      )}
 
       {/* 添加/编辑对话框 */}
       {editorOpen && (

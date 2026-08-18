@@ -618,9 +618,11 @@ class MissevanServer(ServerInterface):
         """上移/下移定时消息。"""
         return self._bot.move_timer_message(message_id, direction)
 
-    def skip_timer_message_once(self, message_id: str) -> bool:
-        """跳过某条定时消息的下一次播报。"""
-        return self._bot.skip_timer_message_once(message_id)
+    def skip_timer_message_once(
+        self, message_id: str, target_live_id: int | None = None
+    ) -> bool:
+        """跳过当前指针处的定时消息（指针后移一位，计时器保持）。"""
+        return self._bot.skip_timer_message_once(message_id, target_live_id)
 
     async def send_timer_message_now(
         self, message_id: str, target_live_id: int | None = None
@@ -629,8 +631,18 @@ class MissevanServer(ServerInterface):
         return await self._bot.send_timer_message_now(message_id, target_live_id)
 
     def set_timer_interval(self, interval: float) -> None:
-        """设置定时消息发送间隔（秒），实时生效，不重置位置指针。"""
+        """设置定时消息发送间隔（秒），实时生效，不重置位置指针。
+
+        同时立即持久化到 ``config.yml`` 的 ``bot.timer_interval``，
+        防止程序异常关闭丢失；重启后 Bot 创建时自动读回。
+        """
         self._bot.timer_interval = interval
+        try:
+            self._config.set("bot.timer_interval", interval)
+            self._config.save()
+            _log.info("定时消息间隔已持久化到 config.yml: {}s", interval)
+        except OSError as e:
+            _log.warning("定时消息间隔持久化失败（仅内存生效）: {}", e)
 
     def get_plugin_data_dir(self, plugin_name: str) -> str:
         pm = self._require_plugin_manager()

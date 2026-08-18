@@ -9,6 +9,7 @@ import type { BotInfo } from '../api/types';
 import { showToast } from '../hooks/useToast';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
+import { HoverTip } from '../components/HoverTip';
 import { MarqueeText } from '../components/MarqueeText';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
@@ -173,8 +174,9 @@ export function BotPage() {
               <p className="text-xs text-surface-500 mb-1">权限</p>
               <div className="flex flex-wrap gap-1.5">
                 {bot.permissions.map((p) => (
-                  <span key={p} className="badge-blue" title={PERM_DESC[p]}>
+                  <span key={p} className="badge-blue relative group">
                     {p}
+                    <HoverTip text={PERM_DESC[p]} />
                   </span>
                 ))}
               </div>

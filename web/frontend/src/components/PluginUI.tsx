@@ -2,6 +2,7 @@ import {useCallback, useEffect, useState} from 'react';
 import {ExternalLink, Loader2, RefreshCw, Trash2, X} from 'lucide-react';
 import {Button} from './Button';
 import {ConfirmDialog} from './ConfirmDialog';
+import {HoverTip} from './HoverTip';
 
 // =====================================================================
 // Schema 定义 —— 所有预设类型及其字段
@@ -634,19 +635,21 @@ export function PluginUI({ schema, pluginName }: Props) {
                 })}
                 <div className="flex gap-0.5">
                   {['playing', 'working', 'done', 'pending'].map(s => {
-                    const btnCls = 'px-1.5 py-0.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
-                    return <button key={s} title={statusLabels[s]} disabled={s === st} className={btnCls}
+                    const btnCls = 'relative group px-1.5 py-0.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
+                    return <button key={s} disabled={s === st} className={btnCls}
                       onClick={async () => { if (s === st) return; await doFetch('/api/plugin/' + pluginName + '/ui/status' + qs(), 'POST', { index: i, status: s }); await load(); }}>
-                      {statusIcons[s]}</button>
+                      {statusIcons[s]}
+                      {s !== st && <HoverTip text={statusLabels[s]} />}
+                    </button>
                   })}
 
-                  <button title="删除"
-                    className="px-1.5 py-0.5 text-xs rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                  <button
+                    className="relative group px-1.5 py-0.5 text-xs rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
                     onClick={async () => {
                       if (!confirm('确定删除 #' + (item.index || i + 1) + '「' + item.song_name + '」？')) return;
                       await doFetch('/api/plugin/' + pluginName + '/ui/delete' + qs(), 'POST', { index: i });
                       setSelected(prev => { const n = new Set(prev); n.delete(i); return n; }); await load();
-                    }}>✕</button>
+                    }}>✕<HoverTip text="删除" /></button>
                 </div>
               </div>
             );

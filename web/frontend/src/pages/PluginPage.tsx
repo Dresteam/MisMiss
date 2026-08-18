@@ -7,6 +7,7 @@ import type { PluginSummary, FailedPluginInfo } from '../api/types';
 import { showToast } from '../hooks/useToast';
 import { StatusBadge } from '../components/StatusBadge';
 import { Button } from '../components/Button';
+import { HoverTip } from '../components/HoverTip';
 import { PluginDrawer } from '../components/PluginDrawer';
 import { InstallModal } from '../components/InstallModal';
 import { MarqueeText } from '../components/MarqueeText';
@@ -252,8 +253,7 @@ export function PluginPage() {
                 </div>
                 <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-xl">
                   <button onClick={(e) => { e.stopPropagation(); handleToggle(plugin); }} disabled={isBusy}
-                    className={'relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed ' + (isToggling ? (!plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600') : (plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'))}
-                    title={plugin.enabled ? '点击禁用' : '点击启用'}>
+                    className={'relative group inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed ' + (isToggling ? (!plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600') : (plugin.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'))}>
                     <span
                       className={'inline-block h-4 w-4 rounded-full bg-white shadow-sm flex items-center justify-center transition-transform duration-200 '
                         + (isToggling
@@ -261,6 +261,7 @@ export function PluginPage() {
                           : (plugin.enabled ? 'translate-x-6' : 'translate-x-1'))}>
                       {isToggling && <Loader2 className="w-3 h-3 text-primary-600 animate-spin" />}
                     </span>
+                    {!isBusy && <HoverTip text={plugin.enabled ? '点击禁用' : '点击启用'} />}
                   </button>
                   <div className="flex items-center gap-0.5 lg:gap-1 flex-nowrap">
                     <Button variant="ghost" size="sm" icon={<Eye />} tooltip="基本信息"

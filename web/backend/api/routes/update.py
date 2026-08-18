@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
-import subprocess
-import sys
 import urllib.request
 from pathlib import Path
 
@@ -90,10 +89,53 @@ def _save_update_state(state: dict) -> None:
 # GitHub API 访问
 # ------------------------------------------------------------------ #
 
+def _mirror_base(cfg: dict) -> str:
+    """解析镜像配置，返回统一的前缀（不含尾部斜杠）。
+
+    兼容两种格式：
+    - 前缀代理（新格式）：``https://gh-proxy.com/``
+      → API 与下载地址统一加此前缀
+    - 完整 API 地址（旧格式）：``https://ghproxy.com/https://api.github.com``
+      → 仅加速 API，自动提取前缀用于下载
+    """
+    mirror = (cfg.get("mirror") or "").strip().rstrip("/")
+    if not mirror:
+        return ""
+    if mirror.endswith("https://api.github.com"):
+        return mirror[: -len("https://api.github.com")].rstrip("/")
+    return mirror
+
+
+_VERSION_RE = re.compile(
+    r"^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc|a|b|c)\.?(\d+))?", re.IGNORECASE
+)
+"""版本号解析：``1.0.0`` / ``1.0.0-beta.3``（v 前缀自动忽略）。"""
+
+
+def _parse_version(tag: str) -> tuple[int, int, int, int, int, int] | None:
+    """解析版本号为可比较元组，失败返回 ``None``。
+
+    元组为 ``(major, minor, patch, is_final, pre_rank, pre_num)``：
+    ``is_final`` 为 1 表示正式版（高于任何预发布版）；
+    预发布按 alpha < beta < rc 排序。
+    """
+    m = _VERSION_RE.match(tag.strip().lstrip("v"))
+    if not m:
+        return None
+    major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    pre = m.group(4)
+    if not pre:
+        return (major, minor, patch, 1, 0, 0)
+    rank = {"alpha": 0, "a": 0, "beta": 1, "b": 1, "rc": 2, "c": 2}[pre.lower()]
+    num = int(m.group(5) or 0)
+    return (major, minor, patch, 0, rank, num)
+
+
 def _github_request(path: str) -> dict:
     """请求 GitHub API（支持镜像与代理）。"""
     cfg = _update_config()
-    api_base = cfg["mirror"].rstrip("/") if cfg["mirror"] else _GITHUB_API
+    prefix = _mirror_base(cfg)
+    api_base = f"{prefix}/{_GITHUB_API}" if prefix else _GITHUB_API
     url = f"{api_base}{path}"
     req = urllib.request.Request(
         url,
@@ -140,15 +182,29 @@ async def update_info():
 async def update_check():
     """检测最新版本。"""
     cfg = _update_config()
-    releases = _github_request(f"/repos/{cfg['repo']}/releases")
+    releases = _github_request(f"/repos/{cfg['repo']}/releases?per_page=100")
     if not releases:
         return {"latest": None, "up_to_date": True, "releases": []}
-    latest = releases[0]
+
+    # GitHub Releases 按发布时间倒序，补发的旧版本（如 beta.2 晚于
+    # beta.3 发布）会排在最前——按语义版本号重新排序，避免误判
+    parsed = [(r, _parse_version(r.get("tag_name", ""))) for r in releases]
+    parsed.sort(key=lambda rv: rv[1] or (0, 0, 0, 0, 0, 0), reverse=True)
+    sorted_releases = [r for r, _ in parsed]
+
+    latest = sorted_releases[0]
     latest_tag = latest.get("tag_name", "").lstrip("v")
+    current_ver = _parse_version(_CURRENT_VERSION)
+    latest_ver = parsed[0][1]
+    if current_ver is not None and latest_ver is not None:
+        # 最新发布版本不高于当前版本 → 无需更新
+        up_to_date = latest_ver <= current_ver
+    else:
+        up_to_date = latest_tag == _CURRENT_VERSION
     return {
         "latest": latest_tag,
         "latest_name": latest.get("name", latest_tag),
-        "up_to_date": latest_tag == _CURRENT_VERSION,
+        "up_to_date": up_to_date,
         "body": latest.get("body", ""),
         "releases": [
             {
@@ -156,12 +212,13 @@ async def update_check():
                 "name": r.get("name", ""),
                 "published_at": r.get("published_at", ""),
                 "body": r.get("body", ""),
+                "prerelease": bool(r.get("prerelease", False)),
                 "assets": [
                     {"name": a.get("name", ""), "url": a.get("browser_download_url", "")}
                     for a in r.get("assets", [])
                 ],
             }
-            for r in releases[:20]
+            for r in sorted_releases[:100]
         ],
     }
 
@@ -170,7 +227,7 @@ async def update_check():
 async def update_changelog(version: str):
     """获取指定版本的更新日志。"""
     cfg = _update_config()
-    releases = _github_request(f"/repos/{cfg['repo']}/releases")
+    releases = _github_request(f"/repos/{cfg['repo']}/releases?per_page=100")
     for r in releases:
         tag = r.get("tag_name", "").lstrip("v")
         if tag == version:
@@ -199,7 +256,7 @@ async def update_apply(body: dict, s: MissevanServer = Depends(get_server)):
     if not target_version:
         raise HTTPException(status_code=400, detail="必须指定目标版本")
 
-    releases = _github_request(f"/repos/{cfg['repo']}/releases")
+    releases = _github_request(f"/repos/{cfg['repo']}/releases?per_page=100")
     target = None
     for r in releases:
         if r.get("tag_name", "").lstrip("v") == target_version:
@@ -247,7 +304,10 @@ async def update_apply(body: dict, s: MissevanServer = Depends(get_server)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"备份失败: {e}")
 
-    # 下载更新包
+    # 下载更新包（配置了镜像时下载地址也走前缀代理）
+    prefix = _mirror_base(cfg)
+    if prefix:
+        asset_url = f"{prefix}/{asset_url}"
     try:
         tmp_zip = project_root / "data" / f"update_{target_version}.zip"
         req = urllib.request.Request(asset_url, headers={"User-Agent": "MisMiss-Updater/1.0"})

@@ -29,6 +29,9 @@ const zhCN = {
   sidebar: {
     appName: 'MisMiss',
     appSubtitle: 'Console',
+    groupMonitor: '监控',
+    groupManage: '管理',
+    groupSystem: '系统',
     dashboard: '仪表盘',
     botManagement: 'Bot 管理',
     livestream: '直播间',

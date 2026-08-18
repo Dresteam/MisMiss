@@ -60,6 +60,8 @@ class ServerConfig:
         if data:
             _deep_merge(merged, data)
         self._data = merged
+        # 配置来源路径，由 load() 设置，用于 save() 写回
+        self._config_path: str | None = None
 
     @classmethod
     def load(cls, config_path: str | None = None) -> "ServerConfig":
@@ -90,7 +92,9 @@ class ServerConfig:
                 _log = logging.getLogger(__name__)
                 _log.warning("配置文件加载失败，使用默认值: %s", e)
 
-        return cls(loaded)
+        cfg = cls(loaded)
+        cfg._config_path = config_path
+        return cfg
 
     # ------------------------------------------------------------------ #
     # 访问
@@ -143,6 +147,47 @@ class ServerConfig:
         if isinstance(val, str):
             return val.lower() in ("true", "1", "yes", "on", "y")
         return bool(val)
+
+    # ------------------------------------------------------------------ #
+    # 修改 & 持久化
+    # ------------------------------------------------------------------ #
+
+    def set(self, path: str, value: Any) -> None:
+        """以点分隔路径设置配置值（内存中），调用 :meth:`save` 后持久化。
+
+        :param path: 点分隔的配置路径，如 ``"bot.timer_interval"``
+        :param value: 新值
+        """
+        keys = path.split(".")
+        node: dict[str, Any] = self._data
+        for key in keys[:-1]:
+            nxt = node.get(key)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                node[key] = nxt
+            node = nxt
+        node[keys[-1]] = value
+
+    def save(self) -> None:
+        """将当前配置原子写回加载时使用的配置文件。
+
+        先写临时文件再替换，防止写一半崩溃导致文件损坏。
+
+        :raises OSError: 写入失败（如目录不可写）
+        """
+        path = self._config_path
+        if path is None:
+            # 未通过 load() 创建，回退到默认路径
+            if getattr(sys, "frozen", False):
+                path = str(Path(os.getcwd()) / "config.yml")
+            else:
+                path = str(
+                    Path(__file__).resolve().parent.parent.parent / "config.yml"
+                )
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            yaml.dump(self._data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        os.replace(tmp_path, path)
 
     # ------------------------------------------------------------------ #
     # dunder

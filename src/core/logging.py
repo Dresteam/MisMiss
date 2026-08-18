@@ -200,6 +200,12 @@ def init(
     _LOG_DIR = Path(log_dir)
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+    # 抑制第三方库的 DEBUG 噪音（httpcore/httpx 连接层 open/close 等
+    # 无价值信息），WARNING 及以上仍正常输出
+    import logging as _stdlib_logging
+    for _name in ("httpcore", "httpx", "websockets", "urllib3", "asyncio"):
+        _stdlib_logging.getLogger(_name).setLevel(_stdlib_logging.WARNING)
+
     _logger.remove()
 
     # 文件输出 —— 按大小 + 时间双重分割
