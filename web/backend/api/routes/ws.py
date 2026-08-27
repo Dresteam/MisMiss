@@ -10,14 +10,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
+import re
 import threading
 import time
-import re
 from collections import deque
-from pathlib import Path
-from typing import Any
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
@@ -70,14 +69,21 @@ class RingBuffer:
             self._buffer.append(entry)
             return entry
 
-    def get_since(self, since_seq: int, limit: int = 50) -> list[dict]:
+    def get_since(
+        self, since_seq: int, limit: int = 50, levels: set[str] | None = None
+    ) -> tuple[list[dict], bool, int]:
         """获取 since_seq **之前** 的日志（用于向上翻页加载更早历史）。
 
         返回 limit 条 seq_id <= since_seq 的最新日志，按 seq_id 升序排列。
         首次加载传入 0 则返回最新 limit 条。
+        传入 ``levels`` 时仅返回指定级别的日志（源头过滤）。
+
+        :return: ``(entries, has_more, filtered_total)``
         """
         with self._lock:
             all_entries = list(self._buffer)
+            if levels:
+                all_entries = [e for e in all_entries if e.level in levels]
             if since_seq <= 0:
                 # 首次加载：返回最新 limit 条
                 result = all_entries[-limit:]
@@ -85,7 +91,15 @@ class RingBuffer:
                 # 向上翻页：返回 seq_id < since_seq 的最近 limit 条
                 older = [e for e in all_entries if e.seq_id < since_seq]
                 result = older[-limit:]
-            return [_entry_to_dict(e) for e in result]
+            has_more = (
+                bool(result) and bool(all_entries)
+                and result[0].seq_id > all_entries[0].seq_id
+            )
+            return (
+                [_entry_to_dict(e) for e in result],
+                has_more,
+                len(all_entries),
+            )
 
     def get_range(self, from_seq: int, to_seq: int) -> list[dict] | None:
         """获取 [from_seq, to_seq] 范围内的日志。若数据已被淘汰返回 None。"""
@@ -136,7 +150,7 @@ def _entry_to_dict(e: LogEntry) -> dict:
 # 全局 RingBuffer 实例
 # ------------------------------------------------------------------ #
 
-_buffer = RingBuffer(capacity=10_000)
+_buffer = RingBuffer(capacity=2_000)
 
 
 def get_buffer() -> RingBuffer:
@@ -148,19 +162,28 @@ def get_buffer() -> RingBuffer:
 # ================================================================== #
 
 _clients: dict[int, WebSocket] = {}
+_client_levels: dict[int, set[str] | None] = {}  # 客户端源头级别过滤（None=全部）
 _client_id_seq = 0
 
 
-async def _broadcast(entry: LogEntry) -> None:
-    msg = {"type": "log", **_entry_to_dict(entry)}
+async def _broadcast_entries(entries: list[dict]) -> None:
+    """批量广播日志条目（每 200ms 合并一次），按客户端级别过滤。"""
     dead: list[int] = []
     for cid, ws in _clients.items():
         try:
-            await ws.send_json(msg)
+            levels = _client_levels.get(cid)
+            payload = (
+                entries if levels is None
+                else [e for e in entries if e["level"] in levels]
+            )
+            if not payload:
+                continue
+            await ws.send_json({"type": "logs", "entries": payload})
         except Exception:
             dead.append(cid)
     for cid in dead:
         _clients.pop(cid, None)
+        _client_levels.pop(cid, None)
 
 
 # ================================================================== #
@@ -169,18 +192,57 @@ async def _broadcast(entry: LogEntry) -> None:
 
 _WS_SINK_ID: int | None = None
 
+# ------------------------------------------------------------------ #
+# 批量推送：日志先入待发队列，由事件循环内的 flush 任务每 200ms
+# 合并广播一次（大幅减少 WebSocket 帧数；同时保证线程安全）
+# ------------------------------------------------------------------ #
+
+_BATCH_INTERVAL: float = 0.2
+_pending: list[LogEntry] = []
+_pending_lock = threading.Lock()
+_flush_task: asyncio.Task | None = None
+
+
+def _enqueue(entry: LogEntry) -> None:
+    """将日志条目加入待发队列（任意线程可调用）。"""
+    with _pending_lock:
+        _pending.append(entry)
+
+
+async def _flush_loop() -> None:
+    """待发队列消费任务——每 200ms 合并广播一批。
+
+    无客户端且队列清空时自动退出，下次客户端连接时重新启动。
+    """
+    global _pending, _flush_task
+    try:
+        while True:
+            await asyncio.sleep(_BATCH_INTERVAL)
+            with _pending_lock:
+                if not _pending:
+                    if not _clients:
+                        break
+                    continue
+                batch = _pending
+                _pending = []
+            await _broadcast_entries([_entry_to_dict(e) for e in batch])
+    finally:
+        _flush_task = None
+
+
+def _ensure_flush_task() -> None:
+    """确保批量推送任务运行（仅在事件循环内调用）。"""
+    global _flush_task
+    if _flush_task is None or _flush_task.done():
+        _flush_task = asyncio.create_task(_flush_loop())
+
+
 try:
     from loguru import logger as _loguru_logger
 
     def _loguru_sink(message: str) -> None:
         record = message.record
-        entry = _buffer.append(record["level"].name, str(record["message"]))
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(_broadcast(entry), loop)
-        except RuntimeError:
-            pass
+        _enqueue(_buffer.append(record["level"].name, str(record["message"])))
 
     # 从 config.yml 读取持久化的日志等级
     _initial_level = "DEBUG"
@@ -212,17 +274,10 @@ def set_ws_log_level(level_name: str) -> None:
     except Exception:
         pass
 
-import logging
 
 class _WSLogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
-        entry = _buffer.append(record.levelname, self.format(record))
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(_broadcast(entry), loop)
-        except RuntimeError:
-            pass
+        _enqueue(_buffer.append(record.levelname, self.format(record)))
 
 _std_handler = _WSLogHandler()
 _std_handler.setLevel(logging.DEBUG)
@@ -239,19 +294,19 @@ logging.getLogger().addHandler(_std_handler)
 @router.get("/logs/history")
 async def logs_history(
     since: int = Query(default=0, description="起始 seq_id（不包含）"),
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, le=500),
+    levels: str | None = Query(default=None, description="逗号分隔的级别过滤，如 DEBUG,ERROR"),
 ):
-    """拉取 since_seq 之后的历史日志。"""
-    entries = _buffer.get_since(since, limit)
-    has_more = False
-    if entries:
-        first_returned = entries[0]["seq_id"]
-        has_more = first_returned > _buffer.oldest_seq
+    """拉取 since_seq 之后的历史日志（支持源头级别过滤）。"""
+    level_set = None
+    if levels:
+        level_set = {lv.strip().upper() for lv in levels.split(",") if lv.strip()}
+    entries, has_more, total = _buffer.get_since(since, limit, levels=level_set)
     return {
         "entries": entries,
         "latest_seq": _buffer.latest_seq,
         "oldest_seq": _buffer.oldest_seq,
-        "total": _buffer.count,
+        "total": total,
         "has_more": has_more,
     }
 
@@ -286,22 +341,30 @@ async def websocket_endpoint(ws: WebSocket):
     cid = _client_id_seq
     _clients[cid] = ws
 
-    # 解析客户端携带的 last_seq
+    # 解析客户端携带的 last_seq 与级别过滤
     last_seq = 0
+    level_set: set[str] | None = None
     if ws.query_params:
         try:
             last_seq = int(ws.query_params.get("last_seq", "0"))
         except ValueError:
             last_seq = 0
+        levels_str = ws.query_params.get("levels", "")
+        if levels_str:
+            level_set = {lv.strip().upper() for lv in levels_str.split(",") if lv.strip()}
+    _client_levels[cid] = level_set
 
-    # 断线补发
+    # 启动批量推送任务（若尚未运行）
+    _ensure_flush_task()
+
+    # 断线补发（按级别过滤，批量单帧）
     if last_seq > 0:
-        gap = _buffer.get_since(last_seq, limit=500)
-        for entry in gap:
+        gap, _, _ = _buffer.get_since(last_seq, limit=500, levels=level_set)
+        if gap:
             try:
-                await ws.send_json({"type": "log", **entry})
+                await ws.send_json({"type": "logs", "entries": gap})
             except Exception:
-                break
+                pass
 
     # 确认连接
     await ws.send_json({
@@ -335,3 +398,4 @@ async def websocket_endpoint(ws: WebSocket):
         pass
     finally:
         _clients.pop(cid, None)
+        _client_levels.pop(cid, None)
