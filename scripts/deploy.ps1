@@ -1,14 +1,17 @@
 # ============================================================
-# MisMiss -- Deploy Script (Windows)
+# MisMiss -- Deploy Script (Windows, native venv)
+# ============================================================
+# Docker deployment goes through the deploy package (no registry):
+#   Local:  powershell -File scripts/docker-release.ps1
+#   Server: unzip package -> ./deploy.sh
 # ============================================================
 # Usage:
 #   powershell -File scripts/deploy.ps1
-#   powershell -File scripts/deploy.ps1 -Mode Docker
 #   powershell -File scripts/deploy.ps1 -Mode Native
 # ============================================================
 
 param(
-    [ValidateSet("Docker", "Native")]
+    [ValidateSet("Native")]
     [string]$Mode = ""
 )
 
@@ -20,39 +23,6 @@ function Write-I { Write-Host "[INFO]  $args" -ForegroundColor Green }
 function Write-S { Write-Host "[STEP]  $args" -ForegroundColor Cyan }
 function Write-W { Write-Host "[WARN]  $args" -ForegroundColor Yellow }
 function Write-E { Write-Host "[ERROR] $args" -ForegroundColor Red; exit 1 }
-
-# ------------------------------------------------------------------ #
-# Docker
-# ------------------------------------------------------------------ #
-function Deploy-Docker {
-    Write-S "Docker deployment"
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Write-E "Docker is required" }
-
-    @("data", "logs", "plugins", "permissions") | ForEach-Object {
-        if (-not (Test-Path "$ProjectRoot\$_")) {
-            New-Item -ItemType Directory -Path "$ProjectRoot\$_" -Force | Out-Null
-        }
-    }
-
-    Write-I "Building image..."
-    docker build -t mismiss:latest "$ProjectRoot"
-    if ($LASTEXITCODE -ne 0) { Write-E "Build failed" }
-
-    docker rm -f mismiss 2>$null
-
-    docker run -d --name mismiss --restart unless-stopped `
-        -p 8080:8080 `
-        -v "${ProjectRoot}\data:/app/data" `
-        -v "${ProjectRoot}\logs:/app/logs" `
-        -v "${ProjectRoot}\plugins:/app/plugins" `
-        -v "${ProjectRoot}\permissions:/app/permissions" `
-        -v "${ProjectRoot}\config.yml:/app/config.yml:ro" `
-        -e TZ=Asia/Shanghai `
-        mismiss:latest
-
-    Write-I "Deployed -> http://localhost:8080"
-    Write-I "Manage: docker logs -f mismiss  |  docker stop mismiss"
-}
 
 # ------------------------------------------------------------------ #
 # Native
@@ -109,23 +79,13 @@ function Deploy-Native {
 # Entry
 # ------------------------------------------------------------------ #
 Write-Host ""
-Write-Host "  === MisMiss Deploy Tool (Windows) ==="
+Write-Host "  === MisMiss Deploy Tool (Windows, native venv) ==="
+Write-Host ""
+Write-Host "  Docker deployment goes through the deploy package (no registry):"
+Write-Host "    Local:  powershell -File scripts\docker-release.ps1"
+Write-Host "    Server: unzip package -> ./deploy.sh"
 Write-Host ""
 
-if ($Mode -eq "") {
-    Write-Host "Select deployment method:"
-    Write-Host "  1) Docker  (recommended, isolated)"
-    Write-Host "  2) Native  (venv)"
-    $choice = Read-Host "Enter [1-2] (default=1)"
-    switch ($choice) {
-        ""   { $Mode = "Docker" }
-        "1"  { $Mode = "Docker" }
-        "2"  { $Mode = "Native" }
-        default { Write-E "Invalid choice" }
-    }
-}
-
 switch ($Mode) {
-    "Docker" { Deploy-Docker }
     "Native" { Deploy-Native }
 }

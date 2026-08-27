@@ -8,7 +8,7 @@
 #
 # Usage:
 #   bash scripts/release.sh
-#   bash scripts/release.sh -v 1.2.0
+#   bash scripts/release.sh -v 1.1.0
 #   bash scripts/release.sh --skip-pyinstaller
 #   bash scripts/release.sh --skip-docker
 # ============================================================
@@ -247,25 +247,21 @@ else
 fi
 
 # ------------------------------------------------------------------ #
-# 5. Checksums
-# ------------------------------------------------------------------ #
-# ------------------------------------------------------------------ #
-# 5. Docker image
+# 5. Docker deploy package (via docker-release.sh)
 # ------------------------------------------------------------------ #
 if $SKIP_DOCKER; then
-    step "[5/6] Docker image -- SKIPPED"
+    step "[5/6] Docker package -- SKIPPED"
 elif command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
-    step "[5/6] Building Docker image ..."
+    step "[5/6] Building Docker deploy package ..."
 
-    DOCKER_TAG="mismiss:${SEMVER}"
-    DOCKER_FILE="mismiss-${SEMVER}-docker.tar"
+    bash "$PROJECT_ROOT/scripts/docker-release.sh" "$SEMVER"
 
-    docker build -t "$DOCKER_TAG" -f "$PROJECT_ROOT/Dockerfile" "$PROJECT_ROOT"
-    docker save -o "$RELEASE_DIR/$DOCKER_FILE" "$DOCKER_TAG"
+    DOCKER_FILE="mismiss-${SEMVER}-docker.tar.gz"
+    cp "$PROJECT_ROOT/dist/$DOCKER_FILE" "$RELEASE_DIR/"
 
-    ok "docker         $DOCKER_FILE  ($(_size "$RELEASE_DIR/$DOCKER_FILE"))"
+    ok "docker package $DOCKER_FILE  ($(_size "$RELEASE_DIR/$DOCKER_FILE"))"
 else
-    step "[5/6] Docker image -- Docker not available, skipped"
+    step "[5/6] Docker package -- Docker not available, skipped"
 fi
 
 # ------------------------------------------------------------------ #

@@ -7,7 +7,7 @@
 #
 # Usage:
 #   powershell -File scripts/release.ps1
-#   powershell -File scripts/release.ps1 -Version 1.2.0
+#   powershell -File scripts/release.ps1 -Version 1.1.0
 #   powershell -File scripts/release.ps1 -SkipPyInstaller
 #   powershell -File scripts/release.ps1 -SkipDocker
 # ============================================================
@@ -253,29 +253,23 @@ if ($SkipPyInstaller) {
 }
 
 # ------------------------------------------------------------------ #
-# 5. Checksums
-# ------------------------------------------------------------------ #
-# ------------------------------------------------------------------ #
-# 5. Docker image
+# 5. Docker deploy package (via docker-release.ps1)
 # ------------------------------------------------------------------ #
 if ($SkipDocker) {
-    Write-Step "[5/6] Docker image -- SKIPPED"
+    Write-Step "[5/6] Docker package -- SKIPPED"
 } else {
-    Write-Step "[5/6] Building Docker image ..."
+    Write-Step "[5/6] Building Docker deploy package ..."
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         Write-Host "         WARN: Docker not found, skipping" -ForegroundColor Yellow
     } else {
-        $dockerTag  = "mismiss:${SemVer}"
-        $dockerFile = "mismiss-${SemVer}-docker.tar"
+        & powershell -File "$ProjectRoot\scripts\docker-release.ps1" -Version $SemVer
+        if ($LASTEXITCODE -ne 0) { Write-ERR "Docker package build failed" }
 
-        docker build -t $dockerTag -f "$ProjectRoot\Dockerfile" "$ProjectRoot"
-        if ($LASTEXITCODE -ne 0) { Write-ERR "Docker build failed" }
-
-        docker save -o "$ReleaseDir\$dockerFile" $dockerTag
-        if ($LASTEXITCODE -ne 0) { Write-ERR "Docker save failed" }
+        $dockerFile = "mismiss-${SemVer}-docker.zip"
+        Copy-Item "$ProjectRoot\dist\$dockerFile" "$ReleaseDir\"
 
         $dockerSize = (Get-Item "$ReleaseDir\$dockerFile").Length
-        Write-OK "docker        $dockerFile  ($('{0:N1}' -f ($dockerSize / 1MB)) MB)"
+        Write-OK "docker pkg    $dockerFile  ($('{0:N1}' -f ($dockerSize / 1MB)) MB)"
     }
 }
 

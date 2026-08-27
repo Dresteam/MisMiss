@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  Download, RefreshCw, RotateCcw, Loader2, Globe, Shield,
+  Download, RefreshCw, RotateCcw, Loader2, Globe, Shield, Container,
   ChevronLeft, ChevronRight, ScrollText, X,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
@@ -24,6 +24,9 @@ interface UpdateInfo {
   proxy: string;
   has_backup: boolean;
   backup_version: string;
+  is_docker: boolean;
+  /** Docker 部署且已挂载 docker.sock + 部署目录（在线更新可用） */
+  docker_ready: boolean;
 }
 
 /** 常用 GitHub 镜像站（URL 前缀代理，同时加速 API 与下载） */
@@ -123,8 +126,16 @@ export function UpdatePage() {
     if (!confirmUpdate) return;
     setApplying(true);
     try {
-      const assetName = confirmUpdate.assets.find(a => a.name.endsWith('.zip'))?.name
-        || confirmUpdate.assets[0]?.name || '';
+      // Docker 部署：后端自动选择 docker 部署包资产；
+      // 原生部署：优先源码归档（mismiss-<tag>.zip/.tar.gz），排除 docker 部署包资产
+      const tag = confirmUpdate.tag;
+      const preferred = [`mismiss-${tag}.zip`, `mismiss-${tag}.tar.gz`];
+      const assetName = info?.is_docker ? '' : (
+        confirmUpdate.assets.find(a => preferred.includes(a.name))?.name
+        || confirmUpdate.assets.find(a =>
+          (a.name.endsWith('.zip') || a.name.endsWith('.tar.gz')) && !a.name.includes('-docker'))?.name
+        || ''
+      );
       const res = await api('/apply', 'POST', { version: confirmUpdate.tag, asset_name: assetName });
       showToast('success', res.message);
       setConfirmUpdate(null);
@@ -179,13 +190,35 @@ export function UpdatePage() {
         <div className="flex gap-2">
           <Button variant="ghost" icon={<RefreshCw />} onClick={checkUpdate} loading={checking}>检查更新</Button>
           {info?.has_backup && (
-            <Button variant="ghost" icon={<RotateCcw />}
+            <Button variant="ghost" icon={<RotateCcw />} disabled={info?.is_docker && !info?.docker_ready}
+              title={info?.is_docker && !info?.docker_ready ? '未挂载 docker.sock，请通过部署包更新' : undefined}
               onClick={() => setConfirmRollback(true)}>
               回滚 v{info.backup_version}
             </Button>
           )}
         </div>
       </div>
+
+      {/* Docker 部署提示：在线更新可用 / 未挂载 socket */}
+      {info?.is_docker && info?.docker_ready && (
+        <div className="flex items-start gap-2 px-4 py-3 rounded-lg bg-sky-100 dark:bg-sky-900/30 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-400 text-sm">
+          <Container className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            当前为 Docker 部署。点击更新将自动下载部署包、导入镜像并重建容器
+            （约 10~30 秒，期间页面短暂断开）；更新前会备份当前版本，支持一键回滚。
+          </span>
+        </div>
+      )}
+      {info?.is_docker && !info?.docker_ready && (
+        <div className="flex items-start gap-2 px-4 py-3 rounded-lg bg-amber-100 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-400 text-sm">
+          <Container className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>
+            当前为 Docker 部署，但未检测到 docker.sock / 部署目录挂载，在线更新不可用。
+            请检查 docker-compose.yml 中 mismiss 服务的两处挂载，或通过部署包手动更新：
+            上传服务器后执行 <code className="font-mono">bash deploy.sh</code>。
+          </span>
+        </div>
+      )}
 
       {/* 最新版本卡片 */}
       {releases.length > 0 && (
@@ -210,7 +243,7 @@ export function UpdatePage() {
                 {releases[0].body || '（无更新日志）'}
               </p>
             )}
-            {!upToDate && (
+            {!upToDate && !(info?.is_docker && !info?.docker_ready) && (
               <div className="flex justify-end mt-4">
                 <Button variant="primary" icon={<Download />}
                   onClick={() => setConfirmUpdate(releases[0])}>
@@ -266,7 +299,8 @@ export function UpdatePage() {
                   <td className="px-5 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
                       <Button variant="outline" size="sm" onClick={() => setChangelogTarget(r)}>查看日志</Button>
-                      <Button variant="outline" size="sm" onClick={() => setConfirmUpdate(r)}>切换</Button>
+                      <Button variant="outline" size="sm" disabled={info?.is_docker && !info?.docker_ready}
+                        onClick={() => setConfirmUpdate(r)}>切换</Button>
                     </div>
                   </td>
                 </tr>
