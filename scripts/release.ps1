@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # MisMiss -- Release Build Script (Windows)
 # ============================================================
 # Builds all distribution formats for a GitHub release.
@@ -162,8 +162,11 @@ Get-ChildItem -Recurse -Directory -Filter "__pycache__" -Path $BuildDir -ErrorAc
 # Create archives
 Push-Location "$ProjectRoot\build"
 Compress-Archive -Path $SrcName -DestinationPath "$ReleaseDir\$SrcName.zip" -Force
-if (Get-Command tar -ErrorAction SilentlyContinue) {
-    tar -czf "$ReleaseDir\$SrcName.tar.gz" $SrcName
+# 显式调用 Windows 自带 bsdtar：PATH 中的 Git tar 不支持盘符路径（E:\... 会被当作 host:path）
+$bsdtar = "$env:SystemRoot\System32\tar.exe"
+if (Test-Path $bsdtar) {
+    & $bsdtar -czf "$ReleaseDir\$SrcName.tar.gz" $SrcName
+    if ($LASTEXITCODE -ne 0) { Write-ERR "tar packaging failed" }
 }
 Pop-Location
 
