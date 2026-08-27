@@ -362,7 +362,7 @@ async def plugin_update(file: UploadFile = File(...), s: MissevanServer = Depend
             old_meta = pm._plugins[plugin_name]
             if old_meta.enabled:
                 try:
-                    pm.disable_plugin(plugin_name)
+                    await pm.disable_plugin(plugin_name)
                 except Exception:
                     pass
             del pm._plugins[plugin_name]

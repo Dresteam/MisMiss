@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { MarqueeText } from './MarqueeText';
-import type { LivestreamInfo } from '../api/types';
 
 interface Props {
-  lives: LivestreamInfo[];
+  /** 直播间列表（仅需 live_id 与 room_name） */
+  lives: { live_id: number; room_name: string }[];
   selectedId: number | null;
   onSelect: (id: number) => void;
 }

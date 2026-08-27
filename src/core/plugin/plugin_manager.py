@@ -827,13 +827,20 @@ class PluginManager:
             if self._command_router is not None:
                 self._command_router.register_plugin(metadata.plugin_instance)
             metadata.enabled = True
+            # 重新启用已初始化实例 → 调用 on_enable 钩子（恢复定时消息等）
+            try:
+                await metadata.plugin_instance.on_enable()
+            except Exception as e:
+                _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
 
         _log.info("插件已启用: {}", plugin_name)
 
-    def disable_plugin(self, plugin_name: str) -> None:
+    async def disable_plugin(self, plugin_name: str) -> None:
         """禁用插件。
 
         从事件总线和命令路由器取消注册，保留插件实例和文件。
+        等待 :meth:`Plugin.terminate` 完成，确保资源（如定时消息）被清理，
+        避免禁用后立刻重新启用时的竞态。
 
         :param plugin_name: 插件名称
         :raises CorePluginNotFoundException: 插件不存在
@@ -851,13 +858,11 @@ class PluginManager:
             # 从命令路由器取消注册
             if self._command_router is not None:
                 self._command_router.unregister_plugin(metadata.plugin_instance)
-            # 调用终止钩子
+            # 调用终止钩子（等待完成）
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(metadata.plugin_instance.terminate())
-            except RuntimeError:
-                # 不在异步上下文中
-                pass
+                await metadata.plugin_instance.terminate()
+            except Exception as e:
+                _log.warning("插件 [{}] terminate 异常: {}", plugin_name, e)
 
         _log.info("插件已禁用: {}", plugin_name)
 
@@ -893,7 +898,20 @@ class PluginManager:
             self._event_bus.register_new_event(metadata.plugin_instance)
             # 补充注册路由（_app 可能在实例创建后才设置）
             self._register_routes_if_needed(metadata)
+            # 恢复已初始化实例 → 异步调用 on_enable 钩子（恢复定时消息等）
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._call_on_enable(metadata, plugin_name))
+            except RuntimeError:
+                pass
         _log.info("插件已恢复: {}", plugin_name)
+
+    async def _call_on_enable(self, metadata: PluginMetadata, plugin_name: str) -> None:
+        """安全调用插件的 on_enable 钩子。"""
+        try:
+            await metadata.plugin_instance.on_enable()
+        except Exception as e:
+            _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
 
     def _register_routes_if_needed(self, metadata: PluginMetadata) -> None:
         """为已有实例补注册 UI 路由（兜底：_app 延迟设置时）。

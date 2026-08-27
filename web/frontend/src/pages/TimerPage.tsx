@@ -7,6 +7,8 @@ import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
 import { HoverTip } from '../components/HoverTip';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { RoomSelect } from '../components/RoomSelect';
+import { MarqueeText } from '../components/MarqueeText';
 
 interface TimerEntry {
   message_id: string;
@@ -18,6 +20,8 @@ interface TimerEntry {
 
 interface RoomQueue {
   live_id: number;
+  /** 直播间名称（Server 附加，未收录的直播间为空） */
+  room_name: string;
   messages: TimerEntry[];
   /** 合并轮转位置（全局 + 独立消息，单指针） */
   position: number;
@@ -218,10 +222,10 @@ export function TimerPage() {
     const cd = ((remaining % cycleSeconds) + cycleSeconds) % cycleSeconds;
     return (
       <div key={e.message_id}
-        className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
+        className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
         <span className="text-xs font-bold text-gray-400 w-8 text-center shrink-0">#{e.index + 1}</span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm text-gray-800 dark:text-gray-200 truncate">{e.message}</p>
+          <MarqueeText text={e.message} className="text-sm text-gray-800 dark:text-gray-200" />
           <p className="text-[10px] text-gray-400 font-mono mt-0.5">
             {scope === 'global' ? '全局 · 所有直播间轮播' : `直播间 ${e.live_id}`} · {e.message_id}
             {isNext && <span className="ml-2 text-primary-500 font-semibold">▶ 即将执行</span>}
@@ -235,7 +239,10 @@ export function TimerPage() {
           <Timer className="w-3 h-3 inline mr-0.5 -mt-0.5" />
           {formatCountdown(cd)}
         </span>
-        <div className="flex items-center gap-1 shrink-0">
+        {/* 操作按钮：移动端独占一行，右对齐 */}
+        <div className="flex items-center gap-1 shrink-0 w-full lg:w-auto justify-end
+                        border-t border-gray-100 dark:border-gray-700/50 pt-2 mt-1
+                        lg:border-t-0 lg:pt-0 lg:mt-0">
           <button disabled={busyId === e.message_id || e.index === 0}
             onClick={() => handleMove(e, -1)}
             className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors">
@@ -309,17 +316,14 @@ export function TimerPage() {
       {/* 直播间筛选 */}
       <div className="flex items-center gap-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 px-5 py-4">
         <Radio className="w-5 h-5 text-emerald-500 shrink-0" />
-        <span className="text-sm font-medium text-gray-800 dark:text-gray-200">直播间</span>
-        <select value={roomFilter} onChange={e => setRoomFilter(Number(e.target.value))}
-          className="flex-1 max-w-xs px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300 outline-none">
-          {data.rooms.length === 0 ? (
-            <option value={0}>暂无直播间</option>
-          ) : data.rooms.map(r => (
-            <option key={r.live_id} value={r.live_id}>
-              直播间 {r.live_id}（{r.messages.length} 条独立消息）
-            </option>
-          ))}
-        </select>
+        <span className="text-sm font-medium text-gray-800 dark:text-gray-200 shrink-0">直播间</span>
+        <div className="flex-1 max-w-xs">
+          <RoomSelect
+            lives={data.rooms.map(r => ({ live_id: r.live_id, room_name: r.room_name || '未知直播间' }))}
+            selectedId={roomFilter > 0 ? roomFilter : null}
+            onSelect={setRoomFilter}
+          />
+        </div>
       </div>
 
       {data.rooms.length === 0 && data.global.length === 0 ? (
@@ -357,7 +361,10 @@ export function TimerPage() {
           {currentRoom && (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-3">
-              <Radio className="w-4 h-4 text-emerald-500" /> 直播间 {currentRoom.live_id} 独立消息
+              <Radio className="w-4 h-4 text-emerald-500" />{' '}
+              {currentRoom.room_name
+                ? `${currentRoom.room_name}（${currentRoom.live_id}）`
+                : `直播间 ${currentRoom.live_id}`} 独立消息
               <span className="text-xs text-gray-400 font-normal">
                 （{currentRoom.messages.length} 条{currentRoom.position >= data.global.length
                   ? ` · 指针 #${currentRoom.position - data.global.length + 1}` : ''}）

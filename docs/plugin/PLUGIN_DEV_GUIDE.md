@@ -378,6 +378,9 @@ API 返回格式：`{"messages": 77, "gifts": 0}`
 
 API 返回格式：`[{"name":"Alice","status":"活跃","score":98.6,...}]` 或 `{"items":[...],"data":[...]}`
 
+> **移动端自适应**：`table` 在移动端（<sm）自动切换为卡片列表——每行渲染为一张卡片，
+> 「列标签: 值」纵向排列，操作按钮在卡片底部，无需横向滚动。
+
 列类型（`columns[].type`）：
 
 | `type` | 渲染 | 特殊字段 |
@@ -400,7 +403,7 @@ API 返回格式：`[{"name":"Alice","status":"活跃","score":98.6,...}]` 或 `
 | `url` | API 端点，`{id}` 占位符指向行 ID |
 | `prompt_field` | 弹出输入对话框，收集 JSON body |
 | `body_template` | 从行数据构建 JSON body：`{"key": "{{row.field}}"}` |
-| `show_when` | 条件显示：仅当行字段等于该值时显示 |
+| `show_when` | 条件显示：行中该名字段（通常为布尔列）为真时才显示该按钮 |
 
 #### list — 行列表
 
@@ -438,6 +441,10 @@ API 返回格式：`[{"name":"Alice","status":"活跃","score":98.6,...}]` 或 `
 - `POST /add?room_id=X` 请求体 `{song_name}`
 - `POST /status?room_id=X` 请求体 `{index, status}`
 - `POST /delete?room_id=X` 请求体 `{index}`
+
+> **移动端自适应**：移动端（<sm）点播单条目自动切换为卡片布局——
+> 第一行「勾选 + 序号 + 歌名 + 状态徽章」，第二行「点播者 + 状态切换按钮」，
+> 直播间选择器全宽显示，批量工具栏按钮带文字标签，操作按钮加大触控区域。
 
 #### form — 表单
 

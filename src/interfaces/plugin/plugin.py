@@ -155,3 +155,13 @@ class Plugin(Listener, ABC):
 
         在插件被卸载或禁用前调用，用于释放资源、关闭连接等清理操作。
         """
+
+    async def on_enable(self) -> None:
+        """插件重新启用钩子。
+
+        当已初始化过的插件实例被禁用后再次启用时调用
+        （首次启用走 :meth:`initialize`，不会调用本方法）。
+        用于重新注册定时消息等需要在启用时恢复的资源。
+
+        .. versionadded:: 1.2
+        """
