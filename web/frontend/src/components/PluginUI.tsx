@@ -314,9 +314,9 @@ export function PluginUI({ schema, pluginName }: Props) {
   const renderActions = (row?: any) => {
     if (!schema.actions) return null;
     return (
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap">
         {schema.actions
-          .filter(a => !a.show_when || String(row?.[a.show_when]) === a.show_when)
+          .filter(a => !a.show_when || Boolean(row?.[a.show_when]))
           .map((action) => (
             <Button key={action.label} variant="ghost" size="sm"
               loading={actionLoading === action.label}
@@ -393,18 +393,20 @@ export function PluginUI({ schema, pluginName }: Props) {
   const qs = (extra: Record<string, string> = {}) => '?' + new URLSearchParams({ room_id: String(roomId), ...extra }).toString();
 
   // ==================================================================
-  // Table
+  // Table（桌面端表格 / 移动端自动切换为卡片列表）
   // ==================================================================
   if (schema.type === 'table' && schema.columns) {
     const rows = listData || [];
     return (
       <div className="space-y-3">{renderPromptDialog()}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="ghost" size="sm" icon={<RefreshCw />} onClick={load}>刷新</Button>
           <span className="text-xs text-gray-400">{rows.length} 条</span>
           {renderActions()}
         </div>
-        <div className="overflow-x-auto">
+
+        {/* 桌面端：表格（sm 及以上） */}
+        <div className="overflow-x-auto hidden sm:block">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 dark:border-gray-700">
@@ -430,6 +432,31 @@ export function PluginUI({ schema, pluginName }: Props) {
             </tbody>
           </table>
         </div>
+
+        {/* 移动端：卡片列表（sm 以下），每行一卡，标签+值纵向展示 */}
+        <div className="space-y-2 sm:hidden">
+          {rows.length === 0 ? (
+            <p className="text-center text-gray-400 py-6 text-sm">暂无数据</p>
+          ) : rows.map((row: any, i: number) => (
+            <div key={i} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 p-3">
+              <div className="space-y-1.5">
+                {schema.columns!.map((col) => (
+                  <div key={col.key} className="flex items-start justify-between gap-3">
+                    <span className="text-xs text-gray-500 shrink-0">{col.label}</span>
+                    <span className="text-right text-sm text-gray-700 dark:text-gray-300 break-words min-w-0">
+                      {renderCell(col, row[col.key], row, handleSwitchToggle)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {schema.actions && (
+                <div className="mt-2.5 pt-2 border-t border-gray-200 dark:border-gray-700 flex flex-wrap gap-1 justify-end">
+                  {renderActions(row)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -441,13 +468,13 @@ export function PluginUI({ schema, pluginName }: Props) {
     const items = listData || [];
     return (
       <div className="space-y-2">{renderPromptDialog()}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="ghost" size="sm" icon={<RefreshCw />} onClick={load}>刷新</Button>
           {renderActions()}
         </div>
         <div className="space-y-1.5">
           {items.map((item: any, i: number) => (
-            <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-gray-50 dark:bg-gray-900">
+            <div key={i} className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-gray-50 dark:bg-gray-900">
               <div className="flex items-center gap-3 flex-wrap">
                 {schema.columns!.map((col) => renderCell(col, item[col.key], item, handleSwitchToggle))}
               </div>
@@ -466,7 +493,7 @@ export function PluginUI({ schema, pluginName }: Props) {
     const cards = listData || [];
     return (
       <div className="space-y-3">{renderPromptDialog()}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="ghost" size="sm" icon={<RefreshCw />} onClick={load}>刷新</Button>
           {renderActions()}
         </div>
@@ -494,7 +521,7 @@ export function PluginUI({ schema, pluginName }: Props) {
     const stats = data as Record<string, any>;
     return (
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="ghost" size="sm" icon={<RefreshCw />} onClick={load}>刷新</Button>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 lg:gap-3">
@@ -575,7 +602,7 @@ export function PluginUI({ schema, pluginName }: Props) {
         <div className="flex items-center gap-2 flex-wrap">
           {rooms.length > 1 && (
             <select value={roomId} onChange={e => setRoomId(Number(e.target.value))}
-              className="px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300">
+              className="w-full sm:w-auto px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300">
               {rooms.map((r: any) => <option key={r.room_id} value={r.room_id}>{r.room_name} ({r.count}条)</option>)}
             </select>
           )}
@@ -619,57 +646,82 @@ export function PluginUI({ schema, pluginName }: Props) {
             if (st === 'playing') statusCls = 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400';
             else if (st === 'working') statusCls = 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
             else if (st === 'done') statusCls = 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400';
-            return (
-              <div key={i} className={'flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 ' + rowCls}>
-                <input type="checkbox" checked={selected.has(i)} onChange={() => toggleSel(i)}
-                  className="w-4 h-4 rounded accent-primary-500 cursor-pointer" />
-                <span className="text-xs font-bold text-gray-400 w-7 text-center">#{item.index || i + 1}</span>
-                {schema.columns?.map(col => {
-                  const spanCls = col.key === 'song_name' ? 'flex-1 text-sm font-medium text-gray-800 dark:text-gray-200' : 'text-xs text-gray-400';
-                  return <span key={col.key} className={spanCls}>
-                    {col.key === 'status'
-                      ? <span className={'text-[10px] font-semibold px-2 py-0.5 rounded-full ' + statusCls}>{statusLabels[st]}</span>
-                      : col.type ? renderCell(col, item[col.key], item, handleSwitchToggle)
-                      : String(item[col.key] ?? '-')}
-                  </span>
-                })}
-                <div className="flex gap-0.5">
-                  {['playing', 'working', 'done', 'pending'].map(s => {
-                    const btnCls = 'relative group px-1.5 py-0.5 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
-                    return <button key={s} disabled={s === st} className={btnCls}
-                      onClick={async () => { if (s === st) return; await doFetch('/api/plugin/' + pluginName + '/ui/status' + qs(), 'POST', { index: i, status: s }); await load(); }}>
-                      {statusIcons[s]}
-                      {s !== st && <HoverTip text={statusLabels[s]} />}
-                    </button>
-                  })}
 
-                  <button
-                    className="relative group px-1.5 py-0.5 text-xs rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
-                    onClick={async () => {
-                      if (!confirm('确定删除 #' + (item.index || i + 1) + '「' + item.song_name + '」？')) return;
-                      await doFetch('/api/plugin/' + pluginName + '/ui/delete' + qs(), 'POST', { index: i });
-                      setSelected(prev => { const n = new Set(prev); n.delete(i); return n; }); await load();
-                    }}>✕<HoverTip text="删除" /></button>
+            // 状态徽章 / 操作按钮组（桌面端与移动端共用）
+            const statusBadge = (
+              <span className={'text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ' + statusCls}>{statusLabels[st]}</span>
+            );
+            const statusButtons = (
+              <div className="flex gap-0.5">
+                {['playing', 'working', 'done', 'pending'].map(s => {
+                  const btnCls = 'relative group px-2 py-1.5 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
+                  return <button key={s} disabled={s === st} className={btnCls}
+                    onClick={async () => { if (s === st) return; await doFetch('/api/plugin/' + pluginName + '/ui/status' + qs(), 'POST', { index: i, status: s }); await load(); }}>
+                    {statusIcons[s]}
+                    {s !== st && <HoverTip text={statusLabels[s]} />}
+                  </button>
+                })}
+
+                <button
+                  className="relative group px-2 py-1.5 text-sm rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                  onClick={async () => {
+                    if (!confirm('确定删除 #' + (item.index || i + 1) + '「' + item.song_name + '」？')) return;
+                    await doFetch('/api/plugin/' + pluginName + '/ui/delete' + qs(), 'POST', { index: i });
+                    setSelected(prev => { const n = new Set(prev); n.delete(i); return n; }); await load();
+                  }}>✕<HoverTip text="删除" /></button>
+              </div>
+            );
+
+            return (
+              <div key={i}>
+                {/* 桌面端行（sm 及以上） */}
+                <div className={'hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 ' + rowCls}>
+                  <input type="checkbox" checked={selected.has(i)} onChange={() => toggleSel(i)}
+                    className="w-4 h-4 rounded accent-primary-500 cursor-pointer" />
+                  <span className="text-xs font-bold text-gray-400 w-7 text-center">#{item.index || i + 1}</span>
+                  {schema.columns?.map(col => {
+                    const spanCls = col.key === 'song_name' ? 'flex-1 text-sm font-medium text-gray-800 dark:text-gray-200' : 'text-xs text-gray-400';
+                    return <span key={col.key} className={spanCls}>
+                      {col.key === 'status'
+                        ? statusBadge
+                        : col.type ? renderCell(col, item[col.key], item, handleSwitchToggle)
+                        : String(item[col.key] ?? '-')}
+                    </span>
+                  })}
+                  {statusButtons}
+                </div>
+                {/* 移动端卡片（sm 以下）：第一行勾选+序号+歌名+状态，第二行点播者+操作按钮 */}
+                <div className={'flex sm:hidden flex-col gap-2 px-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 ' + rowCls}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <input type="checkbox" checked={selected.has(i)} onChange={() => toggleSel(i)}
+                      className="w-4 h-4 shrink-0 rounded accent-primary-500 cursor-pointer" />
+                    <span className="text-xs font-bold text-gray-400 w-7 shrink-0 text-center">#{item.index || i + 1}</span>
+                    <span className="flex-1 min-w-0 text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{item.song_name}</span>
+                    {statusBadge}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 pl-11">
+                    <span className="text-xs text-gray-400 truncate">{item.user_name || '—'}</span>
+                    {statusButtons}
+                  </div>
                 </div>
               </div>
             );
           })}
           </div>
+        </div>
 
-          {/* 底部 padding 为批量工具栏预留空间，避免遮挡最后一行 */}
-          {selected.size > 0 && <div className="pb-10" />}
-
-          {/* Batch toolbar — 绝对定位在滚动容器底部，不挤压列表项 */}
-          <div className={'absolute bottom-0 left-0 right-0 flex items-center gap-2 flex-wrap p-2 border-t border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur-sm rounded-b-lg transition-all ' + (selected.size > 0 ? 'opacity-100' : 'opacity-0 pointer-events-none')}>
+        {/* Batch toolbar — 独立于列表滚动容器，始终显示在列表下方，不遮挡任何条目 */}
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <span className="text-xs font-medium text-primary-700 dark:text-primary-300">已选 {selected.size} 项</span>
-            <Button variant="ghost" size="sm" onClick={() => batchApi('playing')}>🎵</Button>
-            <Button variant="ghost" size="sm" onClick={() => batchApi('working')}>🔧</Button>
-            <Button variant="ghost" size="sm" onClick={() => batchApi('done')}>✅</Button>
-            <Button variant="ghost" size="sm" onClick={() => batchApi('pending')}>🔄</Button>
+            <Button variant="ghost" size="sm" onClick={() => batchApi('playing')}>🎵<span className="sm:hidden ml-1">播放中</span></Button>
+            <Button variant="ghost" size="sm" onClick={() => batchApi('working')}>🔧<span className="sm:hidden ml-1">操作中</span></Button>
+            <Button variant="ghost" size="sm" onClick={() => batchApi('done')}>✅<span className="sm:hidden ml-1">已完成</span></Button>
+            <Button variant="ghost" size="sm" onClick={() => batchApi('pending')}>🔄<span className="sm:hidden ml-1">待播</span></Button>
             <Button variant="ghost" size="sm" className="text-red-500!" onClick={batchDelete}>🗑️ 删除</Button>
             <Button variant="ghost" size="sm" onClick={clearSel}>取消</Button>
           </div>
-        </div>
+        )}
 
         {/* Prompt dialog */}
         {promptAction && promptAction.prompt_field && (
@@ -791,7 +843,7 @@ export function PluginUI({ schema, pluginName }: Props) {
 
         {schema.submit && (
           <div className="flex justify-end pt-2">
-            <Button variant="primary" size="sm" onClick={handleSubmit} loading={formSubmitting}>
+            <Button variant="primary" size="sm" className="w-full sm:w-auto" onClick={handleSubmit} loading={formSubmitting}>
               {schema.submit.label}
             </Button>
           </div>

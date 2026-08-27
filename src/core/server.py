@@ -190,7 +190,7 @@ class MissevanServer(ServerInterface):
         for name in enabled_names:
             try:
                 _log.info("Cookie 更新前停用插件: {}", name)
-                pm.disable_plugin(name)
+                await pm.disable_plugin(name)
             except Exception as e:
                 _log.warning("停用插件失败 [{}]: {}", name, e)
 
@@ -492,13 +492,18 @@ class MissevanServer(ServerInterface):
             if pm._command_router is not None:
                 pm._command_router.register_plugin(metadata.plugin_instance)
             metadata.enabled = True
+            # 重新启用已初始化实例 → 调用 on_enable 钩子（恢复定时消息等）
+            try:
+                await metadata.plugin_instance.on_enable()
+            except Exception as e:
+                _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
 
         _log.info("插件已启用: {}", plugin_name)
         self._save_state()
 
     async def disable_plugin(self, plugin_name: str) -> None:
         pm = self._require_plugin_manager()
-        pm.disable_plugin(plugin_name)
+        await pm.disable_plugin(plugin_name)
         self._save_state()
 
     @property
@@ -607,8 +612,17 @@ class MissevanServer(ServerInterface):
         return self._bot.timer_message_count
 
     def list_timer_messages(self) -> dict:
-        """列出全局与各直播间的定时消息（含执行位置指针）。"""
-        return self._bot.list_timer_messages()
+        """列出全局与各直播间的定时消息（含执行位置指针）。
+
+        为每个直播间附加 ``room_name``（来自 Server 管理的直播间实例，
+        未收录的直播间不附加该字段，由前端回退显示）。
+        """
+        data = self._bot.list_timer_messages()
+        for room in data["rooms"]:
+            live = self._livestreams.get(room["live_id"])
+            if live is not None:
+                room["room_name"] = live.room_name
+        return data
 
     def update_timer_message(self, message_id: str, message: str) -> bool:
         """编辑定时消息内容。"""
