@@ -142,19 +142,18 @@ powershell -File scripts\docker-release.ps1 -Version 1.2.0
 bash scripts/docker-release.sh 1.2.0
 ```
 
-产物：`dist/mismiss-1.2.0-docker.zip`（Windows）或 `dist/mismiss-1.2.0-docker.tar.gz`（Linux / macOS）。
+产物：`dist/mismiss-1.2.0-docker.zip`（Windows 同时产出 `.tar.gz`）或 `dist/mismiss-1.2.0-docker.tar.gz`（Linux / macOS）。
 
 版本号未指定时自动解析（与 release.sh 一致）：`pyproject.toml` → git tag → 日期。例如当前项目会得到 `mismiss-1.0.0-beta.2-docker.zip`，与 `release/` 目录产物命名保持同一格式。
 
-部署包内容：
+部署包内容（扁平结构，无顶层目录，可直接解压到部署目录）：
 
 ```
-mismiss-1.2.0-docker/
-├── mismiss-docker.tar.gz   # 应用镜像（docker save 导出）
-├── docker-compose.yml      # 部署栈（应用 + Nginx）
-├── nginx.conf              # Nginx 反向代理配置
-├── config.yml.dist         # 配置模板（首次部署引导）
-└── deploy.sh               # 服务器一键部署脚本
+mismiss-docker.tar.gz   # 应用镜像（docker save 导出）
+docker-compose.yml      # 部署栈（应用 + Nginx）
+nginx.conf              # Nginx 反向代理配置
+config.yml.dist         # 配置模板（首次部署引导）
+deploy.sh               # 服务器一键部署脚本
 ```
 
 ### 4.2 服务器部署
@@ -164,7 +163,7 @@ mismiss-1.2.0-docker/
 scp dist/mismiss-1.2.0-docker.zip user@server:/opt/mismiss/
 
 # 2. 解压 + 一键部署（导入镜像 → 引导配置 → 启动）
-cd /opt/mismiss && unzip mismiss-1.2.0-docker.zip && cd mismiss-1.2.0-docker
+cd /opt/mismiss && unzip -o mismiss-1.2.0-docker.zip
 bash deploy.sh
 ```
 
@@ -187,7 +186,7 @@ scp dist/mismiss-1.3.0-docker.zip user@server:/opt/mismiss/
 
 # 服务器
 cd /opt/mismiss && unzip -o mismiss-1.3.0-docker.zip
-cd mismiss-1.3.0-docker && bash deploy.sh
+bash deploy.sh
 ```
 
 `config.yml`、`data/`、`plugins/` 等运行时文件不会被覆盖（部署包内不含）。
@@ -237,7 +236,7 @@ docker compose up -d
 
 ```
 点击「更新到 vX」
-  → 下载 mismiss-<版本>-docker.zip 部署包（复用镜像站/代理设置）
+  → 下载 mismiss-<版本>-docker.zip / .tar.gz 部署包（复用镜像站/代理设置）
   → 校验格式（含内层镜像归档检查）
   → 备份当前部署包到 .mismiss-backup/
   → 解压到部署目录（config.yml 用户配置与 .env 不被覆盖）
@@ -530,7 +529,8 @@ release/
 ├── mismiss-1.0.0-beta.2-py3-none-any.whl    # pip wheel
 ├── mismiss-1.0.0-beta.2-win.exe             # PyInstaller Windows
 ├── mismiss-1.0.0-beta.2-linux               # PyInstaller Linux
-├── mismiss-1.0.0-beta.2-docker.tar.gz       # Docker 部署包（镜像 + 部署栈，Windows 打包为 .zip）
+├── mismiss-1.0.0-beta.2-docker.tar.gz       # Docker 部署包（镜像 + 部署栈）
+├── mismiss-1.0.0-beta.2-docker.zip          # 同上（Windows 构建时与 .tar.gz 一同产出）
 └── checksums-1.0.0-beta.2.txt               # SHA256 校验
 ```
 
