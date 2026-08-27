@@ -109,6 +109,11 @@ from interfaces.entity import Question
 | `question_id` | `str` | 问题 ID（十六进制字符串） |
 | `text` | `str` | 问题文本内容 |
 | `price` | `int` | 问题的出价/价格 |
+| `status` | `int` | 问题状态（`0` = 待回答） |
+| `created_time` | `int` | 创建时间（Unix 毫秒时间戳） |
+| `updated_time` | `int` | 最近更新时间（Unix 毫秒时间戳） |
+| `likes` | `int` | 点赞数 |
+| `liked` | `bool` | 当前机器人用户是否已点赞 |
 
 ---
 
@@ -119,11 +124,13 @@ Event (ABC, 标记接口)
 └── LivestreamEvent (ABC)
     ├── LiveOpenEvent
     ├── LiveCloseEvent
+    ├── LiveStatisticsEvent   (+ score, online, vip)
     └── LivestreamUserEvent (ABC)
         ├── LiveJoinEvent
         ├── LiveFollowEvent
-        ├── LiveMessageEvent  (+ message)
-        └── LiveGiftEvent     (+ gift, gift_num)
+        ├── LiveMessageEvent   (+ message)
+        ├── LiveGiftEvent      (+ gift, gift_num)
+        └── LiveQuestionEvent  (+ question, question_id)
 ```
 
 ### 3.1 Event —— 事件标记
@@ -157,10 +164,12 @@ from interfaces import Event
 |----|------|------|----------|
 | `LiveOpenEvent` | `LivestreamEvent` | 直播间开播 | 无 |
 | `LiveCloseEvent` | `LivestreamEvent` | 直播间下播 | 无 |
+| `LiveStatisticsEvent` | `LivestreamEvent` | 直播间实时统计（`room:statistics`） | `score: int`, `online: int`, `vip: int` |
 | `LiveJoinEvent` | `LivestreamUserEvent` | 用户加入直播间 | 无 |
 | `LiveFollowEvent` | `LivestreamUserEvent` | 用户关注直播间 | 无 |
 | `LiveMessageEvent` | `LivestreamUserEvent` | 用户发送消息 | `message: str` |
 | `LiveGiftEvent` | `LivestreamUserEvent` | 用户赠送礼物 | `gift: Gift`, `gift_num: int`（委托） |
+| `LiveQuestionEvent` | `LivestreamUserEvent` | 用户发起付费提问（`question:ask`） | `question: Question`, `question_id: str`（委托） |
 
 ---
 
@@ -236,7 +245,8 @@ from interfaces.livestream import Livestream
 | `live_id` | `int` | 直播间 ID |
 | `room_name` | `str` | 直播间名称 |
 | `room_description` | `str` | 直播间简介 |
-| `score` | `int` | 直播间热度（未开播时返回 `-1`） |
+| `score` | `int` | 直播间热度（未开播时返回 `-1`；`room:statistics` 事件实时更新） |
+| `online_count` | `int` | 直播间当前在线人数（`room:statistics` 事件实时更新，未收到时返回 `0`） |
 | `creator` | `Creator` | 直播间创建者 |
 | `creator_id` | `int` | 创建者 ID（委托给 `creator.id`） |
 | `creator_name` | `str` | 创建者昵称（委托给 `creator.name`） |
@@ -422,11 +432,13 @@ from interfaces import Event, Listener, event_handler, RequestFailedException
 | `Creator` | 上述 7 项 + `is_online`, `room_medal` |
 | `Gift` | `livestream`, `user`, `lucky_gift`, `is_lucky_gift`, `name`, `id`, `price`, `num` |
 | `Medal` | `name`, `level` |
-| `Question` | `livestream`, `user`, `question_id`, `text`, `price` |
-| `Livestream` | `is_connected`, `live_id`, `room_name`, `room_description`, `score`, `creator`, `bot`, `send_message`, `send_gift`, `send_backpack` + EventManager 的 3 个方法 |
+| `Question` | `livestream`, `user`, `question_id`, `text`, `price`, `status`, `created_time`, `updated_time`, `likes`, `liked` |
+| `Livestream` | `is_connected`, `live_id`, `room_name`, `room_description`, `score`, `online_count`, `creator`, `bot`, `send_message`, `send_gift`, `send_backpack` + EventManager 的 3 个方法 |
 | `LivestreamManager` | `livestream_list`, `get_livestream`, `get_livestream_if_absent`, `register_new_livestream`, `unregister_livestream` |
 | `Bot` | User 的 4 项 + `enabled`, `permissions`, `send_livestream_message`, `send_private_message`, `get_backpack_gifts`, `send_livestream_gift`, `send_livestream_backpack`, `refresh`, `get_cookie`, `register_timer_message`, `unregister_timer_message`, `register_timer_messages`, `unregister_timer_messages` |
 | `LivestreamEvent` | `livestream` |
+| `LiveStatisticsEvent` | 上述 1 项 + `score`, `online`, `vip` |
 | `LivestreamUserEvent` | 上述 1 项 + `user` |
 | `LiveMessageEvent` | 上述 2 项 + `message` |
 | `LiveGiftEvent` | 上述 2 项 + `gift` |
+| `LiveQuestionEvent` | 上述 2 项 + `question` |

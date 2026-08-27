@@ -50,6 +50,7 @@ class MissevanLivestream(Livestream):
         self._room_name: str = ""
         self._room_description: str = ""
         self._score: int = -1
+        self._online_count: int = 0  # 在线人数（room:statistics 事件实时更新）
         self._creator: Creator | None = None
 
         # WebSocket
@@ -110,6 +111,10 @@ class MissevanLivestream(Livestream):
     @property
     def score(self) -> int:
         return self._score
+
+    @property
+    def online_count(self) -> int:
+        return self._online_count
 
     @property
     def creator(self) -> Creator:
@@ -220,6 +225,18 @@ class MissevanLivestream(Livestream):
     # 内部
     # ------------------------------------------------------------------ #
 
+    def update_statistics(self, score: int, online: int) -> None:
+        """更新直播间实时统计（热度与在线人数）。
+
+        由 WebSocket ``room:statistics`` 事件驱动，前端轮询接口
+        即可看到实时热度变化。
+
+        :param score: 最新热度值
+        :param online: 最新在线人数
+        """
+        self._score = score
+        self._online_count = online
+
     async def _refresh(self) -> None:
         """刷新直播间元数据。"""
         response = await RoomInfoAPI().api(self._live_id)
@@ -256,9 +273,12 @@ class MissevanLivestream(Livestream):
             creator_is_online=creator_data.get("online", False),
         )
 
-        # 热度
+        # 热度 / 在线人数（在线人数可能缺失，保留旧值）
         statistics = room.get("statistics", {})
         self._score = statistics.get("score", -1)
+        online = statistics.get("online")
+        if online is not None:
+            self._online_count = int(online)
 
         # 管理员列表（Meta API，仅调用一次）
         try:

@@ -7,6 +7,7 @@ from .user import MissevanUser, MissevanLiveUser
 from .gift import BotGift, LiveGift
 from .medal import RoomMedal
 from .creator import LiveCreator
+from .question import LiveQuestion
 from .events import (
     OpenEvent,
     CloseEvent,
@@ -14,6 +15,8 @@ from .events import (
     JoinEvent,
     FollowEvent,
     GiftEvent,
+    QuestionEvent,
+    StatisticsEvent,
 )
 
 __all__ = [
@@ -23,10 +26,13 @@ __all__ = [
     "LiveGift",
     "RoomMedal",
     "LiveCreator",
+    "LiveQuestion",
     "OpenEvent",
     "CloseEvent",
     "MessageEvent",
     "JoinEvent",
     "FollowEvent",
     "GiftEvent",
+    "QuestionEvent",
+    "StatisticsEvent",
 ]

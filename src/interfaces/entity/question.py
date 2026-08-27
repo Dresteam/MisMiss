@@ -87,3 +87,50 @@ class Question(ABC):
         :return: 问题价格
         """
         ...
+
+    @property
+    @abstractmethod
+    def status(self) -> int:
+        """获取问题状态。
+
+        已知取值：``0`` 表示待回答（pending）。
+
+        :return: 问题状态码
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def created_time(self) -> int:
+        """获取问题创建时间。
+
+        :return: Unix 毫秒时间戳
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def updated_time(self) -> int:
+        """获取问题最近更新时间。
+
+        :return: Unix 毫秒时间戳
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def likes(self) -> int:
+        """获取问题点赞数。
+
+        :return: 点赞数量
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def liked(self) -> bool:
+        """检查机器人当前用户是否已点赞。
+
+        :return: 已点赞返回 ``True``
+        """
+        ...

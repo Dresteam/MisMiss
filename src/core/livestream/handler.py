@@ -18,8 +18,11 @@ from ..models.events import (
     JoinEvent,
     FollowEvent,
     GiftEvent,
+    QuestionEvent,
+    StatisticsEvent,
 )
 from ..models.gift import LiveGift
+from ..models.question import LiveQuestion
 from ..models.user import MissevanUser, MissevanLiveUser
 from ..network.websocket import LiveWebSocket
 
@@ -71,11 +74,13 @@ class Live(LiveWebSocket):
         handlers: dict[str, Callable[[dict[str, Any]], None]] = {
             "room:open": self._handle_room_open,
             "room:close": self._handle_room_close,
+            "room:statistics": self._handle_statistics,
             "message:new": self._handle_message,
             "message:cross_new": self._handle_message,
             "member:join_queue": self._handle_join_queue,
             "member:followed": self._handle_follow,
             "gift:send": self._handle_gift,
+            "question:ask": self._handle_question,
             # 以下事件暂不需要处理
             # "room:join": ...   # 返回自己的个人信息
             # "member:join": ...  # 主播进入房间（触发逻辑未知）
@@ -94,6 +99,27 @@ class Live(LiveWebSocket):
 
     def _handle_room_close(self, data: dict[str, Any]) -> None:
         self._post_event(CloseEvent(event_livestream=self._livestream))
+
+    def _handle_statistics(self, data: dict[str, Any]) -> None:
+        """处理 ``room:statistics`` —— 直播间实时统计（热度/在线人数）。
+
+        除分发事件外，自动更新直播间实例的实时状态，
+        前端轮询列表接口即可看到热度变化。
+        """
+        stats = data.get("statistics", {})
+        score = stats.get("score", self._livestream.score)
+        online = stats.get("online", self._livestream.online_count)
+        vip = stats.get("vip", 0)
+
+        # 自动更新直播间实时状态
+        self._livestream.update_statistics(score=score, online=online)
+
+        self._post_event(StatisticsEvent(
+            event_livestream=self._livestream,
+            event_score=score,
+            event_online=online,
+            event_vip=vip,
+        ))
 
     def _handle_message(self, data: dict[str, Any]) -> None:
         user = data.get("user", {})
@@ -169,6 +195,31 @@ class Live(LiveWebSocket):
             event_livestream=self._livestream,
             event_user=live_user,
             event_gift=gift,
+        ))
+
+    def _handle_question(self, data: dict[str, Any]) -> None:
+        """处理 ``question:ask`` —— 用户发起付费提问。"""
+        user = data.get("user", {})
+        live_user = self._build_live_user(user)
+
+        q = data.get("question", {})
+        question = LiveQuestion(
+            question_livestream=self._livestream,
+            question_user=live_user,
+            question_qid=q.get("question_id", ""),
+            question_text=q.get("question", ""),
+            question_price=q.get("price", 0),
+            question_status=q.get("status", 0),
+            question_created_time=q.get("created_time", 0),
+            question_updated_time=q.get("updated_time", 0),
+            question_likes=q.get("likes", 0),
+            question_liked=bool(q.get("liked", False)),
+        )
+
+        self._post_event(QuestionEvent(
+            event_livestream=self._livestream,
+            event_user=live_user,
+            event_question=question,
         ))
 
     # ------------------------------------------------------------------ #

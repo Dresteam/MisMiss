@@ -53,6 +53,7 @@ export interface LivestreamInfo {
   room_name: string;
   room_description: string;
   score: number;
+  online_count: number;
   creator_name: string;
   creator_id: number;
   creator_is_online: boolean;

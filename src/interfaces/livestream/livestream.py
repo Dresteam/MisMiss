@@ -106,6 +106,18 @@ class Livestream(EventManager, ABC):
 
     @property
     @abstractmethod
+    def online_count(self) -> int:
+        """获取直播间当前在线人数。
+
+        通过 WebSocket ``room:statistics`` 事件实时更新；
+        未收到统计事件时返回 ``0``。
+
+        :return: 当前在线人数
+        """
+        ...
+
+    @property
+    @abstractmethod
     def creator(self) -> Creator:
         """获取直播间创建者。
 

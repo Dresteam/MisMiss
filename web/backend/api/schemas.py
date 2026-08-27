@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -91,6 +90,7 @@ class LivestreamInfo(BaseModel):
     room_name: str = ""
     room_description: str = ""
     score: int = 0
+    online_count: int = 0
     creator_name: str = ""
     creator_id: int = 0
     creator_is_online: bool = False

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  Radio, Plus, Send, Trash2, RefreshCw, TrendingUp,
+  Radio, Plus, Send, Trash2, RefreshCw, TrendingUp, Users,
   Loader2, LogIn, LogOut, RotateCw,
 } from 'lucide-react';
 import {
@@ -209,6 +209,7 @@ export function LivePage() {
                   <th className="text-left px-4 py-3 font-medium text-gray-500">ID</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">房间名</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">热度</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-500">在线</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">状态</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-500">连接</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-500">操作</th>
@@ -238,6 +239,12 @@ export function LivePage() {
                         <div className="flex items-center gap-1 text-gray-500">
                           <TrendingUp className="w-3.5 h-3.5" />
                           {live.score.toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1 text-gray-500">
+                          <Users className="w-3.5 h-3.5" />
+                          {live.online_count}
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -331,8 +338,13 @@ export function LivePage() {
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="text-xs text-gray-500 flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3" />{live.score.toLocaleString()}
+                    <div className="text-xs text-gray-500 flex items-center gap-3">
+                      <span className="flex items-center gap-1">
+                        <TrendingUp className="w-3 h-3" />{live.score.toLocaleString()}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Users className="w-3 h-3" />{live.online_count}
+                      </span>
                     </div>
                     <div className="flex items-center gap-1">
                       {live.enabled ? (
