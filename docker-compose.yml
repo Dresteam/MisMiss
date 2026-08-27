@@ -55,7 +55,10 @@ services:
       - PYTHONUNBUFFERED=1
       - MISMISS_PROD=1
       - API_PORT=8080
-      - WORKERS=${MISMISS_WORKERS:-4}
+      # 默认单 worker：直播间连接、Bot 定时器、插件实例均为单实例资源，
+      # 多 worker 会导致跨进程状态不一致（连接重复、事件分裂等）。
+      # 仅在明确了解限制且仅需提高 API 吞吐时调高。
+      - WORKERS=${MISMISS_WORKERS:-1}
     # 资源限制（根据服务器调整）
     deploy:
       resources:

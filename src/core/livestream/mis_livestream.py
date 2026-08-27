@@ -216,6 +216,15 @@ class MissevanLivestream(Livestream):
         :raises CoreDisabledException: 直播间已停用
         """
         self._check_enabled()
+        await self.disconnect()
+
+    async def disconnect(self) -> None:
+        """无条件断开 WebSocket 连接（不检查启用状态）。
+
+        供停用/移除流程与跨 worker 状态同步清理使用：
+        调用方往往先置 ``enabled = False`` 再异步退出，
+        此时 :meth:`quit` 会抛 ``CoreDisabledException`` 导致连接无法关闭。
+        """
         if self._websocket:
             await self._websocket.close()
             self._websocket = None

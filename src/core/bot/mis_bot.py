@@ -553,6 +553,67 @@ class MissevanBot(Bot):
             self.unregister_timer_message(mid)
 
     # ------------------------------------------------------------------ #
+    # 定时消息 —— 持久化（随 state 文件保存，重启 / Cookie 更新后恢复）
+    # ------------------------------------------------------------------ #
+
+    def export_timer_state(self) -> dict:
+        """导出定时消息状态（供 Server 持久化到 state 文件）。"""
+        global_list = []
+        for mid in self._global_timer_cycle:
+            entry = self._global_timer_entries.get(mid)
+            if entry is not None:
+                global_list.append({
+                    "message_id": entry.message_id,
+                    "message": entry.message,
+                })
+        rooms = []
+        for live_id in sorted(self._room_timer_cycles.keys()):
+            cycle = self._room_timer_cycles[live_id]
+            entries = self._room_timer_entries.get(live_id, {})
+            rooms.append({
+                "live_id": live_id,
+                "position": self._room_positions.get(live_id, 0),
+                "messages": [
+                    {"message_id": mid, "message": entries[mid].message}
+                    for mid in cycle if mid in entries
+                ],
+            })
+        return {"global": global_list, "rooms": rooms}
+
+    def restore_timer_state(self, data: dict) -> None:
+        """从持久化数据恢复定时消息（启动 / 恢复 Bot / 更新 Cookie 时调用）。
+
+        :param data: :meth:`export_timer_state` 导出的数据
+        """
+        if not data:
+            return
+        self._clear_all_timer_queues()
+        for item in data.get("global", []) or []:
+            entry = _TimerEntry(
+                message_id=str(item["message_id"]), live_id=0, message=str(item["message"])
+            )
+            self._global_timer_entries[entry.message_id] = entry
+            self._global_timer_cycle.append(entry.message_id)
+        for room in data.get("rooms", []) or []:
+            live_id = int(room["live_id"])
+            self._room_positions[live_id] = int(room.get("position", 0))
+            for item in room.get("messages", []) or []:
+                entry = _TimerEntry(
+                    message_id=str(item["message_id"]),
+                    live_id=live_id,
+                    message=str(item["message"]),
+                )
+                self._room_timer_entries.setdefault(live_id, {})[entry.message_id] = entry
+                self._room_timer_cycles.setdefault(live_id, []).append(entry.message_id)
+        if self._enabled:
+            # 仅启用状态才启动计时循环，避免停用期间每间隔空转告警
+            self._ensure_timer_running()
+        _log.info(
+            "定时消息已恢复: 全局 {} 条, 直播间 {} 个",
+            len(self._global_timer_cycle), len(self._room_timer_cycles),
+        )
+
+    # ------------------------------------------------------------------ #
     # 定时消息队列管理（Web 控制台）
     # ------------------------------------------------------------------ #
 

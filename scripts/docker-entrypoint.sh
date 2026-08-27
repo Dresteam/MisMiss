@@ -32,6 +32,8 @@ WORKERS="${WORKERS:-1}"
 # --preload                                   = 启动时加载 app（共享资源）
 # --graceful-timeout                          = 优雅关闭等待时间
 # --keep-alive                                = HTTP keep-alive
+# --timeout                                   = worker 超时（在线更新需下载/校验/导入
+#                                               200MB+ 部署包，默认 30s 会误杀请求）
 
 exec gosu mismiss gunicorn web.backend.main:app \
     --bind "0.0.0.0:${PORT}" \
@@ -40,6 +42,7 @@ exec gosu mismiss gunicorn web.backend.main:app \
     --preload \
     --graceful-timeout 30 \
     --keep-alive 5 \
+    --timeout 1800 \
     --access-logfile - \
     --error-logfile - \
     --log-level info

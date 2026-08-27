@@ -156,20 +156,10 @@ async def bot_timer_interval(body: dict, s: MissevanServer = Depends(get_server)
     interval = body.get("interval", 60)
     if not isinstance(interval, (int, float)) or interval < 1:
         raise HTTPException(status_code=400, detail="间隔必须 >= 1 秒")
-    s.bot.timer_interval = float(interval)
-    # 持久化到 config.yml
-    import yaml
-    import os
-    from pathlib import Path
-    config_path = str(Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml")
-    current = {}
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            current = yaml.safe_load(f) or {}
-    current.setdefault("bot", {})["timer_interval"] = int(interval)
-    with open(config_path, "w", encoding="utf-8") as f:
-        yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    return StatusResponse(success=True, message=f"定时消息间隔已设为 {int(interval)} 秒")
+    # 复用 set_timer_interval：实时生效 + 通过 ServerConfig.save 原子持久化，
+    # 避免在此直接读改写 config.yml（与其他写入并发时可能互相覆盖）
+    s.set_timer_interval(float(interval))
+    return StatusResponse(success=True, message=f"定时消息间隔已设为 {interval:g} 秒")
 
 
 @router.post("/disable", response_model=StatusResponse)
