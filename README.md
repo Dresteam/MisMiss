@@ -515,7 +515,7 @@ MissMiss/
 ├── BUILDING.md                   # 构建与部署指南
 ├── start.bat                     # 一键启动脚本
 ├── mismiss.spec                  # PyInstaller 打包配置
-├── Dockerfile / docker-compose.yml
+├── Dockerfile / docker-compose.yml / nginx.conf   # Docker 部署栈
 │
 ├── web/                          # 🖥️ Web 控制台
 │   ├── backend/                  # FastAPI 后端 API

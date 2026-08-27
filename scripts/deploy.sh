@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================
-# MisMiss — 部署脚本 (Linux)
+# MisMiss — 部署脚本 (Linux，原生 systemd + venv)
+# ============================================================
+# Docker 部署请走部署包流程（镜像不推仓库）:
+#   本地:   bash scripts/docker-release.sh   → dist/mismiss-<版本>-docker.tar.gz
+#   服务器: 解压部署包 → ./deploy.sh
 # ============================================================
 # 用法:
-#   bash scripts/deploy.sh              # 交互式
-#   bash scripts/deploy.sh --docker     # Docker 部署
-#   bash scripts/deploy.sh --native     # 原生部署（systemd + venv）
+#   bash scripts/deploy.sh              # 原生部署（systemd + venv）
+#   bash scripts/deploy.sh --native     # 同上
 # ============================================================
 
 set -euo pipefail
@@ -21,39 +24,6 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 die()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
 require_cmd() { command -v "$1" &>/dev/null || die "缺少命令: $1"; }
-
-# ------------------------------------------------------------------ #
-# Docker 部署
-# ------------------------------------------------------------------ #
-deploy_docker() {
-    require_cmd docker
-    step "Docker 部署"
-
-    mkdir -p "$PROJECT_ROOT"/{data,logs,plugins,permissions}
-
-    info "构建镜像..."
-    docker build -t mismiss:latest "$PROJECT_ROOT"
-
-    if docker compose version &>/dev/null 2>&1; then
-        docker compose up -d
-    elif command -v docker-compose &>/dev/null; then
-        docker-compose up -d
-    else
-        docker rm -f mismiss 2>/dev/null || true
-        docker run -d --name mismiss --restart unless-stopped \
-            -p 8080:8080 \
-            -v "$PROJECT_ROOT/data:/app/data" \
-            -v "$PROJECT_ROOT/logs:/app/logs" \
-            -v "$PROJECT_ROOT/plugins:/app/plugins" \
-            -v "$PROJECT_ROOT/permissions:/app/permissions" \
-            -v "$PROJECT_ROOT/config.yml:/app/config.yml:ro" \
-            -e TZ=Asia/Shanghai \
-            mismiss:latest
-    fi
-
-    info "部署完成 → http://localhost:8080"
-    info "管理:  docker compose logs -f    |    docker compose down"
-}
 
 # ------------------------------------------------------------------ #
 # 原生部署
@@ -145,26 +115,18 @@ EOF
 # ------------------------------------------------------------------ #
 main() {
     echo ""
-    echo "  === MisMiss 部署工具 ==="
+    echo "  === MisMiss 部署工具（原生 systemd + venv）==="
+    echo ""
+    echo "  Docker 部署请使用部署包（镜像不推仓库）:"
+    echo "    本地:   bash scripts/docker-release.sh"
+    echo "    服务器: 解压部署包后执行 ./deploy.sh"
     echo ""
 
-    MODE="${1:-}"
-    if [ -z "$MODE" ]; then
-        echo "选择部署方式:"
-        echo "  1) Docker  （推荐，隔离环境）"
-        echo "  2) Native （systemd + venv）"
-        read -rp "输入 [1-2] (默认=1): " choice
-        case "${choice:-1}" in
-            1) MODE="--docker" ;;
-            2) MODE="--native" ;;
-            *) die "无效选择" ;;
-        esac
-    fi
-
+    MODE="${1:---native}"
     case "$MODE" in
-        --docker) deploy_docker ;;
         --native) deploy_native ;;
-        *) echo "用法: bash scripts/deploy.sh [--docker|--native]"; exit 1 ;;
+        --docker) die "Docker 部署已改为部署包流程，见 scripts/docker-release.sh" ;;
+        *) echo "用法: bash scripts/deploy.sh [--native]"; exit 1 ;;
     esac
 }
 

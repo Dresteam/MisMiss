@@ -1,38 +1,85 @@
 # ============================================================
-# MisMiss — Docker Compose 一键部署
+# MisMiss — Docker Compose 部署栈（本地 / 服务器通用）
 # ============================================================
-# 启动:  docker compose up -d
-# 查看:  docker compose logs -f
-# 停止:  docker compose down
+# 架构:  Nginx (:${MISMISS_HTTP_PORT:-18080}) → Gunicorn (:8080) → FastAPI
+#
+# 镜像不推送到任何仓库，通过部署包分发（见 docs/build/BUILDING.md）：
+#
+#   本地（开发机）:
+#     bash scripts/docker-release.sh      # 构建镜像并打包 → dist/mismiss-<版本>-docker.tar.gz
+#
+#   服务器:
+#     1. 上传部署包并解压到部署目录（含本文件、nginx.conf、config.yml.dist、deploy.sh）
+#     2. bash deploy.sh                   # 导入镜像 + 引导配置 + 启动
+#
+#   在线更新（Web 控制台「更新 MisMiss」页，手动点击）:
+#     通过挂载的 /var/run/docker.sock 操作宿主 Docker：下载新部署包 →
+#     校验 → 导入镜像 → 派发一次性容器执行重建。如需禁用该能力，
+#     删除下面 mismiss 服务的 docker.sock 与部署目录两处挂载即可。
+#
+# 更新（服务器）: 解压新部署包覆盖部署目录 → bash deploy.sh（自动重建容器）
+#
+# 端口: 默认 18080（避开 80，留给服务器统一反向代理）。
+#   修改方式: .env 文件写入 MISMISS_HTTP_PORT=9090
+#   或: MISMISS_HTTP_PORT=9090 docker compose up -d
 # ============================================================
 
+name: mismiss
+
 services:
+  # ================================================================ #
+  # MisMiss 应用服务
+  # ================================================================ #
   mismiss:
     image: mismiss:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: mismiss
     restart: unless-stopped
-    ports:
-      - "18080:8080"
+    expose:
+      - "8080"
     volumes:
       # 持久化数据（Bot 状态、直播间状态、插件配置等）
-      - ./data:/app/data
+      - ${MISMISS_HOME:-.}/data:/app/data
       # 日志文件
-      - ./logs:/app/logs
+      - ${MISMISS_HOME:-.}/logs:/app/logs
       # 插件目录
-      - ./plugins:/app/plugins
+      - ${MISMISS_HOME:-.}/plugins:/app/plugins
       # 权限配置
-      - ./permissions:/app/permissions
-      # 自定义配置（修改后 docker compose restart 即可）
-      - ./config.yml:/app/config.yml:ro
+      - ${MISMISS_HOME:-.}/permissions:/app/permissions
+      # 自定义配置（由 deploy.sh 首次部署时从 config.yml.dist 生成）
+      - ${MISMISS_HOME:-.}/config.yml:/app/config.yml:ro
+      # 宿主 Docker socket —— 在线更新用（删除此行可禁用在线更新）
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 部署目录 —— 在线更新下载/解压部署包用（删除此行可禁用在线更新）
+      - ${MISMISS_HOME:-.}:/app/deploy
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
       - MISMISS_PROD=1
-    # 如需 GPU 或其他资源限制，取消注释:
-    # deploy:
-    #   resources:
-    #     limits:
-    #       memory: 512M
+      - API_PORT=8080
+      - WORKERS=${MISMISS_WORKERS:-4}
+    # 资源限制（根据服务器调整）
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ================================================================ #
+  # Nginx 反向代理（静态缓存 / 限流 / 安全头 / WebSocket）
+  # ================================================================ #
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${MISMISS_HTTP_PORT:-18080}:80"
+    volumes:
+      - ${MISMISS_HOME:-.}/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # SSL 证书（可选）
+      # - ${MISMISS_HOME:-.}/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      mismiss:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64M
