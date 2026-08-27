@@ -8,7 +8,6 @@ from core import MissevanServer
 from core.exceptions import (
     CoreApiException,
     CoreBotException,
-    CoreCookieException,
     CoreDisabledException,
     CorePermissionException,
     CoreWebSocketException,
@@ -47,6 +46,7 @@ def _live_to_info(live) -> LivestreamInfo:
         room_name=live.room_name or "",
         room_description=live.room_description or "",
         score=getattr(live, "score", 0) or 0,
+        online_count=getattr(live, "online_count", 0) or 0,
         creator_name=live.creator_name or "",
         creator_id=getattr(live, "creator_id", 0) or 0,
         creator_is_online=creator_online,

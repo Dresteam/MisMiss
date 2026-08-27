@@ -15,11 +15,14 @@ from interfaces.event.livestream.live_join_event import LiveJoinEvent
 from interfaces.event.livestream.live_follow_event import LiveFollowEvent
 from interfaces.event.livestream.live_message_event import LiveMessageEvent
 from interfaces.event.livestream.live_gift_event import LiveGiftEvent
+from interfaces.event.livestream.live_question_event import LiveQuestionEvent
+from interfaces.event.livestream.live_statistics_event import LiveStatisticsEvent
 
 if TYPE_CHECKING:
     from interfaces.bot.bot import Bot
     from interfaces.entity.gift import Gift
     from interfaces.entity.live_user import LiveUser
+    from interfaces.entity.question import Question
     from interfaces.livestream.livestream import Livestream
 
 
@@ -145,3 +148,62 @@ class GiftEvent(LiveGiftEvent):
     @property
     def gift_num(self) -> int:
         return self.event_gift.num
+
+
+@dataclass
+class QuestionEvent(LiveQuestionEvent):
+    """用户发起提问事件。"""
+
+    event_livestream: Livestream
+    event_user: LiveUser
+    event_question: Question
+
+    @property
+    def livestream(self) -> Livestream:
+        return self.event_livestream
+
+    @property
+    def bot(self) -> Bot:
+        return self.event_livestream.bot
+
+    @property
+    def user(self) -> LiveUser:
+        return self.event_user
+
+    @property
+    def question(self) -> Question:
+        return self.event_question
+
+    @property
+    def question_id(self) -> str:
+        return self.event_question.question_id
+
+
+@dataclass
+class StatisticsEvent(LiveStatisticsEvent):
+    """直播间实时统计事件。"""
+
+    event_livestream: Livestream
+    event_score: int
+    event_online: int
+    event_vip: int
+
+    @property
+    def livestream(self) -> Livestream:
+        return self.event_livestream
+
+    @property
+    def bot(self) -> Bot:
+        return self.event_livestream.bot
+
+    @property
+    def score(self) -> int:
+        return self.event_score
+
+    @property
+    def online(self) -> int:
+        return self.event_online
+
+    @property
+    def vip(self) -> int:
+        return self.event_vip
