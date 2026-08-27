@@ -140,7 +140,7 @@ docker compose restart      # 重启
 ## 五、企业级生产部署（Docker + Nginx，推荐）
 
 ```
-Browser (:80)
+Browser (:18080)
   → Nginx (反向代理 + 静态缓存 + 限流)
     → Gunicorn (4× UvicornWorker)
       → FastAPI → React SPA
@@ -156,15 +156,52 @@ Browser (:80)
 
 ### 5.2 启动
 
+生产 compose 只**拉取镜像**（由 CI/CD 发布），不在服务器上构建。
+
 ```bash
 # 首次：放入配置文件
 mkdir config && cp config.yml config/
 
-# 启动
-docker compose -f docker-compose.prod.yml up -d --build
+# 启动（默认宿主机端口 18080，避开 80）
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-访问 `http://localhost`（80 端口）。
+访问 `http://localhost:18080`。
+
+**镜像尚未发布到 ghcr.io 时**，用本地构建 + 导出：
+
+```bash
+# 本地（开发机）
+docker compose build                        # 用 docker-compose.yml 构建
+docker save mismiss:latest | gzip > mismiss.tar.gz
+scp mismiss.tar.gz user@server:/opt/mismiss/
+
+# 服务器
+docker load -i mismiss.tar.gz
+docker tag mismiss:latest ghcr.io/dikxingmengya/mismiss:latest
+docker compose -f docker-compose.prod.yml up -d
+```
+
+**自定义端口**：
+
+```bash
+# 方式一：环境变量
+MISMISS_HTTP_PORT=9090 docker compose -f docker-compose.prod.yml up -d
+
+# 方式二：.env 文件
+echo "MISMISS_HTTP_PORT=9090" > .env
+docker compose -f docker-compose.prod.yml up -d
+```
+
+**服务器统一反向代理接入**（Caddy 示例）：
+
+```
+# Caddyfile
+mismiss.example.com {
+    reverse_proxy localhost:18080
+}
+```
 
 ### 5.3 运维
 

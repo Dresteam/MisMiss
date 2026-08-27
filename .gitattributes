@@ -1,3 +1,38 @@
+# ============================================================
+# Git 行尾规范化 —— 防止 Windows CRLF 上传到 Linux 服务器
+# ============================================================
+
+# 默认：文本文件自动转换
 * text=auto
+
+# Shell 脚本：强制 LF（Linux 服务器执行必需）
 *.sh text eol=lf
-*.ps1 text eol=crlf
+
+# Windows 批处理：强制 CRLF（cmd.exe 需要）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell：LF（PowerShell 两种都兼容，取跨平台通用）
+*.ps1 text eol=lf
+
+# Python：强制 LF
+*.py text eol=lf
+
+# 配置文件：强制 LF
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+Dockerfile text eol=lf
+nginx.conf text eol=lf
+
+# 二进制文件：不转换
+*.exe binary
+*.whl binary
+*.tar.gz binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

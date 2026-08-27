@@ -67,9 +67,10 @@ COPY config.yml ./config.yml.dist
 # 前端产物（Stage 1）
 COPY --from=frontend-builder /src/web/frontend/dist/ ./web/frontend/dist/
 
-# Entrypoint
+# Entrypoint —— 强制 LF，防止 Windows 检出 CRLF 导致 bash\r 错误
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # 运行时目录
 RUN mkdir -p /app/data /app/logs /app/plugins /app/permissions /app/config \
