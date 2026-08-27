@@ -15,10 +15,11 @@
 #     nginx.conf              # Nginx 反向代理配置
 #     config.yml.dist         # 配置模板（服务器首次部署引导）
 #     deploy.sh               # 服务器一键部署脚本
+#   归档为扁平结构（无顶层目录），可直接解压到部署目录。
 #
 # 服务器使用方式:
-#   tar -xzf mismiss-<版本>-docker.tar.gz && cd mismiss-<版本>-docker
-#   bash deploy.sh
+#   tar -xzf mismiss-<版本>-docker.tar.gz -C /opt/mismiss
+#   cd /opt/mismiss && bash deploy.sh
 # ============================================================
 
 set -euo pipefail
@@ -123,7 +124,9 @@ warn "config.yml.dist 来自开发机配置，请检查不含敏感信息（默�
 # 3. 打包部署包
 # ------------------------------------------------------------------ #
 step "打包部署包 → $DIST_DIR/${PKG_NAME}.tar.gz"
-tar -czf "$DIST_DIR/${PKG_NAME}.tar.gz" -C "$BUILD_DIR/.." "$PKG_NAME"
+# 扁平打包（无顶层目录）：归档成员即部署文件本身，可直接解压到部署目录。
+# 顶层目录会导致服务器在线更新校验按成员名精确匹配时找不到 mismiss-docker.tar.gz
+( cd "$BUILD_DIR" && tar -czf "$DIST_DIR/${PKG_NAME}.tar.gz" * )
 
 echo ""
 echo "  ╔══════════════════════════════════════╗"
@@ -138,7 +141,7 @@ echo "  # 1. 上传部署包"
 echo "  scp dist/${PKG_NAME}.tar.gz user@server:/opt/mismiss/"
 echo ""
 echo "  # 2. 服务器上解压 + 一键部署"
-echo "  tar -xzf ${PKG_NAME}.tar.gz -C /opt/mismiss --strip-components=1"
+echo "  tar -xzf ${PKG_NAME}.tar.gz -C /opt/mismiss"
 echo "  cd /opt/mismiss && bash deploy.sh"
 echo ""
 info "更新: 用新部署包覆盖部署目录，再次执行 bash deploy.sh"
