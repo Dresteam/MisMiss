@@ -47,7 +47,7 @@ _DOCKER_UPDATE_HINT = (
 
 # 版本号（运行时从 pyproject.toml 或环境变量读取）
 try:
-    _CURRENT_VERSION = os.environ.get("MISMISS_VERSION", "1.0.0-beta.3")
+    _CURRENT_VERSION = os.environ.get("MISMISS_VERSION", "1.0.0")
 except Exception:
     _CURRENT_VERSION = "0.0.0"
 
