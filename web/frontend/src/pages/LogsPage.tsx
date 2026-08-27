@@ -1,8 +1,8 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import Convert from 'ansi-to-html';
 import {
-  Terminal, Download, X, ArrowDown, Search, RefreshCw, Package,
+  Terminal, Download, X, ArrowDown, Search, RefreshCw, Package, Loader2,
 } from 'lucide-react';
 import { useLogStream, type LogEntry } from '../hooks/useLogStream';
 import { Button } from '../components/Button';
@@ -28,10 +28,13 @@ const levelColors: Record<string, string> = {
 const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 
 export function LogsPage() {
-  const { entries, connected, total, hasMore, loadMore, refresh } = useLogStream();
   const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
+  // 级别筛选下推到后端（源头过滤），级别变化时 hook 自动重连重拉
+  const { entries, connected, loading, total, hasMore, loadMore, refresh } =
+    useLogStream([...filterLevels]);
   const [keyword, setKeyword] = useState('');
   const [atBottom, setAtBottom] = useState(true);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set()); // 展开的日志行
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   // Pip install modal
   const [pipOpen, setPipOpen] = useState(false);
@@ -54,18 +57,24 @@ export function LogsPage() {
     });
   };
 
+  // 级别过滤已由后端完成，这里仅做关键词本地过滤
   const filtered = useMemo(() => {
-    let arr = entries;
-    if (filterLevels.size > 0) arr = arr.filter((e) => filterLevels.has(e.level));
-    if (keyword) {
-      const kw = keyword.toLowerCase();
-      arr = arr.filter((e) => e.message.toLowerCase().includes(kw));
-    }
-    return arr;
-  }, [entries, filterLevels, keyword]);
+    if (!keyword) return entries;
+    const kw = keyword.toLowerCase();
+    return entries.filter((e) => e.message.toLowerCase().includes(kw));
+  }, [entries, keyword]);
 
-  // filtered 增长时锚定视图（仅 loadMore 前置插入时）
-  useEffect(() => {
+  const toggleExpand = (seq: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(seq) ? next.delete(seq) : next.add(seq);
+      return next;
+    });
+  };
+
+  // filtered 增长时锚定视图（仅 loadMore 前置插入时）。
+  // 使用 useLayoutEffect：绘制前同步调整锚点，避免「先下跳再回位」的中间帧
+  useLayoutEffect(() => {
     const prev = prevFilteredLength.current;
     const curr = filtered.length;
     if (curr > prev && loadingAnchor.current) {
@@ -83,49 +92,21 @@ export function LogsPage() {
     loadingMore.current = false;
   }, [hasMore, loadMore]);
 
-  // 闲时自动加载：浏览器空闲时逐批加载历史，直到全部加载完毕
-  const idleLoading = useRef(false);
-  useEffect(() => {
-    if (!hasMore || idleLoading.current) return;
-    idleLoading.current = true;
-    let cancelled = false;
-
-    const idleLoop = (deadline: IdleDeadline) => {
-      if (cancelled || !hasMore) { idleLoading.current = false; return; }
-      // 仅当剩余空闲时间充足时加载一批
-      if (deadline.timeRemaining() > 10 || deadline.didTimeout) {
-        loadingAnchor.current = true;
-        loadMore().then((more) => {
-          if (!more) { idleLoading.current = false; return; }
-          // 继续下一轮闲时加载
-          (window as any).requestIdleCallback?.(idleLoop, { timeout: 1000 })
-            ?? setTimeout(() => idleLoop({ timeRemaining: () => 50, didTimeout: true } as IdleDeadline), 200);
-        });
-      } else {
-        (window as any).requestIdleCallback?.(idleLoop, { timeout: 1000 })
-          ?? setTimeout(() => idleLoop({ timeRemaining: () => 50, didTimeout: true } as IdleDeadline), 200);
-      }
-    };
-
-    // 首轮延迟 1s，优先渲染实时日志
-    const startTimer = setTimeout(() => {
-      if ((window as any).requestIdleCallback) {
-        (window as any).requestIdleCallback(idleLoop, { timeout: 1000 });
-      } else {
-        idleLoop({ timeRemaining: () => 50, didTimeout: true } as IdleDeadline);
-      }
-    }, 1000);
-
-    return () => { cancelled = true; clearTimeout(startTimer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasMore]);
-
   // Auto-follow
   useEffect(() => {
     if (atBottom && filtered.length > 0) {
       virtuosoRef.current?.scrollToIndex({ index: filtered.length - 1, behavior: 'smooth' });
     }
   }, [filtered.length, atBottom]);
+
+  // 级别筛选变化时回到最新日志位置（列表按新筛选重建）
+  useEffect(() => {
+    if (filtered.length > 0) {
+      virtuosoRef.current?.scrollToIndex({ index: filtered.length - 1, behavior: 'auto' });
+      setAtBottom(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterLevels]);
 
   const handleScrollBottom = () => {
     virtuosoRef.current?.scrollToIndex({ index: filtered.length - 1, behavior: 'smooth' });
@@ -223,7 +204,13 @@ export function LogsPage() {
       <div className="flex-1 bg-gray-100 dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden relative">
         {filtered.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-600">
-            <div className="text-center"><Terminal className="w-8 h-8 mx-auto mb-2 opacity-30" /><p>等待日志输出...</p></div>
+            <div className="text-center">
+              {loading ? (
+                <><Loader2 className="w-8 h-8 mx-auto mb-2 animate-spin opacity-40" /><p>加载中...</p></>
+              ) : (
+                <><Terminal className="w-8 h-8 mx-auto mb-2 opacity-30" /><p>等待日志输出...</p></>
+              )}
+            </div>
           </div>
         ) : (
           <Virtuoso
@@ -234,18 +221,28 @@ export function LogsPage() {
             atBottomStateChange={setAtBottom}
             initialTopMostItemIndex={filtered.length - 1}
             startReached={handleLoadMore}
-            itemContent={(_index, entry) => (
-              <div className="flex gap-2 leading-relaxed hover:bg-black/[0.03] dark:hover:bg-white/[0.03] px-2 text-[11px] font-mono">
-                <span className="text-gray-400 dark:text-gray-600 shrink-0 w-16 text-right">
-                  {new Date(entry.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false })}
-                </span>
-                <span className={`shrink-0 w-16 ${levelColors[entry.level] || 'text-gray-400'}`}>
-                  [{entry.level}]
-                </span>
-                <span className="text-gray-700 dark:text-gray-300 break-all whitespace-pre-wrap flex-1"
-                  dangerouslySetInnerHTML={{ __html: ansi.toHtml(entry.message) }} />
-              </div>
-            )}
+            itemContent={(_index, entry) => {
+              const isExpanded = expanded.has(entry.seq_id);
+              return (
+                <div className={`flex gap-2 leading-5 ${isExpanded ? 'min-h-5 h-auto' : 'h-5'}
+                                hover:bg-black/[0.03] dark:hover:bg-white/[0.03] px-2 text-[11px] font-mono`}>
+                  <span className="text-gray-400 dark:text-gray-600 shrink-0 w-16 text-right">
+                    {new Date(entry.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false })}
+                  </span>
+                  <span className={`shrink-0 w-16 ${levelColors[entry.level] || 'text-gray-400'}`}>
+                    [{entry.level}]
+                  </span>
+                  {/* 固定行高：默认单行截断，点击展开全文 */}
+                  <span
+                    onClick={() => toggleExpand(entry.seq_id)}
+                    title={isExpanded ? '点击收起' : '点击展开'}
+                    className={`flex-1 min-w-0 cursor-pointer text-gray-700 dark:text-gray-300
+                      ${isExpanded ? 'h-auto break-all whitespace-pre-wrap' : 'truncate [&_span]:whitespace-nowrap'}`}
+                    dangerouslySetInnerHTML={{ __html: ansi.toHtml(entry.message) }}
+                  />
+                </div>
+              );
+            }}
           />
         )}
 
