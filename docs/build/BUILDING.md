@@ -7,12 +7,11 @@
 | 本地开发 | 一、开发模式 | Python + Node.js |
 | 个人服务器（单机） | 二、单端口生产模式 | Python |
 | 分发给用户 | 三、源码归档分发包 | Python |
-| 快速测试 | 四、Docker（简单） | Docker |
-| **企业生产环境** | **五、Docker + Nginx** | Docker |
-| Linux 服务器（无 Docker） | 七、Linux 原生部署 | Python |
-| Windows Server | 八、Windows 原生部署 | Python |
-| 零依赖分发 | 九、PyInstaller exe | **无** |
-| Python 开发者 | 十、pip wheel | Python |
+| **服务器生产环境（推荐）** | **四、Docker 部署包** | Docker |
+| Linux 服务器（无 Docker） | 五、Linux 原生部署 | Python |
+| Windows Server | 六、Windows 原生部署 | Python |
+| 零依赖分发 | 七、PyInstaller exe | **无** |
+| Python 开发者 | 八、pip wheel | Python |
 
 ---
 
@@ -122,22 +121,9 @@ start.bat prod             # Windows
 
 ---
 
-## 四、Docker 部署（开发 / 测试）
+## 四、Docker 部署（部署包，推荐）
 
-```bash
-docker compose up -d --build
-
-# 常用命令
-docker compose logs -f      # 日志
-docker compose down         # 停止
-docker compose restart      # 重启
-```
-
-访问 `http://localhost:8080`。
-
----
-
-## 五、企业级生产部署（Docker + Nginx，推荐）
+镜像**不推送到任何镜像仓库**，通过"部署包"分发：本地构建镜像并与部署栈一起打包成单个归档，上传服务器解压后一条命令完成部署 / 更新。
 
 ```
 Browser (:18080)
@@ -146,55 +132,86 @@ Browser (:18080)
       → FastAPI → React SPA
 ```
 
-### 5.1 关键文件
-
-| 文件 | 用途 |
-|------|------|
-| `Dockerfile` | 多阶段构建、tini init、非 root 用户、健康检查 |
-| `nginx.conf` | 反向代理、gzip、安全头、限流 120r/m、WebSocket |
-| `docker-compose.prod.yml` | App + Nginx 双服务、命名卷、资源限制 |
-
-### 5.2 启动
-
-生产 compose 只**拉取镜像**（由 CI/CD 发布），不在服务器上构建。
+### 4.1 本地构建部署包
 
 ```bash
-# 首次：放入配置文件
-mkdir config && cp config.yml config/
+# Windows
+powershell -File scripts\docker-release.ps1 -Version 1.2.0
 
-# 启动（默认宿主机端口 18080，避开 80）
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+# Linux / macOS
+bash scripts/docker-release.sh 1.2.0
 ```
 
-访问 `http://localhost:18080`。
+产物：`dist/mismiss-1.2.0-docker.zip`（Windows）或 `dist/mismiss-1.2.0-docker.tar.gz`（Linux / macOS）。
 
-**镜像尚未发布到 ghcr.io 时**，用本地构建 + 导出：
+版本号未指定时自动解析（与 release.sh 一致）：`pyproject.toml` → git tag → 日期。例如当前项目会得到 `mismiss-1.0.0-beta.2-docker.zip`，与 `release/` 目录产物命名保持同一格式。
+
+部署包内容：
+
+```
+mismiss-1.2.0-docker/
+├── mismiss-docker.tar.gz   # 应用镜像（docker save 导出）
+├── docker-compose.yml      # 部署栈（应用 + Nginx）
+├── nginx.conf              # Nginx 反向代理配置
+├── config.yml.dist         # 配置模板（首次部署引导）
+└── deploy.sh               # 服务器一键部署脚本
+```
+
+### 4.2 服务器部署
 
 ```bash
-# 本地（开发机）
-docker compose build                        # 用 docker-compose.yml 构建
-docker save mismiss:latest | gzip > mismiss.tar.gz
-scp mismiss.tar.gz user@server:/opt/mismiss/
+# 1. 上传部署包
+scp dist/mismiss-1.2.0-docker.zip user@server:/opt/mismiss/
+
+# 2. 解压 + 一键部署（导入镜像 → 引导配置 → 启动）
+cd /opt/mismiss && unzip mismiss-1.2.0-docker.zip && cd mismiss-1.2.0-docker
+bash deploy.sh
+```
+
+访问 `http://localhost:18080`（默认端口，避开 80 留给服务器统一反代）。
+
+首次部署自动从 `config.yml.dist` 生成 `config.yml`（默认账号 `MisMiss` / `MisMiss`）——**编辑后执行 `./deploy.sh` 重启生效**。
+
+> **排错**：若第一步导入镜像报 `unrecognized image format`，说明部署包由旧版打包脚本生成（嵌套 tar）或构建机启用了 Docker Desktop 的 containerd 镜像存储且未走 buildx。用最新 `docker-release` 脚本重新打包即可（自动优先 buildx 导出经典格式）。
+
+> **在线更新**：首次部署后，日常更新可直接在 Web 控制台「更新 MisMiss」页一键完成（见 4.7 在线更新）。
+
+### 4.3 更新
+
+本地重新打包 → 上传解压覆盖部署目录 → 再次执行 `./deploy.sh`（幂等，自动重建容器）。
+
+```bash
+# 本地
+powershell -File scripts\docker-release.ps1 -Version 1.3.0
+scp dist/mismiss-1.3.0-docker.zip user@server:/opt/mismiss/
 
 # 服务器
-docker load -i mismiss.tar.gz
-docker tag mismiss:latest ghcr.io/dikxingmengya/mismiss:latest
-docker compose -f docker-compose.prod.yml up -d
+cd /opt/mismiss && unzip -o mismiss-1.3.0-docker.zip
+cd mismiss-1.3.0-docker && bash deploy.sh
 ```
 
-**自定义端口**：
+`config.yml`、`data/`、`plugins/` 等运行时文件不会被覆盖（部署包内不含）。
+
+### 4.4 运维
 
 ```bash
-# 方式一：环境变量
-MISMISS_HTTP_PORT=9090 docker compose -f docker-compose.prod.yml up -d
+docker compose logs -f            # 全部日志
+docker compose logs -f mismiss    # 仅应用日志
+docker compose ps                 # 状态
+docker compose down               # 停止
 
-# 方式二：.env 文件
-echo "MISMISS_HTTP_PORT=9090" > .env
-docker compose -f docker-compose.prod.yml up -d
+# 调整 worker 数
+MISMISS_WORKERS=8 docker compose up -d --force-recreate
+
+# 自定义端口（默认 18080）
+MISMISS_HTTP_PORT=9090 docker compose up -d --force-recreate
+# 或写入 .env: echo "MISMISS_HTTP_PORT=9090" > .env
+
+# 备份
+tar -czf backup.tar.gz data/ plugins/ config.yml
 ```
 
-**服务器统一反向代理接入**（Caddy 示例）：
+### 4.5 服务器统一反向代理接入（Caddy 示例）
 
 ```
 # Caddyfile
@@ -203,60 +220,58 @@ mismiss.example.com {
 }
 ```
 
-### 5.3 运维
+### 4.6 本地快速测试
+
+本地构建镜像后用同一份 compose 直接跑（无需打包）：
 
 ```bash
-docker compose -f docker-compose.prod.yml logs -f mismiss
-docker compose -f docker-compose.prod.yml logs -f nginx
-
-# 滚动更新
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-
-# 调整 worker 数
-MISMISS_WORKERS=8 docker compose -f docker-compose.prod.yml up -d
-
-# 备份
-tar -czf backup.tar.gz data/ plugins/ config/
+docker build -t mismiss:latest .
+docker compose up -d
 ```
 
-### 5.4 资源限制（默认）
+访问 `http://localhost:18080`。
 
-- App：128 MB ~ 512 MB
-- Nginx：≤ 64 MB
+### 4.7 在线更新（Web 控制台，推荐日常使用）
+
+首次部署后，日常更新在 Web 控制台「更新 MisMiss」页手动点击完成，无需 SSH：
+
+```
+点击「更新到 vX」
+  → 下载 mismiss-<版本>-docker.zip 部署包（复用镜像站/代理设置）
+  → 校验格式（含内层镜像归档检查）
+  → 备份当前部署包到 .mismiss-backup/
+  → 解压到部署目录（config.yml 用户配置与 .env 不被覆盖）
+  → docker load 导入新镜像
+  → 派发一次性容器在宿主守护进程上执行 compose 重建
+  → 页面短暂断开（约 10~30 秒），刷新后即新版本
+```
+
+更新页同时提供一键回滚（恢复备份的部署包并重建）。
+
+原理：mismiss 容器挂载了宿主 `/var/run/docker.sock` 与部署目录（`/app/deploy`），镜像内置 docker CLI + compose 插件。重建由一次性容器执行——若在应用容器内直接跑 compose，重建会杀掉执行中的进程。
+
+> **安全提示**：挂载 docker.sock 等同于授予容器宿主 Docker 完全控制权（等效 root，Portainer / Watchtower 同款模式）。如不需要在线更新，删除 `docker-compose.yml` 中 mismiss 服务的 docker.sock 与部署目录两处挂载即可（更新回落到部署包流程；更新页会自动提示未挂载）。在线更新要求容器内可写部署目录，root 部署时 `deploy.sh` 已自动 chown 到 uid 1000。
+
+### 4.8 关键文件与资源限制
+
+| 文件 | 用途 |
+|------|------|
+| `Dockerfile` | 多阶段构建、docker CLI + compose 插件、tini init、非 root 用户（uid=1000）、健康检查 |
+| `docker-compose.yml` | 应用 + Nginx 双服务、绑定挂载、docker.sock 挂载、资源限制（本地 / 服务器通用） |
+| `nginx.conf` | 反向代理、gzip、安全头、限流 120r/m、WebSocket |
+| `scripts/docker-release.sh` / `.ps1` | 本地构建镜像 + 打包部署包 |
+| `scripts/docker-server-deploy.sh` | 服务器一键部署（打包时重命名为 `deploy.sh`，含 .env 注入与在线更新支持） |
+| `scripts/docker-entrypoint.sh` | 容器入口：匹配 docker.sock 属组后降权启动 |
+
+资源限制（默认）：App 128 MB ~ 512 MB，Nginx ≤ 64 MB。
 
 ---
 
-## 六、CI/CD（GitHub Actions）
-
-push 代码自动构建 Docker 镜像并推送到 `ghcr.io`。
-
-### 触发规则
-
-| 事件 | 镜像标签 |
-|------|---------|
-| push `dev` | `dev`、`sha-xxxxx` |
-| push `main` | `latest`、`main` |
-| tag `v1.0.0` | `1.0.0`、`1.0`、`latest` |
-
-### 首发设置
-
-GitHub → Settings → Actions → Workflow permissions → **Read and write packages**
-
-### 服务器拉取
-
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
-```
-
----
-
-## 七、Linux 原生部署（systemd + venv）
+## 五、Linux 原生部署（systemd + venv）
 
 无 Docker 时的原生部署，注册 systemd 服务。
 
-### 7.1 一键部署
+### 5.1 一键部署
 
 ```bash
 # 上传到服务器后
@@ -265,7 +280,7 @@ bash scripts/deploy.sh --native
 
 脚本自动：创建 venv → 安装依赖 → 构建前端 → 安装 systemd 服务 → 启动。
 
-### 7.2 手动部署
+### 5.2 手动部署
 
 ```bash
 # 1. 虚拟环境
@@ -303,7 +318,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now mismiss
 ```
 
-### 7.3 管理
+### 5.3 管理
 
 ```bash
 systemctl status mismiss
@@ -312,9 +327,9 @@ journalctl -u mismiss -f
 
 ---
 
-## 八、Windows 原生部署（venv + NSSM 服务）
+## 六、Windows 原生部署（venv + NSSM 服务）
 
-### 8.1 手动启动
+### 6.1 手动启动
 
 ```powershell
 cd web\frontend && npm ci && npm run build && cd ..\..
@@ -327,7 +342,7 @@ set MISMISS_PROD=1
 .venv\Scripts\python.exe -m web.backend.main --port 8080
 ```
 
-### 8.2 注册为 Windows 服务
+### 6.2 注册为 Windows 服务
 
 [NSSM](https://nssm.cc/) 可将任何程序注册为 Windows 服务：
 
@@ -345,11 +360,11 @@ nssm status MisMiss        # 状态
 
 ---
 
-## 九、PyInstaller 独立可执行文件
+## 七、PyInstaller 独立可执行文件
 
 目标机器**无需 Python / Node.js**，双击运行，数据存于 exe 同级目录。
 
-### 9.1 构建
+### 7.1 构建
 
 ```bash
 # Windows
@@ -361,7 +376,7 @@ bash scripts/build.sh exe
 
 产物：`dist/mismiss.exe` 或 `dist/mismiss`
 
-### 9.2 部署
+### 7.2 部署
 
 将 exe 复制到目标目录，双击即可。首次启动自动创建：
 
@@ -372,7 +387,7 @@ MyBot/
 ├── data/   logs/   plugins/   permissions/
 ```
 
-### 9.3 注意事项
+### 7.3 注意事项
 
 - 端口默认读取 `config.yml` 中的 `server.api_port`，`--port` 可覆盖
 - 插件依赖安装需目标机器有 Python + pip
@@ -380,7 +395,7 @@ MyBot/
 
 ---
 
-## 十、pip wheel
+## 八、pip wheel
 
 ```bash
 bash scripts/build.sh wheel
@@ -389,7 +404,7 @@ pip install dist/mismiss-1.0.0-py3-none-any.whl[web]
 
 ---
 
-## 十一、脚本速查
+## 九、脚本速查
 
 ### 构建
 
@@ -424,16 +439,21 @@ scripts\start.bat backend       # 仅 API
 ### 部署
 
 ```bash
-bash scripts/deploy.sh --docker  # Docker 部署
-bash scripts/deploy.sh --native  # Linux systemd 部署
+# Docker 部署包（镜像不推仓库，推荐，见第四章）
+bash scripts/docker-release.sh 1.2.0             # 构建镜像 + 打包 → dist/
+powershell -File scripts\docker-release.ps1 -Version 1.2.0
 
-powershell -File scripts\deploy.ps1 -Mode Docker
+# 服务器端（在部署包解压目录内）
+bash deploy.sh                                   # 导入镜像 + 启动 / 更新
+
+# 原生部署
+bash scripts/deploy.sh --native                  # Linux systemd 部署
 powershell -File scripts\deploy.ps1 -Mode Native
 ```
 
 ---
 
-## 十二、目录结构
+## 十、目录结构
 
 ```
 MisMiss/
@@ -442,12 +462,8 @@ MisMiss/
 ├── mismiss.spec                # PyInstaller 打包配置
 │
 ├── Dockerfile                  # 多阶段 Docker 构建
-├── docker-compose.yml          # Docker 简单部署
-├── docker-compose.prod.yml     # Docker 生产部署（Nginx + App）
+├── docker-compose.yml          # Docker 部署栈（应用 + Nginx，本地 / 服务器通用）
 ├── nginx.conf                  # Nginx 生产配置
-│
-├── .github/workflows/
-│   └── docker-build.yml        # CI/CD 自动构建发布
 │
 ├── src/                        # Python 核心框架
 │   ├── interfaces/             # MIST 抽象接口
@@ -459,6 +475,8 @@ MisMiss/
 │
 ├── scripts/                    # 构建 / 部署 / 启动脚本
 │   ├── build.sh / build.ps1
+│   ├── docker-release.sh / .ps1       # Docker 镜像构建 + 部署包打包
+│   ├── docker-server-deploy.sh        # 服务器一键部署（随部署包分发）
 │   ├── deploy.sh / deploy.ps1
 │   ├── start.sh / start.bat
 │   ├── pyinstaller_entry.py
@@ -474,7 +492,7 @@ MisMiss/
 
 ---
 
-## 十三、发布 Release（全量打包）
+## 十一、发布 Release（全量打包）
 
 一条命令构建所有分发格式，用于发布 GitHub Release。
 
@@ -512,7 +530,7 @@ release/
 ├── mismiss-1.0.0-beta.2-py3-none-any.whl    # pip wheel
 ├── mismiss-1.0.0-beta.2-win.exe             # PyInstaller Windows
 ├── mismiss-1.0.0-beta.2-linux               # PyInstaller Linux
-├── mismiss-1.0.0-beta.2-docker.tar          # Docker 镜像
+├── mismiss-1.0.0-beta.2-docker.tar.gz       # Docker 部署包（镜像 + 部署栈，Windows 打包为 .zip）
 └── checksums-1.0.0-beta.2.txt               # SHA256 校验
 ```
 
@@ -535,4 +553,4 @@ bash scripts/release.sh --skip-pyinstaller
 5. 粘贴脚本输出的 Markdown 表格到 Release 说明
 6. Publish release
 
-CI/CD 已配置 tag 推送时自动构建 Docker 镜像（见第六章）。
+Docker 部署包已随 Release 产出，服务器解压后执行 `bash deploy.sh` 即可部署（见第四章）。
