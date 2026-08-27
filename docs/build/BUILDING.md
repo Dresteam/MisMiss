@@ -128,7 +128,7 @@ start.bat prod             # Windows
 ```
 Browser (:18080)
   → Nginx (反向代理 + 静态缓存 + 限流)
-    → Gunicorn (4× UvicornWorker)
+    → Gunicorn (UvicornWorker，默认单进程)
       → FastAPI → React SPA
 ```
 
@@ -199,8 +199,11 @@ docker compose logs -f mismiss    # 仅应用日志
 docker compose ps                 # 状态
 docker compose down               # 停止
 
-# 调整 worker 数
-MISMISS_WORKERS=8 docker compose up -d --force-recreate
+# 调整 worker 数（默认 1）
+# 注意：直播间连接、Bot 定时器、插件实例均为单实例资源，
+# 多 worker 仅提高 API 吞吐，会导致跨进程状态不一致（连接重复、
+# 事件分裂、定时消息不同步等），非特殊场景不建议调高。
+MISMISS_WORKERS=1 docker compose up -d --force-recreate
 
 # 自定义端口（默认 18080）
 MISMISS_HTTP_PORT=9090 docker compose up -d --force-recreate

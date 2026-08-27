@@ -80,6 +80,8 @@ class MissevanServer(ServerInterface):
         bot_state = state.get("bot", {})
         if bot_state:
             await self._restore_bot(bot_state)
+            # 恢复定时消息（Bot 恢复完成后）
+            self._bot.restore_timer_state(state.get("timer_messages") or {})
 
         # 恢复 Livestream
         for live_id in state.get("livestreams", []):
@@ -194,7 +196,8 @@ class MissevanServer(ServerInterface):
             except Exception as e:
                 _log.warning("停用插件失败 [{}]: {}", name, e)
 
-        # 2. 切换到新 Bot
+        # 2. 切换到新 Bot（保留定时消息，避免更新 Cookie 后丢失）
+        bot.restore_timer_state(self._bot.export_timer_state())
         self._bot = bot
         self._bot_available = True
         self._bot_cookie = cookie
@@ -226,6 +229,28 @@ class MissevanServer(ServerInterface):
     # 跨 worker 状态同步（Docker 多 worker 兼容）
     # ------------------------------------------------------------------ #
 
+    def _schedule_livestream_quit(self, livestream) -> None:
+        """后台任务安全退出直播间（同步方法内无法 await）。"""
+        import asyncio
+
+        async def _safe_quit() -> None:
+            try:
+                await livestream.quit()
+            except CoreDisabledException:
+                # 调用方已先置 enabled = False（停用/同步清理），
+                # quit() 会拒绝执行 —— 改为无条件断开物理连接
+                try:
+                    await livestream.disconnect()
+                except Exception as e:
+                    _log.warning("直播间断开失败: {}", e)
+            except Exception as e:
+                _log.warning("直播间退出失败: {}", e)
+
+        try:
+            asyncio.get_running_loop().create_task(_safe_quit())
+        except RuntimeError:
+            pass  # 无事件循环（如启动阶段），放弃异步退出
+
     def _ensure_state_fresh(self) -> None:
         """通过检查 state 文件的修改时间判断是否需要重新加载。
 
@@ -234,6 +259,8 @@ class MissevanServer(ServerInterface):
         通过对比 state 文件的 mtime 判断是否有其他 worker 修改了状态。
 
         仅当 mtime 变化时才重新加载，避免频繁磁盘 I/O。
+
+        同步内容：Bot 启用状态（含删除）、直播间增删与启用标记、插件启用状态。
         """
         try:
             current_mtime = os.path.getmtime(self._state_path)
@@ -246,14 +273,49 @@ class MissevanServer(ServerInterface):
                    self._state_mtime, current_mtime)
         self._state_mtime = current_mtime
 
-        state = self._load_state() or {}
+        state = self._load_state()
+        if state is None:
+            return  # 文件损坏，保守跳过同步
 
-        # Bot（异步恢复需配合 _ensure_bot_restored）
+        # Bot 启用状态（异步恢复需配合 _ensure_bot_restored）
+        bot_state = state.get("bot")
+        if bot_state:
+            if self._bot.id != 0:
+                saved_enabled = bool(bot_state.get("enabled", False))
+                if self._bot.enabled != saved_enabled:
+                    _log.info("Bot 启用状态从磁盘同步: enabled={}", saved_enabled)
+                    self._bot.enabled = saved_enabled
+        elif self._bot.id != 0:
+            # 其他 worker 已删除 Bot → 同步为空 Bot 状态
+            _log.info("Bot 已被其他 worker 删除，同步清空")
+            self._bot = MissevanBot(
+                "",
+                timer_interval=self._config.get_float("bot.timer_interval", 60.0),
+            )
+            self._bot_available = False
+            self._bot_cookie = ""
+            self._bot_permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
 
-        # 直播间启用状态
+        # 直播间：移除其他 worker 已删除的直播间
+        saved_ids = set(state.get("livestreams", []))
+        for lid in list(self._livestreams.keys()):
+            if lid not in saved_ids:
+                live = self._livestreams.pop(lid)
+                self._enabled_livestreams.discard(lid)
+                _log.info("直播间已被其他 worker 移除，同步清理: live_id={}", lid)
+                self._schedule_livestream_quit(live)
+
+        # 直播间启用状态（同步实例标记，保证刷新后显示一致）
         enabled_livestreams = set(state.get("enabled_livestreams", []))
         if enabled_livestreams != self._enabled_livestreams:
             self._enabled_livestreams = enabled_livestreams
+        for lid, live in self._livestreams.items():
+            should_enable = lid in enabled_livestreams
+            if live.enabled and not should_enable:
+                # 其他 worker 停用了该直播间 → 同步断开本 worker 的连接
+                _log.info("直播间已被其他 worker 停用，同步断开: live_id={}", lid)
+                self._schedule_livestream_quit(live)
+            live.enabled = should_enable
 
         # 插件启用状态
         enabled_plugins: list[str] = state.get("enabled_plugins", [])
@@ -277,6 +339,8 @@ class MissevanServer(ServerInterface):
             if bot_state:
                 _log.info("bot 状态从磁盘异步恢复（多 worker）")
                 await self._restore_bot(bot_state)
+                # 恢复定时消息（Bot 恢复完成后）
+                self._bot.restore_timer_state(state.get("timer_messages") or {})
 
         # 2. 直播间恢复——其他 worker 添加的直播间可能不在当前 _livestreams 中
         saved_ids = set(state.get("livestreams", []))
@@ -284,10 +348,12 @@ class MissevanServer(ServerInterface):
         for lid in missing_ids:
             _log.info("直播间 {} 从磁盘异步恢复（多 worker）", lid)
             await self._restore_livestream(lid)
-        # 同步启用状态
+        # 同步启用状态（含实例标记，新恢复的直播间也需对齐）
         enabled = set(state.get("enabled_livestreams", []))
         if enabled != self._enabled_livestreams:
             self._enabled_livestreams = enabled
+        for lid, live in self._livestreams.items():
+            live.enabled = lid in enabled
 
     @property
     def bot(self) -> MissevanBot:
@@ -317,6 +383,8 @@ class MissevanServer(ServerInterface):
         self._bot_available = True
         self._bot.enabled = True
         self._save_state()
+        # 恢复的定时消息在 Bot 停用期间未启动计时循环，启用时补启动
+        self._bot._ensure_timer_running()
         _log.info("Bot 已启用: {}", self._bot)
 
     # ================================================================== #
@@ -370,20 +438,8 @@ class MissevanServer(ServerInterface):
 
     def disable_livestream(self, live_id: int) -> None:
         """停用直播间并断开连接。"""
-        import asyncio
         livestream = self._livestreams[live_id]
-
-        async def _safe_quit() -> None:
-            try:
-                await livestream.quit()
-            except CoreDisabledException:
-                pass  # 已停用/已断开，视为成功
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_safe_quit())
-        except RuntimeError:
-            pass
+        self._schedule_livestream_quit(livestream)
         livestream.enabled = False
         self._enabled_livestreams.discard(live_id)
         self._save_state()
@@ -594,18 +650,24 @@ class MissevanServer(ServerInterface):
     # ================================================================== #
 
     def register_timer_message(self, live_id: int, message: str) -> str:
-        return self._bot.register_timer_message(live_id, message)
+        mid = self._bot.register_timer_message(live_id, message)
+        self._save_state()
+        return mid
 
     def unregister_timer_message(self, message_id: str) -> None:
         self._bot.unregister_timer_message(message_id)
+        self._save_state()
 
     def register_timer_messages(
         self, entries: list[tuple[int, str]]
     ) -> list[str]:
-        return self._bot.register_timer_messages(entries)
+        mids = self._bot.register_timer_messages(entries)
+        self._save_state()
+        return mids
 
     def unregister_timer_messages(self, message_ids: list[str]) -> None:
         self._bot.unregister_timer_messages(message_ids)
+        self._save_state()
 
     @property
     def timer_message_count(self) -> int:
@@ -626,23 +688,35 @@ class MissevanServer(ServerInterface):
 
     def update_timer_message(self, message_id: str, message: str) -> bool:
         """编辑定时消息内容。"""
-        return self._bot.update_timer_message(message_id, message)
+        ok = self._bot.update_timer_message(message_id, message)
+        if ok:
+            self._save_state()
+        return ok
 
     def move_timer_message(self, message_id: str, direction: int) -> bool:
         """上移/下移定时消息。"""
-        return self._bot.move_timer_message(message_id, direction)
+        ok = self._bot.move_timer_message(message_id, direction)
+        if ok:
+            self._save_state()
+        return ok
 
     def skip_timer_message_once(
         self, message_id: str, target_live_id: int | None = None
     ) -> bool:
         """跳过当前指针处的定时消息（指针后移一位，计时器保持）。"""
-        return self._bot.skip_timer_message_once(message_id, target_live_id)
+        ok = self._bot.skip_timer_message_once(message_id, target_live_id)
+        if ok:
+            self._save_state()
+        return ok
 
     async def send_timer_message_now(
         self, message_id: str, target_live_id: int | None = None
     ) -> bool:
-        """立即发送一条定时消息。"""
-        return await self._bot.send_timer_message_now(message_id, target_live_id)
+        """立即发送一条定时消息（指针推进，需持久化）。"""
+        ok = await self._bot.send_timer_message_now(message_id, target_live_id)
+        if ok:
+            self._save_state()
+        return ok
 
     def set_timer_interval(self, interval: float) -> None:
         """设置定时消息发送间隔（秒），实时生效，不重置位置指针。
@@ -676,6 +750,9 @@ class MissevanServer(ServerInterface):
         return os.path.join(self._data_dir, self._state_file)
 
     def _save_state(self) -> None:
+        # 保存前先同步其他 worker 的最新状态，
+        # 避免用本 worker 的过期内存覆盖（如复活已被删除的直播间）
+        self._ensure_state_fresh()
         self._ensure_data_dir()
         state: dict[str, Any] = {
             "enabled_plugins": [
@@ -689,12 +766,20 @@ class MissevanServer(ServerInterface):
                 "permissions": self._bot_permissions.value,
                 "enabled": self._bot.enabled,
             }
+            timer_state = self._bot.export_timer_state()
+            if timer_state["global"] or timer_state["rooms"]:
+                state["timer_messages"] = timer_state
         state["livestreams"] = list(self._livestreams.keys())
         # 原子写入：先写临时文件再替换，防止写一半崩溃导致文件损坏
         tmp_path = self._state_path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, self._state_path)
+        # 记录本次写入的 mtime，避免下次请求误判为自己刚写的内容需要重新加载
+        try:
+            self._state_mtime = os.path.getmtime(self._state_path)
+        except OSError:
+            pass
 
     def _load_state(self) -> dict[str, Any] | None:
         if not os.path.exists(self._state_path):
