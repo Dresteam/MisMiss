@@ -67,7 +67,7 @@ def _update_config() -> dict:
 
 
 def _save_update_config(repo: str, mirror: str, proxy: str) -> None:
-    """保存 update 配置到 config.yml。"""
+    """保存 update 配置到 config.yml（原子写入，避免与其他写入并发时损坏）。"""
     import yaml
     config_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml"
     data: dict = {}
@@ -80,7 +80,9 @@ def _save_update_config(repo: str, mirror: str, proxy: str) -> None:
     data["update"]["repo"] = repo
     data["update"]["mirror"] = mirror
     data["update"]["proxy"] = proxy
-    config_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+    tmp_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    os.replace(tmp_path, config_path)
 
 
 def _load_update_state() -> dict:
