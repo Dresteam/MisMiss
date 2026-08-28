@@ -982,9 +982,28 @@ class AccountManager:
                 _log.warning("账户 {} 插件 {} 更新后重载失败: {}", rec.id, plugin_name, e)
 
     async def uninstall_plugin(
-        self, plugin_name: str, delete_config: bool = False, delete_data: bool = False
+        self, plugin_name: str, delete_config: bool = False, delete_data: bool = False,
+        disable_in_accounts: bool = False,
     ) -> None:
-        """卸载库插件(仅从共享库删除;各账户的私有副本独立运行不受影响)。"""
+        """卸载库插件(彻底删除库源文件)。
+
+        账户私有副本独立运行不受影响;``disable_in_accounts=True`` 时
+        额外停用各账户中已启用的该插件实例(副本保留,可重新启用)。
+        """
+        if disable_in_accounts:
+            for rec in self.list_records():
+                server = self._servers.get(rec.id)
+                if server is None:
+                    continue
+                pm = server._plugin_manager
+                meta = pm.get_plugin(plugin_name)
+                if meta is not None and meta.enabled:
+                    try:
+                        await pm.disable_plugin(plugin_name)
+                        server._save_state()
+                        _log.info("账户 {} 已停用插件 {}", rec.id, plugin_name)
+                    except Exception as e:
+                        _log.warning("账户 {} 停用插件 {} 失败: {}", rec.id, plugin_name, e)
         pm = self.get_library_pm()
         pm.uninstall_plugin(plugin_name, delete_config=delete_config, delete_data=delete_data)
         await self.refresh_library()

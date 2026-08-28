@@ -209,11 +209,13 @@ export async function reloadPlugin(name: string): Promise<PluginSummary> {
 export async function uninstallPlugin(
   name: string,
   deleteConfig = true,
-  deleteData = false,
+  deleteData = true,
+  disableInAccounts = false,
 ): Promise<StatusResponse> {
   const params = new URLSearchParams({
     delete_config: String(deleteConfig),
     delete_data: String(deleteData),
+    disable_in_accounts: String(disableInAccounts),
   });
   return request<StatusResponse>(
     `/plugin/${encodeURIComponent(name)}?${params}`,
