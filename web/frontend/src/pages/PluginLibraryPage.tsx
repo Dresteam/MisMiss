@@ -55,6 +55,7 @@ export function PluginLibraryPage() {
   const [updating, setUpdating] = useState(false);
   const [updateTarget, setUpdateTarget] = useState<{ name: string; oldVersion: string; newVersion: string } | null>(null);
   const [uninstallTarget, setUninstallTarget] = useState<LibraryPlugin | null>(null);
+  const [disableInAccounts, setDisableInAccounts] = useState(false);
   const [drawerTarget, setDrawerTarget] = useState<{ name: string; tab?: string } | null>(null);
   const [errorLog, setErrorLog] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
@@ -135,9 +136,11 @@ export function PluginLibraryPage() {
     if (!uninstallTarget) return;
     setProcessing(uninstallTarget.name);
     try {
-      await uninstallPlugin(uninstallTarget.name, true, false);
-      showToast('success', `${uninstallTarget.name} 已卸载`, '');
+      // delete_data=true:彻底删除插件源文件;disableInAccounts:可选停用所有账户实例
+      await uninstallPlugin(uninstallTarget.name, true, true, disableInAccounts);
+      showToast('success', `${uninstallTarget.name} 已从插件库删除`, '');
       setUninstallTarget(null);
+      setDisableInAccounts(false);
       load();
     } catch (e: any) {
       showToast('error', '卸载失败', e.message);
@@ -276,15 +279,38 @@ export function PluginLibraryPage() {
         />
       )}
 
-      <ConfirmDialog
-        open={uninstallTarget !== null}
-        title="卸载插件"
-        message={`确定从插件库卸载「${uninstallTarget?.name ?? ''}」吗？所有账户中已启用的实例将被禁用。`}
-        danger
-        loading={processing === uninstallTarget?.name}
-        onConfirm={handleUninstall}
-        onCancel={() => setUninstallTarget(null)}
-      />
+      {/* 卸载弹窗:彻底删除源文件 + 可选停用所有账户实例 */}
+      {uninstallTarget && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setUninstallTarget(null)} />
+          <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+              卸载插件「{uninstallTarget.name}」
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              源文件将被彻底从插件库删除,此操作不可撤销。
+            </p>
+            <label className="flex items-center gap-3 cursor-pointer mt-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-900/40">
+              <input type="checkbox" checked={disableInAccounts}
+                onChange={(e) => setDisableInAccounts(e.target.checked)}
+                className="w-4 h-4 accent-primary-600" />
+              <span>
+                <span className="block text-sm font-medium text-gray-900 dark:text-white">
+                  停用所有账户的相关插件
+                </span>
+                <span className="block text-[11px] text-gray-500">
+                  停用各账户中已启用的该插件实例(副本保留,可重新启用)
+                </span>
+              </span>
+            </label>
+            <div className="flex justify-end gap-2 mt-5">
+              <Button variant="secondary" size="sm" onClick={() => setUninstallTarget(null)}>取消</Button>
+              <Button variant="danger" size="sm" loading={processing === uninstallTarget.name}
+                onClick={handleUninstall}>确认删除</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 插件详情抽屉(面板库模式:仅 文档/更新日志/使用账户) */}
       {drawerTarget && (() => {

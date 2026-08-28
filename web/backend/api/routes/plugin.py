@@ -275,13 +275,19 @@ async def plugin_changelog(plugin_name: str, manager: AccountManager = _DEP):
 async def plugin_uninstall(
     plugin_name: str,
     delete_config: bool = Query(default=True),
-    delete_data: bool = Query(default=False),
+    delete_data: bool = Query(default=True),
+    disable_in_accounts: bool = Query(default=False),
     manager: AccountManager = _DEP,
 ):
-    """卸载插件:级联禁用各账户实例,可选清除各账户配置/数据,再从库删除。"""
+    """卸载插件:彻底删除库源文件;可选停用各账户中已启用的实例(副本保留)。"""
     try:
-        await manager.uninstall_plugin(plugin_name, delete_config=delete_config, delete_data=delete_data)
-        return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已从插件库卸载")
+        await manager.uninstall_plugin(
+            plugin_name,
+            delete_config=delete_config,
+            delete_data=delete_data,
+            disable_in_accounts=disable_in_accounts,
+        )
+        return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已从插件库删除")
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
 
