@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { ToastContainer } from './Toast';
-import { Menu, X, Moon, Sun, LogOut, LayoutDashboard, Bot, Radio, Puzzle, Server, Settings, Terminal, Clock, Download } from 'lucide-react';
+import { Menu, X, Moon, Sun, LogOut, LayoutDashboard, Puzzle, Server, Settings, Terminal, Download, Radio, Bot, Clock } from 'lucide-react';
 import type { Toast as ToastType } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
 
@@ -19,25 +19,41 @@ const mobileGroups = [
   {
     title: '监控',
     items: [
-      { to: '/', icon: LayoutDashboard, label: '仪表盘', end: true },
-      { to: '/logs', icon: Terminal, label: '日志' },
+      { to: '/', icon: LayoutDashboard, label: '账户总览', end: true },
+      { to: '/logs', icon: Terminal, label: '日志' , end: false },
     ],
   },
   {
     title: '管理',
     items: [
-      { to: '/bot', icon: Bot, label: 'Bot 管理' },
-      { to: '/live', icon: Radio, label: '直播间' },
-      { to: '/plugin', icon: Puzzle, label: '插件中心' },
-      { to: '/timer', icon: Clock, label: '定时消息' },
+      { to: '/library', icon: Puzzle, label: '插件库' , end: false },
     ],
   },
   {
     title: '系统',
     items: [
-      { to: '/server', icon: Server, label: '服务器' },
-      { to: '/update', icon: Download, label: '程序更新' },
-      { to: '/settings', icon: Settings, label: '设置' },
+      { to: '/server', icon: Server, label: '服务器' , end: false },
+      { to: '/update', icon: Download, label: '程序更新' , end: false },
+      { to: '/settings', icon: Settings, label: '设置' , end: false },
+    ],
+  },
+];
+
+const accountMobileGroups = [
+  {
+    title: '监控',
+    items: [
+      { to: '/account/home', icon: LayoutDashboard, label: '概览', end: true },
+    ],
+  },
+  {
+    title: '管理',
+    items: [
+      { to: '/account/live', icon: Radio, label: '直播间' , end: false },
+      { to: '/account/bot', icon: Bot, label: 'Bot' , end: false },
+      { to: '/account/timer', icon: Clock, label: '定时消息' , end: false },
+      { to: '/account/plugins', icon: Puzzle, label: '插件' , end: false },
+      { to: '/account/library', icon: Puzzle, label: '插件库' , end: false },
     ],
   },
 ];
@@ -50,8 +66,9 @@ export function Layout({
   toasts,
   onRemoveToast,
 }: Props) {
-  const { logout } = useAuth();
+  const { logout, role } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const groups = role === 'account' ? accountMobileGroups : mobileGroups;
 
   return (
     <div className="min-h-screen bg-surface-50 dark:bg-surface-950">
@@ -96,7 +113,7 @@ export function Layout({
               </button>
             </div>
             <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
-              {mobileGroups.map((group) => (
+              {groups.map((group) => (
                 <div key={group.title}>
                   <p className="px-3 mb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
                     {group.title}

@@ -52,6 +52,8 @@ class MissevanLivestream(Livestream):
         self._score: int = -1
         self._online_count: int = 0  # 在线人数（room:statistics 事件实时更新）
         self._creator: Creator | None = None
+        self._cover_url: str = ""  # 直播间封面
+        self._is_streaming: bool = False  # 是否开播中（room.status.open）
 
         # WebSocket
         self._websocket: Live | None = None
@@ -115,6 +117,16 @@ class MissevanLivestream(Livestream):
     @property
     def online_count(self) -> int:
         return self._online_count
+
+    @property
+    def cover_url(self) -> str:
+        """直播间封面/背景图 URL。"""
+        return self._cover_url
+
+    @property
+    def is_streaming(self) -> bool:
+        """是否开播中（room.status.open == 1）。"""
+        return self._is_streaming
 
     @property
     def creator(self) -> Creator:
@@ -263,6 +275,14 @@ class MissevanLivestream(Livestream):
         self._room_name = room.get("name", "")
         self._room_description = room.get("announcement", "")
 
+        # 封面(优先 cover_url,回退背景图)与开播状态
+        self._cover_url = room.get("cover_url", "") or ""
+        if not self._cover_url:
+            background = room.get("background") or {}
+            self._cover_url = background.get("image_url", "") or ""
+        status = room.get("status") or {}
+        self._is_streaming = status.get("open") == 1
+
         # 粉丝勋章
         medal_data = room.get("medal")
         medal: RoomMedal | None = None
@@ -280,6 +300,7 @@ class MissevanLivestream(Livestream):
             creator_room_medal=medal,
             creator_intro=creator_data.get("introduction", ""),
             creator_is_online=creator_data.get("online", False),
+            creator_icon=creator_data.get("iconurl", ""),
         )
 
         # 热度 / 在线人数（在线人数可能缺失，保留旧值）

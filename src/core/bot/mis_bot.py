@@ -864,7 +864,11 @@ class MissevanBot(Bot):
             if not self._has_any_timer_messages():
                 break
 
-            room_ids = sorted(self._room_timer_cycles.keys())
+            # 轮转目标 = 有消息的直播间 ∪ 有位置指针的直播间
+            # (全局消息重定向目标/账户单房间场景下,房间可能没有独立消息)
+            room_ids = sorted(
+                set(self._room_timer_cycles.keys()) | set(self._room_positions.keys())
+            )
             for live_id in room_ids:
                 ok = await self._send_next_combined(live_id)
                 if not ok:
@@ -872,8 +876,8 @@ class MissevanBot(Bot):
                     return
 
     def _has_any_timer_messages(self) -> bool:
-        """是否还有任何定时消息。"""
-        return bool(self._room_timer_cycles)
+        """是否还有任何定时消息(全局队列与各直播间队列)。"""
+        return bool(self._global_timer_cycle or self._room_timer_cycles)
 
     def _combined_cycle(self, live_id: int) -> list[str]:
         """该直播间当前的合并轮转：全局消息在前，独立消息在后。

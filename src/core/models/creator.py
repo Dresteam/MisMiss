@@ -28,6 +28,7 @@ class LiveCreator(Creator):
     creator_room_medal: Medal | None = None
     creator_intro: str | None = None
     creator_is_online: bool = False
+    creator_icon: str | None = None
 
     # ---- User ----
 
@@ -45,7 +46,7 @@ class LiveCreator(Creator):
 
     @property
     def icon_url(self) -> Optional[str]:
-        return None  # Missevan 未提供创建者头像 URL
+        return self.creator_icon or None
 
     # ---- LiveUser ----
 
