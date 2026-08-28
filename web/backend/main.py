@@ -54,40 +54,52 @@ from fastapi.responses import JSONResponse
 # ------------------------------------------------------------------ #
 
 from core.logging import get_logger
-from core import MissevanServer
+from core.account import AccountManager, ExpiryScheduler, migrate_legacy_data
 from core.config import ServerConfig
-from api.deps import set_server
-from api.routes import bot, live, plugin, server, dashboard, ws, config, proxy, auth, timer, update
+from api.deps import set_account_manager
+from api.routes import (
+    account, account_plugins, auth, bot, config, live, panel, plugin, proxy,
+    server, timer, update, ws,
+)
 
 _log = get_logger("web.api")
 
 # ------------------------------------------------------------------ #
-# 全局 Server 单例
+# 全局 AccountManager 单例
 # ------------------------------------------------------------------ #
 
-_server: MissevanServer | None = None
+_manager: AccountManager | None = None
+_scheduler: ExpiryScheduler | None = None
+
+# 数据目录(可由环境变量覆盖,便于数据卷分离与测试隔离)
+_DATA_DIR = os.environ.get("MISMISS_DATA_DIR", "data")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期——启动/关闭 MissevanServer。"""
-    global _server
-    _log.info("正在启动 MissevanServer ...")
-    _server = MissevanServer()
-    # 必须在 start() 之前注入 app，确保 PluginManager 在 resume_all
-    # 之前就能拿到 app 引用，避免"跳过路由注册"警告
-    _server.set_app(app)
-    await _server.start()
-    set_server(_server)
-    _log.info("MissevanServer 已启动，API 就绪")
+    """应用生命周期——迁移旧数据、启动账户管理器与到期调度器。"""
+    global _manager, _scheduler
+    _log.info("正在启动 MisMiss 多账户面板 ...")
+    # 单服务器旧数据备份迁移(全新开始,幂等)
+    migrate_legacy_data(_DATA_DIR)
+    _manager = AccountManager(data_dir=_DATA_DIR)
+    _manager.set_app(app)
+    _manager.load()
+    await _manager.start_all()
+    _scheduler = ExpiryScheduler(_manager, interval=60.0)
+    _scheduler.start()
+    set_account_manager(_manager)
+    _log.info("AccountManager 已启动,{} 个账户运行中", len(_manager.list_records()))
     yield
-    _log.info("正在关闭 MissevanServer ...")
+    _log.info("正在关闭 AccountManager ...")
+    if _scheduler is not None:
+        _scheduler.stop()
     try:
-        await _server.shutdown()
+        await _manager.shutdown_all()
     except Exception:
         pass
-    _server = None
-    _log.info("MissevanServer 已关闭")
+    _manager = None
+    _log.info("AccountManager 已关闭")
 
 
 # ------------------------------------------------------------------ #
@@ -126,21 +138,38 @@ async def auth_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # 公开路径跳过（含插件 UI 路由：/api/plugin/{name}/ui/...）
+    # 公开路径跳过（含插件 UI 路由）
     if path in PUBLIC_PATHS or any(path.startswith(p) for p in PUBLIC_PREFIXES):
         return await call_next(request)
-    if path.startswith("/api/plugin/") and "/ui/" in path:
-        return await call_next(request)
+    for prefix in ("/api/plugin/", "/api/accounts/"):
+        if path.startswith(prefix) and "/plugin/" in path and "/ui/" in path:
+            return await call_next(request)
 
     # 非 API 路径跳过（静态文件等）
     if not path.startswith("/api/"):
         return await call_next(request)
 
     # 检查 Authorization header
-    from api.routes.auth import verify_token
+    from api.routes.auth import token_info
     token = request.headers.get("Authorization", "").removeprefix("Bearer ")
-    if not token or not verify_token(token):
+    info = token_info(token) if token else None
+    if info is None:
         return JSONResponse(status_code=401, content={"detail": "未登录或登录已过期"})
+
+    # 角色权限:
+    # - admin 可访问全部
+    # - account 仅可访问自己的账户级路径(/api/accounts/{自己的id}/...)
+    if info.get("role") == "account":
+        if path.startswith("/api/accounts/"):
+            parts = path.split("/")
+            # /api/accounts/{account_id}/...
+            if len(parts) >= 4 and parts[3].isdigit():
+                if int(parts[3]) != int(info.get("account_id") or -1):
+                    return JSONResponse(status_code=403, content={"detail": "无权访问其他账户"})
+        else:
+            # 账户令牌仅允许:自己的账户路径、健康检查、认证、图片代理
+            if not any(path.startswith(p) for p in ("/api/health", "/api/auth/", "/api/proxy/")):
+                return JSONResponse(status_code=403, content={"detail": "账户登录无权访问面板功能"})
 
     return await call_next(request)
 
@@ -149,16 +178,22 @@ async def auth_middleware(request: Request, call_next):
 # 路由注册
 # ------------------------------------------------------------------ #
 
-app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
-app.include_router(bot.router, prefix="/api/bot", tags=["Bot"])
-app.include_router(live.router, prefix="/api/live", tags=["Livestream"])
-app.include_router(plugin.router, prefix="/api/plugin", tags=["Plugin"])
+app.include_router(panel.router, prefix="/api/panel", tags=["Panel"])
+app.include_router(account.router, prefix="/api/accounts/{account_id}", tags=["Account"])
+app.include_router(bot.router, prefix="/api/accounts/{account_id}/bot", tags=["Account-Bot"])
+app.include_router(live.router, prefix="/api/accounts/{account_id}/live", tags=["Account-Live"])
+app.include_router(timer.router, prefix="/api/accounts/{account_id}/timer", tags=["Account-Timer"])
+app.include_router(
+    account_plugins.router,
+    prefix="/api/accounts/{account_id}/plugins",
+    tags=["Account-Plugins"],
+)
+app.include_router(plugin.router, prefix="/api/plugin", tags=["PluginLibrary"])
 app.include_router(server.router, prefix="/api/server", tags=["Server"])
 app.include_router(ws.router, prefix="/api", tags=["WebSocket"])
 app.include_router(config.router, prefix="/api", tags=["Config"])
 app.include_router(proxy.router, prefix="/api", tags=["Proxy"])
 app.include_router(auth.router, prefix="/api", tags=["Auth"])
-app.include_router(timer.router, prefix="/api/timer", tags=["Timer"])
 app.include_router(update.router, prefix="/api/update", tags=["Update"])
 
 
@@ -171,7 +206,8 @@ async def health():
     cfg = ServerConfig.load()
     return {
         "status": "ok",
-        "server_running": _server is not None,
+        "server_running": _manager is not None,
+        "account_count": len(_manager.list_records()) if _manager else 0,
         "api_port": cfg.get_int("server.api_port", 18080),
         "web_port": cfg.get_int("server.web_port", 15173),
     }

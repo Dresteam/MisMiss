@@ -12,6 +12,13 @@ import {
   updatePluginConfig,
   fetchPluginReadme,
   fetchPluginChangelog,
+  fetchAccountPluginDetail,
+  fetchAccountPluginPermissions,
+  fetchAccountPluginConfig,
+  updateAccountPluginPermission,
+  updateAccountPluginConfig,
+  fetchAccountPluginReadme,
+  fetchAccountPluginChangelog,
 } from '../api/client';
 import type { PluginDetail, PluginPermissionInfo, PluginConfigResponse } from '../api/types';
 import { showToast } from '../hooks/useToast';
@@ -23,9 +30,28 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onUpdate: () => void;
+  /** 账户模式:传入账户 ID 后走账户级端点(含配置/权限);面板库模式(空)仅只读。 */
+  accountId?: number;
+  /** 面板库模式附加:使用该插件的账户列表(名称/ID)。 */
+  accounts?: { id: number; name: string }[];
+  /** 面板库模式附加:使用该插件的账户 ID 列表。 */
+  usedByAccounts?: number[];
+  /** 面板库模式附加:库列表元信息(库级无详情端点,直接使用列表数据)。 */
+  libraryMeta?: {
+    name: string;
+    display_name: string | null;
+    plugin_id: string;
+    version: string;
+    has_readme: boolean;
+    has_changelog: boolean;
+  };
+  /** 打开时默认展示的标签页(替代事件机制,避免事件先于组件挂载丢失)。 */
+  initialTab?: string;
+  /** 库模式下是否显示「使用账户」标签(面板显示,账户界面不显示)。 */
+  showAccountsTab?: boolean;
 }
 
-type TabId = 'info' | 'handlers' | 'permissions' | 'config' | 'readme' | 'changelog';
+type TabId = 'info' | 'handlers' | 'permissions' | 'config' | 'readme' | 'changelog' | 'accounts';
 
 interface Tab {
   id: TabId;
@@ -50,7 +76,14 @@ const tabs: Tab[] = [
   { id: 'changelog', label: '更新日志', icon: History },
 ];
 
-export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
+// 面板库模式:仅 文档 / 更新日志 / 使用账户
+const libraryTabs: Tab[] = [
+  { id: 'readme', label: '文档', icon: BookOpen },
+  { id: 'changelog', label: '更新日志', icon: History },
+  { id: 'accounts', label: '使用账户', icon: Puzzle },
+];
+
+export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, accounts, usedByAccounts, libraryMeta, initialTab, showAccountsTab = true }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>('info');
   const [detail, setDetail] = useState<PluginDetail | null>(null);
   const [permissions, setPermissions] = useState<PluginPermissionInfo | null>(null);
@@ -59,6 +92,13 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
   const [changelog, setChangelog] = useState('');
   const [loading, setLoading] = useState(true);
   const [permLoading, setPermLoading] = useState<string | null>(null);
+
+  // 面板库模式:仅 文档 / 更新日志 / 使用账户;账户界面库模式隐藏「使用账户」
+  const visibleTabs = accountId
+    ? tabs
+    : showAccountsTab
+      ? libraryTabs
+      : libraryTabs.filter((t) => t.id !== 'accounts');
 
   // 监听外部 tab 切换事件（卡片按钮直达指定 tab）
   useEffect(() => {
@@ -72,8 +112,10 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
 
   useEffect(() => {
     if (!open || !pluginName) return;
+    // 优先 initialTab,否则面板库模式默认文档、账户模式默认基本信息
+    setActiveTab((initialTab as TabId) || (accountId ? 'info' : 'readme'));
     loadAll();
-  }, [open, pluginName]);
+  }, [open, pluginName, accountId, initialTab]);
 
   // Close on Escape
   useEffect(() => {
@@ -88,25 +130,75 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [d, p, c] = await Promise.all([
-        fetchPluginDetail(pluginName),
-        fetchPluginPermissions(pluginName).catch(() => null),
-        fetchPluginConfig(pluginName).catch(() => null),
-      ]);
-      setDetail(d);
-      setPermissions(p);
-      setConfig(c);
-
-      // Load readme/changelog if available
-      if (d.has_readme) {
-        fetchPluginReadme(pluginName)
-          .then((r) => setReadme(r.content))
-          .catch(() => {});
-      }
-      if (d.has_changelog) {
-        fetchPluginChangelog(pluginName)
-          .then((r) => setChangelog(r.content))
-          .catch(() => {});
+      if (accountId) {
+        // 账户模式:账户级端点(独立实例的详情/配置/权限)
+        const [d, p, c] = await Promise.all([
+          fetchAccountPluginDetail(accountId, pluginName),
+          fetchAccountPluginPermissions(accountId, pluginName).catch(() => null),
+          fetchAccountPluginConfig(accountId, pluginName).catch(() => null),
+        ]);
+        setDetail(d);
+        setPermissions(p);
+        setConfig(c);
+        if (d.has_readme) {
+          fetchAccountPluginReadme(accountId, pluginName)
+            .then((r) => setReadme(r.content))
+            .catch(() => {});
+        }
+        if (d.has_changelog) {
+          fetchAccountPluginChangelog(accountId, pluginName)
+            .then((r) => setChangelog(r.content))
+            .catch(() => {});
+        }
+      } else if (libraryMeta) {
+        // 面板库模式:直接使用库列表元信息(库级无详情端点)
+        setDetail({
+          name: libraryMeta.name,
+          plugin_id: libraryMeta.plugin_id,
+          author: '',
+          version: libraryMeta.version,
+          display_name: libraryMeta.display_name,
+          short_desc: null,
+          desc: '',
+          repo: null,
+          enabled: false,
+          has_config: false,
+          has_readme: libraryMeta.has_readme,
+          has_changelog: libraryMeta.has_changelog,
+          handlers: [],
+          permissions: null,
+          config_schema: null,
+          config_values: null,
+          ui_schema: null,
+        });
+        setPermissions(null);
+        setConfig(null);
+        if (libraryMeta.has_readme) {
+          fetchPluginReadme(pluginName)
+            .then((r) => setReadme(r.content))
+            .catch(() => {});
+        }
+        if (libraryMeta.has_changelog) {
+          fetchPluginChangelog(pluginName)
+            .then((r) => setChangelog(r.content))
+            .catch(() => {});
+        }
+      } else {
+        // 面板库模式(无元信息兜底):尝试详情端点
+        const d = await fetchPluginDetail(pluginName);
+        setDetail(d);
+        setPermissions(null);
+        setConfig(null);
+        if (d.has_readme) {
+          fetchPluginReadme(pluginName)
+            .then((r) => setReadme(r.content))
+            .catch(() => {});
+        }
+        if (d.has_changelog) {
+          fetchPluginChangelog(pluginName)
+            .then((r) => setChangelog(r.content))
+            .catch(() => {});
+        }
       }
     } catch (e: any) {
       showToast('error', '加载插件详情失败', e.message);
@@ -116,6 +208,7 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
   };
 
   const handlePermToggle = async (key: string, value: boolean) => {
+    if (!accountId) return;
     if (permLoading) return;
     if (value && permissions && !permissions.bot_permissions.includes(key)) {
       showToast('warning', `Bot 未授予此项权限，无法启用`);
@@ -127,7 +220,7 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
       setPermissions({ ...permissions, permissions: { ...permissions.permissions, [key]: value } });
     }
     try {
-      await updatePluginPermission(pluginName, key, value);
+      await updateAccountPluginPermission(accountId, pluginName, key, value);
       showToast('success', `权限 ${key} 已${value ? '允许' : '禁止'}`);
     } catch (e: any) {
       setPermissions(prev);
@@ -138,9 +231,10 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
   };
 
   const handleConfigSave = async (values: Record<string, unknown>) => {
-    await updatePluginConfig(pluginName, values);
+    if (!accountId) return;
+    await updateAccountPluginConfig(accountId, pluginName, values);
     showToast('success', '配置已保存');
-    const c = await fetchPluginConfig(pluginName);
+    const c = await fetchAccountPluginConfig(accountId, pluginName);
     setConfig(c);
   };
 
@@ -183,7 +277,7 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
         {/* Tabs */}
         <div className="flex border-b border-surface-200 dark:border-surface-700 px-2 overflow-x-auto"
              style={{ flexShrink: 0 }}>
-          {tabs.map((tab) => {
+          {visibleTabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
@@ -334,6 +428,28 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate }: Props) {
                     <MarkdownRenderer content={changelog} />
                   ) : (
                     <p className="text-sm text-surface-400 text-center py-8">无 CHANGELOG</p>
+                  )}
+                </div>
+              )}
+
+              {/* 使用账户 Tab(面板库模式) */}
+              {activeTab === 'accounts' && (
+                <div className="space-y-2">
+                  {(usedByAccounts?.length ?? 0) === 0 ? (
+                    <p className="text-sm text-surface-400 text-center py-8">暂无账户使用该插件</p>
+                  ) : (
+                    usedByAccounts!.map((aid) => {
+                      const acc = accounts?.find((a) => a.id === aid);
+                      return (
+                        <div key={aid}
+                          className="flex items-center justify-between p-2.5 rounded-lg bg-surface-50 dark:bg-surface-900">
+                          <span className="text-sm font-medium text-surface-900 dark:text-surface-100 truncate">
+                            {acc?.name ?? `账户 ${aid}`}
+                          </span>
+                          <span className="text-xs font-mono text-surface-500 shrink-0">#{aid}</span>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               )}

@@ -1,45 +1,42 @@
-"""服务器控制 API 路由。"""
+"""服务器控制 API 路由(面板级)。"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from core import MissevanServer
-from interfaces.bot import BotPermission
-from api.deps import get_server
+from core.account import AccountManager
+from api.deps import get_account_manager
 from api.schemas import ServerStatusResponse, StatusResponse
 
 router = APIRouter()
 
 
 @router.get("/status", response_model=ServerStatusResponse)
-async def server_status(s: MissevanServer = Depends(get_server)):
-    """获取服务器运行状态。"""
-    await s._ensure_bot_restored()
-    bot = s.bot
-    plugins = s.plugins
+async def server_status(manager: AccountManager = Depends(get_account_manager)):
+    """获取面板运行状态(账户聚合)。"""
+    ov = manager.overview()
     return ServerStatusResponse(
         running=True,
-        bot_name=bot.name or "(未配置)",
-        bot_available=s.bot_available,
-        livestream_count=len(s.livestreams),
-        plugin_count=len(plugins),
-        enabled_plugin_count=sum(1 for p in plugins if p.enabled),
+        bot_name=f"{ov['total']} 个账户",
+        bot_available=True,
+        livestream_count=sum(1 for a in ov["accounts"] if a["room_id"]),
+        plugin_count=ov["library_plugin_count"],
+        enabled_plugin_count=sum(a["enabled_plugin_count"] for a in ov["accounts"]),
     )
 
 
 @router.post("/reload", response_model=StatusResponse)
-async def server_reload(s: MissevanServer = Depends(get_server)):
-    """重载服务器（shutdown → start）。"""
-    await s.reload()
+async def server_reload(manager: AccountManager = Depends(get_account_manager)):
+    """重载全部账户(shutdown_all + start_all)。"""
+    await manager.reload_all()
     return StatusResponse(
         success=True,
-        message=f"服务器已重载，{len(s.plugins)} 个插件",
+        message=f"面板已重载，{len(manager.list_records())} 个账户",
     )
 
 
 @router.post("/shutdown", response_model=StatusResponse)
-async def server_shutdown(s: MissevanServer = Depends(get_server)):
-    """关闭服务器。"""
-    await s.shutdown()
-    return StatusResponse(success=True, message="服务器已关闭")
+async def server_shutdown(manager: AccountManager = Depends(get_account_manager)):
+    """关闭全部账户运行时。"""
+    await manager.shutdown_all()
+    return StatusResponse(success=True, message="全部账户已关闭")

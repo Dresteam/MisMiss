@@ -173,13 +173,16 @@ function renderCell(col: ColumnDef, value: any, row: any, onToggle?: (col: Colum
 interface Props {
   schema: UISchema;
   pluginName: string;
+  /** 插件 UI API 基址,默认 /api/plugin/{name}/ui;多账户模式传入 /api/accounts/{id}/plugin/{name}/ui */
+  apiBase?: string;
 }
 
 // =====================================================================
 // PluginUI 主组件
 // =====================================================================
 
-export function PluginUI({ schema, pluginName }: Props) {
+export function PluginUI({ schema, pluginName, apiBase }: Props) {
+  const base = apiBase ?? '/api/plugin/' + pluginName + '/ui';
   const [data, setData] = useState<any[] | Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -211,6 +214,11 @@ export function PluginUI({ schema, pluginName }: Props) {
     try {
       const token = localStorage.getItem('auth_token');
       let url = schema.api;
+      // 多账户模式:schema 内硬编码的 /api/plugin/{name}/ui/... 重写为 apiBase
+      if (apiBase && url.startsWith('/api/plugin/')) {
+        const suffix = url.split('/ui')[1] ?? '';
+        url = apiBase + suffix;
+      }
       if (schema.type === 'playlist' && roomId) url += '?room_id=' + roomId;
       const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
       const result = await res.json();
@@ -222,7 +230,7 @@ export function PluginUI({ schema, pluginName }: Props) {
   const loadRooms = useCallback(async () => {
     try {
       const token = localStorage.getItem('auth_token');
-      const res = await fetch('/api/plugin/' + pluginName + '/ui/rooms', {
+      const res = await fetch(base + '/rooms', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const d = await res.json();
@@ -555,7 +563,7 @@ export function PluginUI({ schema, pluginName }: Props) {
     const clearSel = () => setSelected(new Set());
     const batchApi = async (st: string) => {
       for (const i of [...selected].sort((a, b) => b - a))
-        await doFetch('/api/plugin/' + pluginName + '/ui/status' + qs(), 'POST', { index: i, status: st });
+        await doFetch(base + '/status' + qs(), 'POST', { index: i, status: st });
       clearSel(); await load();
     };
     const showConfirm = (title: string, msg: string, cb: () => void, danger = false) => {
@@ -565,13 +573,13 @@ export function PluginUI({ schema, pluginName }: Props) {
     const batchDelete = () => {
       showConfirm('批量删除', '确定删除选中的 ' + selected.size + ' 项？', async () => {
         for (const i of [...selected].sort((a, b) => b - a))
-          await doFetch('/api/plugin/' + pluginName + '/ui/delete' + qs(), 'POST', { index: i });
+          await doFetch(base + '/delete' + qs(), 'POST', { index: i });
         clearSel(); await load();
       }, true);
     };
     const clearAll = () => {
       showConfirm('清空点播单', '确定清空当前直播间的全部点播项吗？此操作不可恢复。', async () => {
-        await doFetch('/api/plugin/' + pluginName + '/ui/clear' + qs(), 'POST');
+        await doFetch(base + '/clear' + qs(), 'POST');
         clearSel(); await load();
       }, true);
     };
@@ -656,7 +664,7 @@ export function PluginUI({ schema, pluginName }: Props) {
                 {['playing', 'working', 'done', 'pending'].map(s => {
                   const btnCls = 'relative group px-2 py-1.5 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
                   return <button key={s} disabled={s === st} className={btnCls}
-                    onClick={async () => { if (s === st) return; await doFetch('/api/plugin/' + pluginName + '/ui/status' + qs(), 'POST', { index: i, status: s }); await load(); }}>
+                    onClick={async () => { if (s === st) return; await doFetch(base + '/status' + qs(), 'POST', { index: i, status: s }); await load(); }}>
                     {statusIcons[s]}
                     {s !== st && <HoverTip text={statusLabels[s]} />}
                   </button>
@@ -666,7 +674,7 @@ export function PluginUI({ schema, pluginName }: Props) {
                   className="relative group px-2 py-1.5 text-sm rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
                   onClick={async () => {
                     if (!confirm('确定删除 #' + (item.index || i + 1) + '「' + item.song_name + '」？')) return;
-                    await doFetch('/api/plugin/' + pluginName + '/ui/delete' + qs(), 'POST', { index: i });
+                    await doFetch(base + '/delete' + qs(), 'POST', { index: i });
                     setSelected(prev => { const n = new Set(prev); n.delete(i); return n; }); await load();
                   }}>✕<HoverTip text="删除" /></button>
               </div>

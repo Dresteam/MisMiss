@@ -4,6 +4,9 @@ interface AuthState {
   token: string | null;
   username: string | null;
   firstLogin: boolean;
+  /** 角色:admin(面板管理员) | account(账户持有者) */
+  role: 'admin' | 'account';
+  accountId: number | null;
 }
 
 interface AuthContextType extends AuthState {
@@ -19,7 +22,7 @@ export const useAuth = () => useContext(AuthContext);
 export function useAuthState(): AuthContextType {
   const [state, setState] = useState<AuthState>(() => {
     const token = localStorage.getItem('auth_token');
-    return { token, username: null, firstLogin: false };
+    return { token, username: null, firstLogin: false, role: 'admin', accountId: null };
   });
   const [loading, setLoading] = useState(true);
 
@@ -29,10 +32,16 @@ export function useAuthState(): AuthContextType {
         .then(r => r.ok ? r.json() : null)
         .then(d => {
           if (d && d.valid !== false) {
-            setState(s => ({ ...s, username: d.username, firstLogin: d.first_login }));
+            setState(s => ({
+              ...s,
+              username: d.username,
+              firstLogin: d.first_login,
+              role: d.role === 'account' ? 'account' : 'admin',
+              accountId: d.account_id ?? null,
+            }));
           } else {
             localStorage.removeItem('auth_token');
-            setState({ token: null, username: null, firstLogin: false });
+            setState({ token: null, username: null, firstLogin: false, role: 'admin', accountId: null });
           }
         })
         .finally(() => setLoading(false));
@@ -50,12 +59,18 @@ export function useAuthState(): AuthContextType {
     if (!res.ok) { const e = await res.json(); throw new Error(e.detail); }
     const data = await res.json();
     localStorage.setItem('auth_token', data.token);
-    setState({ token: data.token, username: data.username, firstLogin: data.first_login });
+    setState({
+      token: data.token,
+      username: data.username,
+      firstLogin: data.first_login,
+      role: data.role === 'account' ? 'account' : 'admin',
+      accountId: data.account_id ?? null,
+    });
   };
 
   const logout = () => {
     localStorage.removeItem('auth_token');
-    setState({ token: null, username: null, firstLogin: false });
+    setState({ token: null, username: null, firstLogin: false, role: 'admin', accountId: null });
   };
 
   const changePassword = async (current: string, newPwd: string) => {
