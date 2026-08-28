@@ -12,7 +12,8 @@
 8. [Web UI](#8-web-ui)
 9. [权限系统](#9-权限系统)
 10. [生命周期](#10-生命周期)
-11. [完整参考](#11-完整参考)
+11. [多账户运行模型（v1.1.0+）](#11-多账户运行模型v110)
+12. [完整参考](#12-完整参考)
 
 ---
 
@@ -323,7 +324,7 @@ def register_routes(self, router: Any) -> None:
         return JSONResponse({"ok": True})
 ```
 
-`PluginManager` 自动将路由注册到 FastAPI，前缀为 `/api/plugin/{name}/ui`。
+`PluginManager` 自动将路由注册到 FastAPI，多账户前缀为 `/api/accounts/{account_id}/plugin/{name}/ui`（见 [11.5 Web UI 路由前缀](#115-web-ui-路由前缀)；`_ui_schema.json` 中仍写 `/api/plugin/{name}/ui/...`，前端自动重写）。
 
 ### 8.3 _ui_schema.json 声明式 UI
 
@@ -415,7 +416,7 @@ API 返回格式：`[{"name":"Alice","status":"活跃","score":98.6,...}]` 或 `
 
 #### playlist — 完整点播单
 
-扩展 `table`，提供：房间选择器（按 `room_id` 隔离的多直播间点播单）、统计栏、批量操作工具栏（批量状态切换 + 批量删除 + 清空点播单二次确认，工具栏固定底部不挤压列表）、行内状态图标、每个状态的状态切换按钮（变更同步通知直播间）。
+扩展 `table`，提供：房间选择器（多账户版本下账户仅一个直播间，选择器自动收敛为单选项）、统计栏、批量操作工具栏（批量状态切换 + 批量删除 + 清空点播单二次确认，工具栏固定底部不挤压列表）、行内状态图标、每个状态的状态切换按钮（变更同步通知直播间）。
 
 ```json
 {
@@ -552,7 +553,72 @@ PluginManager                    PluginManager                    EventBus
 
 ---
 
-## 11. 完整参考
+## 11. 多账户运行模型（v1.1.0+）
+
+自 v1.1.0 起，MisMiss 采用多账户架构：**主面板管理多个账户（每个账户 = 1 个直播间 + 1 个 Bot）**。插件开发需理解以下运行规则。
+
+### 11.1 安装 / 启用 / 禁用 / 卸载语义
+
+| 操作 | 语义 |
+|------|------|
+| 面板「插件库」安装 | 仅把插件放入共享库（`plugins/`），**不运行** |
+| 账户「安装」 | 把插件源码**拷贝一份**到 `data/accounts/{id}/installed_plugins/` 独立运行；各账户副本互不影响 |
+| 启用 / 禁用 | 启动 / 停止该账户内的插件实例（`initialize()` / `terminate()`） |
+| 卸载 | 停止实例并删除账户副本；可选择同时删除该账户的配置与持久化数据（不可撤销） |
+
+插件版本对比：账户内已安装版本低于库中版本时，插件卡片显示「可更新」徽标。
+
+### 11.2 直播间维度已移除
+
+**插件不再需要（也不应该）按直播间区分任何逻辑**：
+
+- 配置中的 `enabled_rooms` / `allowed_rooms` 等房间过滤字段已废弃（v1.1.0 起全部内置插件已移除）；
+- 每个账户只绑定一个直播间，**事件总线按账户隔离** —— 插件收到的事件只会来自本账户的直播间，无需自行过滤；
+- 数据存储按账户隔离：`self.data`（`PluginDataManager`）读写的是本账户的数据目录（`data/accounts/{id}/plugins/{name}/`），配置与权限同样按账户存放 —— **不要再用 `room_id` 等键做数据分区**；
+- 弹幕指令按账户路由：不同账户启用同名插件时指令互不冲突。
+
+### 11.3 定时消息
+
+注册到**账户直播间队列**（账户仅一个直播间，统一由该队列轮转发送）：
+
+```python
+async def initialize(self, config: MissConfig) -> None:
+    # 获取账户直播间 ID
+    lives = self._server.livestreams
+    room_id = next(iter(lives.keys()), 0)
+    if room_id > 0:
+        mid = self._server.register_timer_message(room_id, "欢迎来到直播间～")
+```
+
+不要使用 `live_id=0`（全局队列）：多账户版本下账户消息统一注册在房间队列，定时消息页与轮转发送都基于它。
+
+### 11.4 Bot 权限天花板
+
+账户 Bot 的权限是插件权限的**上限**：
+
+- 使用**公共 Cookie** 的账户，Bot 权限被强制为「仅发送直播间消息」（`SEND_LIVESTREAM_MESSAGE`）—— 其插件无法使用发送私信 / 赠送礼物等权限；
+- 使用**自定义 Cookie** 的账户可配置完整权限集；
+- 插件权限仍通过 `_permission.json` 声明、账户内逐项配置，超出 Bot 权限的项自动不可用（详情抽屉会提示「Bot 未授予此权限」）。
+
+### 11.5 Web UI 路由前缀
+
+插件路由由框架自动注册，**多账户前缀**为：
+
+```
+/api/accounts/{account_id}/plugin/{name}/ui
+```
+
+`_ui_schema.json` 中仍按惯例写 `/api/plugin/{name}/ui/...` —— 前端引擎会自动重写为当前账户前缀，无需修改 schema。`register_routes()` 内不要硬编码绝对路径前缀（框架已按账户注入 router）。
+
+### 11.6 重要约束
+
+- **模块级全局变量跨账户共享**：同一进程内所有账户共用 Python 模块缓存（`sys.modules`）。插件状态必须放在实例属性上（或使用 `self.data`），**禁止**用模块级变量保存可写状态；
+- 必须单 worker 部署（`MISMISS_WORKERS=1`），连接/定时器/插件实例均为单实例资源；
+- 建议账户规模 ≤ 30~50（每账户 ≈ 1 个 WebSocket 连接 + 1 个定时循环 + N 个插件实例）。
+
+---
+
+## 12. 完整参考
 
 ### Plugin 基类属性
 
@@ -572,18 +638,19 @@ PluginManager                    PluginManager                    EventBus
 
 ```python
 async def initialize(self, config: MissConfig) -> None:
-    # 直播间列表（含已连接与事件中见过的直播间）
+    # 账户直播间（多账户版本下账户仅绑定一个直播间）
     lives = self._server.livestreams  # dict[int, MissevanLivestream]
+    room_id = next(iter(lives.keys()), 0)
 
-    # 定时消息：live_id=0 为全局（所有直播间轮播），>0 为直播间独立消息
-    mid = self._server.register_timer_message(0, "全局轮播消息")
-    mid2 = self._server.register_timer_message(12345, "本直播间欢迎语")
+    # 定时消息：注册到账户直播间队列（统一轮转发送）
+    if room_id > 0:
+        mid = self._server.register_timer_message(room_id, "本直播间欢迎语")
 
-    # 取消注册
-    self._server.unregister_timer_message(mid)
+        # 取消注册
+        self._server.unregister_timer_message(mid)
 ```
 
-**定时消息合并轮转**：每个直播间按「全局消息在前、独立消息在后」组成合并轮转，每 `timer_interval` 秒发送一条（间隔可通过 Web 控制台实时修改并持久化到 `config.yml`），确保各条消息不会同时发送。更多操作见 `MissevanServer` 的 `list_timer_messages()` / `update_timer_message()` / `move_timer_message()` / `skip_timer_message_once()` / `send_timer_message_now()`。
+**定时消息轮转**：账户队列每 `timer_interval` 秒发送一条（间隔在账户「定时消息」页实时修改，按账户持久化）。更多操作见 `MissevanServer` 的 `list_timer_messages()` / `update_timer_message()` / `move_timer_message()` / `skip_timer_message_once()` / `send_timer_message_now()`。详见 [11.3 定时消息](#113-定时消息)。
 
 ### Plugin 生命周期方法
 
