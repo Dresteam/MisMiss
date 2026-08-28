@@ -45,11 +45,22 @@ _DOCKER_UPDATE_HINT = (
     "请通过部署包手动更新（bash deploy.sh）。"
 )
 
-# 版本号（运行时从 pyproject.toml 或环境变量读取）
-try:
-    _CURRENT_VERSION = os.environ.get("MISMISS_VERSION", "1.0.0")
-except Exception:
-    _CURRENT_VERSION = "0.0.0"
+# 版本号（环境变量 > pyproject.toml > 兜底；Docker 镜像构建时注入 MISMISS_VERSION）
+def _detect_version() -> str:
+    env = os.environ.get("MISMISS_VERSION", "").strip()
+    if env:
+        return env
+    pyproject = Path(__file__).resolve().parent.parent.parent.parent.parent / "pyproject.toml"
+    try:
+        match = re.search(r'version\s*=\s*"([^"]+)"', pyproject.read_text(encoding="utf-8"))
+        if match:
+            return match.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+_CURRENT_VERSION = _detect_version()
 
 
 # ------------------------------------------------------------------ #

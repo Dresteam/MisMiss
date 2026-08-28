@@ -144,7 +144,7 @@ bash scripts/docker-release.sh 1.1.0
 
 产物：`dist/mismiss-1.1.0-docker.zip`（Windows 同时产出 `.tar.gz`）或 `dist/mismiss-1.1.0-docker.tar.gz`（Linux / macOS）。
 
-版本号未指定时自动解析（与 release.sh 一致）：`pyproject.toml` → git tag → 日期。例如当前项目会得到 `mismiss-1.0.0-beta.2-docker.zip`，与 `release/` 目录产物命名保持同一格式。
+版本号未指定时自动解析（与 release.sh 一致）：`pyproject.toml` → git tag → 日期。例如当前项目会得到 `mismiss-1.1.0-docker.zip`，与 `release/` 目录产物命名保持同一格式。
 
 部署包内容（扁平结构，无顶层目录，可直接解压到部署目录）：
 
@@ -181,11 +181,11 @@ bash deploy.sh
 
 ```bash
 # 本地
-powershell -File scripts\docker-release.ps1 -Version 1.3.0
-scp dist/mismiss-1.3.0-docker.zip user@server:/opt/mismiss/
+powershell -File scripts\docker-release.ps1 -Version 1.1.0
+scp dist/mismiss-1.1.0-docker.zip user@server:/opt/mismiss/
 
 # 服务器
-cd /opt/mismiss && unzip -o mismiss-1.3.0-docker.zip
+cd /opt/mismiss && unzip -o mismiss-1.1.0-docker.zip
 bash deploy.sh
 ```
 
