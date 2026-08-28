@@ -365,16 +365,16 @@ def _verify_docker_package(pkg_path: Path) -> None:
     image_reader = None
     if pkg_path.name.endswith(".tar.gz"):
         tf = tarfile.open(pkg_path, "r:gz")
-        names = [n.replace("\\", "/") for n in tf.getnames()]
+        names = [_normalize(n) for n in tf.getnames()]
         for m in tf.getmembers():
-            if m.isfile() and _normalize(m.name) == "mismiss-docker.tar.gz":
+            if m.isfile() and _normalize(m.name).endswith("mismiss-docker.tar.gz"):
                 image_reader = tf.extractfile(m)
                 break
     else:
         zf = zipfile.ZipFile(pkg_path)
-        names = [n.replace("\\", "/") for n in zf.namelist()]
+        names = [_normalize(n) for n in zf.namelist()]
         for n in zf.namelist():
-            if _normalize(n) == "mismiss-docker.tar.gz":
+            if _normalize(n).endswith("mismiss-docker.tar.gz"):
                 image_reader = io.BytesIO(zf.read(n))
                 break
 

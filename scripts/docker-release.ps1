@@ -7,9 +7,9 @@
 #
 # Version detection (same as release.ps1): -Version -> pyproject.toml -> git tag -> date
 #
-# Output: dist/mismiss-<version>-docker.zip (naming matches release/ artifacts)
-#   Contains: mismiss-docker.tar.gz (image), docker-compose.yml,
-#             nginx.conf, config.yml.dist, deploy.sh
+# Output: dist/mismiss-<version>-docker.zip + .tar.gz (naming matches release/ artifacts)
+#   Contains (flat, no top-level dir): mismiss-docker.tar.gz (image),
+#             docker-compose.yml, nginx.conf, config.yml.dist, deploy.sh
 # ============================================================
 
 param(
@@ -112,14 +112,31 @@ Copy-Item "$ProjectRoot\scripts\docker-server-deploy.sh"   "$BuildDir\deploy.sh"
 Write-W "config.yml.dist comes from dev machine config - ensure no secrets inside"
 
 # ------------------------------------------------------------------ #
-# 3. Package zip
+# 3. Package zip + tar.gz (flat, no top-level dir)
 # ------------------------------------------------------------------ #
 Write-S "Packaging -> $DistDir\$PkgName.zip"
 if (Test-Path "$DistDir\$PkgName.zip") { Remove-Item -Force "$DistDir\$PkgName.zip" }
-Compress-Archive -Path $BuildDir -DestinationPath "$DistDir\$PkgName.zip"
+# 通配符打包为扁平结构：归档成员即部署文件本身，可直接解压到部署目录。
+# 顶层目录会导致服务器在线更新校验按成员名精确匹配时找不到 mismiss-docker.tar.gz
+Compress-Archive -Path "$BuildDir\*" -DestinationPath "$DistDir\$PkgName.zip"
+
+Write-S "Packaging -> $DistDir\$PkgName.tar.gz"
+if (Test-Path "$DistDir\$PkgName.tar.gz") { Remove-Item -Force "$DistDir\$PkgName.tar.gz" }
+# 显式调用 Windows 自带 bsdtar：PATH 中的 Git tar 不支持盘符路径（E:\... 会被当作 host:path）
+$bsdtar = "$env:SystemRoot\System32\tar.exe"
+if (Test-Path $bsdtar) {
+    Push-Location $BuildDir
+    & $bsdtar -czf "$DistDir\$PkgName.tar.gz" *
+    Pop-Location
+    if ($LASTEXITCODE -ne 0) { Write-E "tar packaging failed" }
+} else {
+    Write-W "Windows tar not found, skipping .tar.gz package"
+}
 
 Write-Host ""
-Write-I "Package ready: $DistDir\$PkgName.zip ($(Get-Size "$DistDir\$PkgName.zip"))"
+Write-I "Packages ready:"
+Write-Host "  $DistDir\$PkgName.zip      ($(Get-Size "$DistDir\$PkgName.zip"))"
+Write-Host "  $DistDir\$PkgName.tar.gz   ($(Get-Size "$DistDir\$PkgName.tar.gz"))"
 Write-Host ""
 Write-I "Server deployment:"
 Write-Host ""
@@ -127,7 +144,6 @@ Write-Host "  # 1. Upload (scp / SFTP)"
 Write-Host "  scp dist\$PkgName.zip user@server:/opt/mismiss/"
 Write-Host ""
 Write-Host "  # 2. Unzip and deploy on server"
-Write-Host "  cd /opt/mismiss && unzip $PkgName.zip && cd $PkgName"
-Write-Host "  bash deploy.sh"
+Write-Host "  cd /opt/mismiss && unzip -o $PkgName.zip && bash deploy.sh"
 Write-Host ""
 Write-I "Update: overwrite deploy dir with new package, run bash deploy.sh again"

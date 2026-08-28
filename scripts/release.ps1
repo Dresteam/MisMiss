@@ -265,11 +265,13 @@ if ($SkipDocker) {
         & powershell -File "$ProjectRoot\scripts\docker-release.ps1" -Version $SemVer
         if ($LASTEXITCODE -ne 0) { Write-ERR "Docker package build failed" }
 
-        $dockerFile = "mismiss-${SemVer}-docker.zip"
-        Copy-Item "$ProjectRoot\dist\$dockerFile" "$ReleaseDir\"
-
-        $dockerSize = (Get-Item "$ReleaseDir\$dockerFile").Length
-        Write-OK "docker pkg    $dockerFile  ($('{0:N1}' -f ($dockerSize / 1MB)) MB)"
+        foreach ($dockerFile in @("mismiss-${SemVer}-docker.zip", "mismiss-${SemVer}-docker.tar.gz")) {
+            if (Test-Path "$ProjectRoot\dist\$dockerFile") {
+                Copy-Item "$ProjectRoot\dist\$dockerFile" "$ReleaseDir\"
+                $dockerSize = (Get-Item "$ReleaseDir\$dockerFile").Length
+                Write-OK "docker pkg    $dockerFile  ($('{0:N1}' -f ($dockerSize / 1MB)) MB)"
+            }
+        }
     }
 }
 
