@@ -1,4 +1,8 @@
-"""直播间管理 API 路由。"""
+"""直播间管理 API 路由(账户级,单房间)。
+
+挂载于 ``/api/accounts/{account_id}/live``。
+每个账户仅允许绑定一个直播间(room_id 存于账户记录)。
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ from core.exceptions import (
     CorePermissionException,
     CoreWebSocketException,
 )
-from api.deps import get_server
+from api.deps import require_account, require_active_account
 from api.schemas import (
     LiveAddRequest,
     LiveMessageRequest,
@@ -36,9 +40,13 @@ def _live_to_info(live) -> LivestreamInfo:
         medal_name = live.medal.name
         medal_level = live.medal.level
     creator_online = False
+    creator_avatar = ""
+    creator_intro = ""
     try:
         if live.creator:
             creator_online = live.creator.is_online
+            creator_avatar = live.creator.icon_url or ""
+            creator_intro = live.creator.introduction or ""
     except Exception:
         pass
     return LivestreamInfo(
@@ -54,7 +62,26 @@ def _live_to_info(live) -> LivestreamInfo:
         enabled=live.enabled,
         medal_name=medal_name,
         medal_level=medal_level,
+        cover_url=getattr(live, "cover_url", "") or "",
+        creator_avatar=creator_avatar,
+        creator_intro=creator_intro,
+        is_streaming=getattr(live, "is_streaming", False),
     )
+
+
+def _room(s: MissevanServer):
+    """账户唯一直播间(未绑定返回 None)。"""
+    room_id = getattr(s.account_record, "room_id", None)
+    if not room_id:
+        return None
+    return s.livestreams.get(int(room_id))
+
+
+def _require_room(s: MissevanServer):
+    room = _room(s)
+    if room is None:
+        raise HTTPException(status_code=404, detail="账户尚未绑定直播间,请先添加")
+    return room
 
 
 # ================================================================== #
@@ -62,127 +89,135 @@ def _live_to_info(live) -> LivestreamInfo:
 # ================================================================== #
 
 
-@router.post("/{live_id}/refresh", response_model=LivestreamInfo)
-async def live_refresh(live_id: int, s: MissevanServer = Depends(get_server)):
-    """刷新单个直播间的房间信息。"""
-    lives = s.livestreams
-    if live_id not in lives:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
-    try:
-        await lives[live_id]._refresh()
-    except CoreApiException as e:
-        raise HTTPException(status_code=502, detail=f"API 错误: {e}")
-    return _live_to_info(lives[live_id])
-
-
-@router.get("/list", response_model=LiveListResponse)
-async def live_list(s: MissevanServer = Depends(get_server)):
-    """列出所有直播间。"""
+@router.get("/", response_model=LivestreamInfo | None)
+async def live_info(account_id: int, s: MissevanServer = Depends(require_account)):
+    """账户唯一直播间信息(未绑定返回 null)。"""
     await s._ensure_bot_restored()
-    lives = s.livestreams
-    items = [_live_to_info(live) for live in lives.values()]
-    return LiveListResponse(livestreams=items, total=len(items))
-
-
-@router.get("/{live_id}", response_model=LivestreamInfo)
-async def live_info(live_id: int, s: MissevanServer = Depends(get_server)):
-    """获取直播间详情。"""
-    await s._ensure_bot_restored()
-    lives = s.livestreams
-    if live_id not in lives:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
-    return _live_to_info(lives[live_id])
+    room = _room(s)
+    return _live_to_info(room) if room else None
 
 
 @router.post("/add", response_model=LivestreamInfo)
-async def live_add(req: LiveAddRequest, s: MissevanServer = Depends(get_server)):
-    """添加直播间。"""
+async def live_add(
+    account_id: int, req: LiveAddRequest, s: MissevanServer = Depends(require_active_account)
+):
+    """绑定/更换直播间(每个账户仅一个;已绑定时自动替换旧房间)。"""
+    old = getattr(s.account_record, "room_id", None)
+    if old == req.live_id:
+        raise HTTPException(status_code=400, detail="已绑定该直播间")
+    # 先添加新房间(失败则旧房间不受影响),成功后再移除旧的
     try:
         live = await s.add_livestream(req.live_id)
-        return _live_to_info(live)
     except CoreBotException as e:
         raise HTTPException(status_code=400, detail=str(e))
     except CoreApiException as e:
         raise HTTPException(status_code=502, detail=f"API 错误: {e}")
+    if old:
+        try:
+            await s.remove_livestream(int(old))
+        except KeyError:
+            pass
+    # 写入账户记录
+    s.account_record.room_id = req.live_id
+    from api.deps import get_account_manager
+    get_account_manager()._save_panel()
+    return _live_to_info(live)
 
 
-@router.post("/{live_id}/enable", response_model=StatusResponse)
-async def live_enable(live_id: int, s: MissevanServer = Depends(get_server)):
-    """启用直播间并连接 WebSocket。"""
+@router.delete("/", response_model=StatusResponse)
+async def live_remove(account_id: int, s: MissevanServer = Depends(require_active_account)):
+    """解除直播间绑定(断开连接并移除)。"""
+    room = _require_room(s)
     try:
-        await s.enable_livestream(live_id)
-        return StatusResponse(success=True, message=f"直播间 {live_id} 已启用")
+        await s.remove_livestream(room.live_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
+        pass
+    s.account_record.room_id = None
+    from api.deps import get_account_manager
+    get_account_manager()._save_panel()
+    return StatusResponse(success=True, message=f"直播间 {room.live_id} 已解除绑定")
+
+
+@router.post("/refresh", response_model=LivestreamInfo)
+async def live_refresh(account_id: int, s: MissevanServer = Depends(require_account)):
+    """刷新直播间房间信息。"""
+    room = _require_room(s)
+    try:
+        await room._refresh()
+    except CoreApiException as e:
+        raise HTTPException(status_code=502, detail=f"API 错误: {e}")
+    return _live_to_info(room)
+
+
+@router.post("/enable", response_model=StatusResponse)
+async def live_enable(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
+    """启用直播间并连接 WebSocket。"""
+    room = _require_room(s)
+    try:
+        await s.enable_livestream(room.live_id)
+        return StatusResponse(success=True, message=f"直播间 {room.live_id} 已启用")
     except CoreWebSocketException as e:
         raise HTTPException(status_code=502, detail=f"连接失败（403 错误可能为 Cookie 已过期）: {e}")
     except CoreApiException as e:
         raise HTTPException(status_code=502, detail=f"API 错误: {e}")
 
 
-@router.post("/{live_id}/disable", response_model=StatusResponse)
-async def live_disable(live_id: int, s: MissevanServer = Depends(get_server)):
+@router.post("/disable", response_model=StatusResponse)
+async def live_disable(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
     """停用直播间并断开连接。"""
-    try:
-        s.disable_livestream(live_id)
-        return StatusResponse(success=True, message=f"直播间 {live_id} 已停用")
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
+    room = _require_room(s)
+    s.disable_livestream(room.live_id)
+    return StatusResponse(success=True, message=f"直播间 {room.live_id} 已停用")
 
 
-@router.post("/{live_id}/join", response_model=StatusResponse)
-async def live_join(live_id: int, s: MissevanServer = Depends(get_server)):
+@router.post("/join", response_model=StatusResponse)
+async def live_join(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
     """进入直播间（建立 WebSocket 连接）。"""
     await s._ensure_bot_restored()
-    lives = s.livestreams
-    if live_id not in lives:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在，请先添加")
+    room = _require_room(s)
     try:
-        await lives[live_id].join()
-        return StatusResponse(success=True, message=f"已进入直播间 {live_id}: {lives[live_id].room_name}")
+        await room.join()
+        return StatusResponse(success=True, message=f"已进入直播间 {room.live_id}: {room.room_name}")
     except CoreDisabledException as e:
         raise HTTPException(status_code=400, detail=str(e))
     except CoreApiException as e:
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.post("/{live_id}/quit", response_model=StatusResponse)
-async def live_quit(live_id: int, s: MissevanServer = Depends(get_server)):
+@router.post("/quit", response_model=StatusResponse)
+async def live_quit(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
     """退出直播间（断开 WebSocket 连接）。"""
-    lives = s.livestreams
-    if live_id not in lives:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
+    room = _require_room(s)
     try:
-        await lives[live_id].quit()
-        return StatusResponse(success=True, message=f"已退出直播间 {live_id}")
+        await room.quit()
+        return StatusResponse(success=True, message=f"已退出直播间 {room.live_id}")
     except CoreDisabledException:
-        # 已经停用/断开，视为成功
-        return StatusResponse(success=True, message=f"直播间 {live_id} 已处于断开状态")
-
-
-@router.delete("/{live_id}", response_model=StatusResponse)
-async def live_remove(live_id: int, s: MissevanServer = Depends(get_server)):
-    """移除直播间。"""
-    try:
-        await s.remove_livestream(live_id)
-        return StatusResponse(success=True, message=f"直播间 {live_id} 已移除")
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"直播间 {live_id} 不存在")
+        return StatusResponse(success=True, message=f"直播间 {room.live_id} 已处于断开状态")
 
 
 @router.post("/message", response_model=StatusResponse)
-async def live_send_message(req: LiveMessageRequest, s: MissevanServer = Depends(get_server)):
-    """向直播间发送弹幕消息。"""
-    lives = s.livestreams
-    if req.live_id not in lives:
-        raise HTTPException(status_code=404, detail=f"直播间 {req.live_id} 不存在")
+async def live_send_message(
+    account_id: int,
+    req: LiveMessageRequest,
+    s: MissevanServer = Depends(require_active_account),
+):
+    """向账户直播间发送弹幕消息。"""
+    room = _require_room(s)
     try:
-        await lives[req.live_id].send_message(
+        await room.send_message(
             req.text, priority=req.priority
         )
         return StatusResponse(
             success=True,
-            message=f"已发送 → {req.live_id}: {req.text[:50]}{'...' if len(req.text) > 50 else ''}",
+            message=f"已发送 → {room.live_id}: {req.text[:50]}{'...' if len(req.text) > 50 else ''}",
         )
     except CoreDisabledException as e:
         raise HTTPException(status_code=400, detail=str(e))

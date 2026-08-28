@@ -1,6 +1,8 @@
-"""定时消息队列管理 API。
+"""定时消息队列管理 API(账户级,单队列)。
 
-提供定时消息的查看、添加、编辑、删除、排序和跳过功能。
+挂载于 ``/api/accounts/{account_id}/timer``。
+账户仅一个直播间,定时消息统一使用 bot 的 global 队列(live_id=0),
+skip/send 由后端自动传入账户房间 ID。
 """
 
 from __future__ import annotations
@@ -8,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from core import MissevanServer
-from api.deps import get_server
+from api.deps import require_account, require_active_account
 from api.schemas import StatusResponse
 
 router = APIRouter()
@@ -25,24 +27,48 @@ def _require_bot(s: MissevanServer):
     return s.bot
 
 
+def _target_room(s: MissevanServer) -> int | None:
+    """账户房间 ID(用于全局消息 skip/send 的目标)。"""
+    room_id = getattr(s.account_record, "room_id", None)
+    return int(room_id) if room_id else None
+
+
 # ================================================================== #
 # 路由
 # ================================================================== #
 
 
 @router.get("/list")
-async def timer_list(s: MissevanServer = Depends(get_server)):
-    """列出所有定时消息（含倒计时与执行指针）。"""
-    return s.list_timer_messages()
+async def timer_list(account_id: int, s: MissevanServer = Depends(require_account)):
+    """列出定时消息(账户单队列 = 账户直播间的房间队列,附加房间名)。
+
+    响应兼容前端单队列展示:``global`` 字段承载账户直播间的消息列表。
+    """
+    await s._ensure_bot_restored()
+    data = s.list_timer_messages()
+    room_id = _target_room(s)
+    room = s.livestreams.get(room_id) if room_id else None
+    for room_item in data["rooms"]:
+        if room is not None and room_item["live_id"] == room_id:
+            room_item["room_name"] = room.room_name
+    # 账户消息注册在账户直播间队列(live_id = room_id),提取为单队列返回
+    if room_id:
+        room_item = next((r for r in data["rooms"] if r["live_id"] == room_id), None)
+        messages = room_item["messages"] if room_item else []
+        for i, m in enumerate(messages):
+            m["index"] = i
+        data["global"] = messages
+    else:
+        data["global"] = data["global"]  # 无房间时保留原 global(通常为空)
+    data["target_live_id"] = room_id
+    return data
 
 
 @router.put("/interval", response_model=StatusResponse)
-async def timer_set_interval(body: dict, s: MissevanServer = Depends(get_server)):
-    """修改定时消息发送间隔（秒）。
-
-    请求体：``{"interval": 120}``
-    实时生效，不重置各直播间的执行位置指针。
-    """
+async def timer_set_interval(
+    account_id: int, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """修改定时消息发送间隔（秒,按账户持久化）。"""
     _require_bot(s)
     interval = body.get("interval")
     try:
@@ -56,30 +82,26 @@ async def timer_set_interval(body: dict, s: MissevanServer = Depends(get_server)
 
 
 @router.post("/add", response_model=StatusResponse)
-async def timer_add(body: dict, s: MissevanServer = Depends(get_server)):
-    """添加一条定时消息。
-
-    请求体：``{"live_id": 12345, "message": "..."}``
-    ``live_id`` 为 ``0`` 时添加全局消息（适用于所有直播间）。
-    """
+async def timer_add(
+    account_id: int, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """添加一条定时消息(注册到账户直播间队列,按合并轮转发送)。"""
     _require_bot(s)
-    live_id = int(body.get("live_id", 0))
+    room_id = _target_room(s)
+    if not room_id:
+        raise HTTPException(status_code=400, detail="请先绑定直播间再添加定时消息")
     message = str(body.get("message", "")).strip()
-    if live_id < 0:
-        raise HTTPException(status_code=400, detail="live_id 不能为负数")
     if not message:
         raise HTTPException(status_code=400, detail="消息内容不能为空")
-    mid = s.register_timer_message(live_id, message)
-    scope = "全局" if live_id == 0 else f"直播间 {live_id}"
-    return StatusResponse(success=True, message=f"已添加{scope}定时消息 {mid}")
+    mid = s.register_timer_message(room_id, message)
+    return StatusResponse(success=True, message=f"已添加定时消息 {mid}")
 
 
 @router.put("/{message_id}", response_model=StatusResponse)
-async def timer_update(message_id: str, body: dict, s: MissevanServer = Depends(get_server)):
-    """编辑定时消息内容。
-
-    请求体：``{"message": "新内容"}``
-    """
+async def timer_update(
+    account_id: int, message_id: str, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """编辑定时消息内容。"""
     _require_bot(s)
     message = str(body.get("message", "")).strip()
     if not message:
@@ -90,7 +112,9 @@ async def timer_update(message_id: str, body: dict, s: MissevanServer = Depends(
 
 
 @router.delete("/{message_id}", response_model=StatusResponse)
-async def timer_delete(message_id: str, s: MissevanServer = Depends(get_server)):
+async def timer_delete(
+    account_id: int, message_id: str, s: MissevanServer = Depends(require_active_account)
+):
     """删除一条定时消息。"""
     _require_bot(s)
     s.unregister_timer_message(message_id)
@@ -98,11 +122,10 @@ async def timer_delete(message_id: str, s: MissevanServer = Depends(get_server))
 
 
 @router.post("/{message_id}/move", response_model=StatusResponse)
-async def timer_move(message_id: str, body: dict, s: MissevanServer = Depends(get_server)):
-    """上移/下移定时消息。
-
-    请求体：``{"direction": -1}``（-1 上移，1 下移）
-    """
+async def timer_move(
+    account_id: int, message_id: str, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """上移/下移定时消息。"""
     _require_bot(s)
     direction = int(body.get("direction", 0))
     if direction not in (-1, 1):
@@ -113,18 +136,12 @@ async def timer_move(message_id: str, body: dict, s: MissevanServer = Depends(ge
 
 
 @router.post("/{message_id}/skip", response_model=StatusResponse)
-async def timer_skip(message_id: str, body: dict, s: MissevanServer = Depends(get_server)):
-    """跳过当前指针处的定时消息（指针后移一位，计时器保持）。
-
-    请求体：``{"live_id": 12345}``（全局消息需要目标直播间 ID）
-    """
+async def timer_skip(
+    account_id: int, message_id: str, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """跳过当前指针处的定时消息(目标为账户直播间,后端自动传入)。"""
     _require_bot(s)
-    target = None
-    try:
-        t = body.get("live_id")
-        target = int(t) if t not in (None, "", 0) else None
-    except (TypeError, ValueError):
-        target = None
+    target = _target_room(s)
     if not s.skip_timer_message_once(message_id, target):
         raise HTTPException(
             status_code=400,
@@ -134,17 +151,12 @@ async def timer_skip(message_id: str, body: dict, s: MissevanServer = Depends(ge
 
 
 @router.post("/{message_id}/send", response_model=StatusResponse)
-async def timer_send_now(message_id: str, body: dict, s: MissevanServer = Depends(get_server)):
-    """立即发送一条定时消息（视为立即执行，指针推进）。
-
-    请求体：``{"live_id": 12345}``（全局消息需要目标直播间 ID）
-    """
+async def timer_send_now(
+    account_id: int, message_id: str, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """立即发送一条定时消息(目标为账户直播间,后端自动传入)。"""
     _require_bot(s)
-    target = body.get("live_id")
-    try:
-        target = int(target) if target not in (None, "", 0) else None
-    except (TypeError, ValueError):
-        target = None
+    target = _target_room(s)
     try:
         ok = await s.send_timer_message_now(message_id, target)
     except Exception as e:
@@ -152,6 +164,6 @@ async def timer_send_now(message_id: str, body: dict, s: MissevanServer = Depend
     if not ok:
         raise HTTPException(
             status_code=400,
-            detail="发送失败（消息不存在，或全局消息未指定目标直播间）",
+            detail="发送失败（消息不存在,或账户未绑定直播间）",
         )
     return StatusResponse(success=True, message="已立即发送")

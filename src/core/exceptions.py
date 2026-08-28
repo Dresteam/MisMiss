@@ -235,3 +235,50 @@ class CorePluginDependencyException(CorePluginException):
         super().__init__(msg)
 
 
+# ------------------------------------------------------------------ #
+# 多账户面板
+# ------------------------------------------------------------------ #
+
+class CoreAccountException(MissevanException):
+    """账户相关异常基类。"""
+
+    def __init__(self, message: str = "账户异常") -> None:
+        super().__init__(message)
+
+
+class CoreAccountNotFoundException(CoreAccountException):
+    """账户未找到异常。
+
+    :param account_id: 账户 ID
+    """
+
+    def __init__(self, account_id: int) -> None:
+        self.account_id = account_id
+        super().__init__(f"账户 {account_id} 不存在")
+
+
+class CoreAccountExpiredException(CoreAccountException):
+    """账户已过期异常。
+
+    过期账户的写操作被拒绝时抛出。
+
+    :param account_id: 账户 ID
+    """
+
+    def __init__(self, account_id: int) -> None:
+        self.account_id = account_id
+        super().__init__(f"账户 {account_id} 已过期，请先续期")
+
+
+class CoreLicenseException(MissevanException):
+    """授权码异常。
+
+    授权码生成、兑换、撤销过程中的错误。
+
+    :param message: 异常描述
+    """
+
+    def __init__(self, message: str = "授权码错误") -> None:
+        super().__init__(message)
+
+

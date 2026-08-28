@@ -90,6 +90,7 @@ class PluginManager:
         on_state_changed: Callable[[], None] | None = None,
         command_router: "CommandRouter | None" = None,
         pip_mirror: str | None = None,
+        ui_route_prefix: str | Callable[[str], str] | None = None,
     ) -> None:
         self._plugin_dir = plugin_dir
         self._event_bus = event_bus
@@ -98,6 +99,9 @@ class PluginManager:
         self._on_state_changed = on_state_changed
         self._command_router = command_router
         self._pip_mirror = pip_mirror
+        # 插件 UI 路由前缀:默认 /api/plugin/{name}/ui;多账户模式传入
+        # lambda name: f"/api/accounts/{account_id}/plugin/{name}/ui"
+        self._ui_route_prefix = ui_route_prefix
 
         if permission_dir is None:
             permission_dir = os.path.join(os.path.dirname(config_dir), "permissions")
@@ -117,6 +121,15 @@ class PluginManager:
     def set_server(self, server) -> None:
         """注入 MissevanServer 引用，供插件查询直播间列表等。"""
         self._server = server
+
+    def _plugin_ui_prefix(self, name: str) -> str:
+        """计算插件 UI 路由前缀（多账户模式下由构造参数决定）。"""
+        p = self._ui_route_prefix
+        if p is None:
+            return f"/api/plugin/{name}/ui"
+        if callable(p):
+            return p(name)
+        return p.format(name=name)
 
     def set_app(self, app) -> None:
         """设置 FastAPI app 引用并注册所有插件的 UI 路由。
@@ -762,7 +775,7 @@ class PluginManager:
         # 注册插件自定义路由（在 initialize 之前，确保 UI 立即可用）
         if self._app is not None and hasattr(instance, 'register_routes'):
             from fastapi import APIRouter as _APIRouter
-            plugin_router = _APIRouter(prefix=f"/api/plugin/{metadata.name}/ui", tags=[metadata.name])
+            plugin_router = _APIRouter(prefix=self._plugin_ui_prefix(metadata.name), tags=[metadata.name])
             instance.register_routes(plugin_router)
             PluginManager._insert_plugin_routes(self._app, plugin_router)
             metadata.routes_registered = True
@@ -925,7 +938,7 @@ class PluginManager:
         inst = metadata.plugin_instance
         if inst is not None and self._app is not None and hasattr(inst, 'register_routes'):
             from fastapi import APIRouter as _APIRouter
-            plugin_router = _APIRouter(prefix=f"/api/plugin/{metadata.name}/ui", tags=[metadata.name])
+            plugin_router = _APIRouter(prefix=self._plugin_ui_prefix(metadata.name), tags=[metadata.name])
             inst.register_routes(plugin_router)
             PluginManager._insert_plugin_routes(self._app, plugin_router)
             metadata.routes_registered = True
@@ -979,7 +992,7 @@ class PluginManager:
             # 注册路由（插入到路由表前端以规避 SPA 兜底路由拦截）
             if self._app is not None and hasattr(instance, 'register_routes'):
                 from fastapi import APIRouter as _APIRouter
-                plugin_router = _APIRouter(prefix=f"/api/plugin/{metadata.name}/ui", tags=[metadata.name])
+                plugin_router = _APIRouter(prefix=self._plugin_ui_prefix(metadata.name), tags=[metadata.name])
                 instance.register_routes(plugin_router)
                 PluginManager._insert_plugin_routes(self._app, plugin_router)
                 metadata.routes_registered = True

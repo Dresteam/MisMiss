@@ -24,8 +24,10 @@ if getattr(sys, "frozen", False):
 else:
     _HOME = Path(__file__).resolve().parent.parent.parent.parent.parent
 
-AUTH_FILE = _HOME / "data" / "auth.json"
-TOKEN_DIR = _HOME / "data" / "tokens"
+# 数据目录可由环境变量覆盖(数据卷分离/测试隔离)
+_DATA_ROOT = Path(os.environ.get("MISMISS_DATA_DIR", _HOME / "data"))
+AUTH_FILE = _DATA_ROOT / "auth.json"
+TOKEN_DIR = _DATA_ROOT / "tokens"
 TOKEN_TTL = 30 * 24 * 3600  # 30 days
 
 
@@ -43,11 +45,20 @@ def _hash(password: str) -> str:
 TOKEN_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _save_token(token: str, username: str, expires: float) -> None:
-    """持久化 token 到文件。"""
+def _save_token(
+    token: str, username: str, expires: float,
+    role: str = "admin", account_id: int | None = None,
+) -> None:
+    """持久化 token 到文件(含角色与账户 ID)。"""
+    TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     path = TOKEN_DIR / token
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"username": username, "expires": expires}, f)
+        json.dump({
+            "username": username,
+            "expires": expires,
+            "role": role,
+            "account_id": account_id,
+        }, f)
 
 
 def _load_token(token: str) -> dict | None:
@@ -113,11 +124,16 @@ def _save_auth(data: dict) -> None:
 
 
 def verify_token(token: str) -> str | None:
-    """Return username if token is valid, else None."""
+    """Return username if token is valid, else None。"""
     data = _load_token(token)
     if data is None:
         return None
     return data.get("username")
+
+
+def token_info(token: str) -> dict | None:
+    """Return token payload {username, role, account_id} if valid, else None。"""
+    return _load_token(token)
 
 
 # ---- Middleware helper ----
@@ -136,21 +152,39 @@ def require_auth(authorization: str = Header(default="")) -> str:
 
 @router.post("/auth/login")
 async def login(body: dict):
-    """Login with username/password. Returns token + first_login flag."""
+    """登录:优先面板管理员,其次匹配账户凭据。"""
     username = body.get("username", "").strip()
     password = body.get("password", "")
 
+    role = "admin"
+    account_id: int | None = None
+    first_login = False
+
     auth = _load_auth()
-    if username != auth["username"] or _hash(password) != auth["password"]:
-        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if username == auth["username"] and _hash(password) == auth["password"]:
+        first_login = bool(auth.get("first_login", False))
+    else:
+        # 账户登录(凭据存于 panel.json)
+        from api.deps import get_account_manager
+        try:
+            manager = get_account_manager()
+            rec = manager.authenticate_account(username, password)
+        except RuntimeError:
+            rec = None
+        if rec is None:
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        role = "account"
+        account_id = rec.id
 
     token = secrets.token_hex(32)
-    _save_token(token, username, time.time() + TOKEN_TTL)
+    _save_token(token, username, time.time() + TOKEN_TTL, role=role, account_id=account_id)
 
     return {
         "token": token,
         "username": username,
-        "first_login": auth.get("first_login", False),
+        "first_login": first_login,
+        "role": role,
+        "account_id": account_id,
     }
 
 
@@ -193,14 +227,17 @@ async def change_password(body: dict):
 
 @router.get("/auth/check")
 async def check_auth(authorization: str = Header(default="")):
-    """验证 token 有效性并返回 first_login 状态。"""
+    """验证 token 有效性并返回 first_login / 角色 / 账户信息。"""
     token = authorization.removeprefix("Bearer ")
-    username = verify_token(token) if token else None
+    info = token_info(token) if token else None
     auth = _load_auth()
+    valid = info is not None
     return {
-        "valid": username is not None,
-        "username": auth["username"],
+        "valid": valid,
+        "username": (info or {}).get("username") or auth["username"],
         "first_login": auth.get("first_login", False),
+        "role": (info or {}).get("role", "admin"),
+        "account_id": (info or {}).get("account_id"),
     }
 
 

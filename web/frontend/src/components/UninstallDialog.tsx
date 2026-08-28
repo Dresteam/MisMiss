@@ -43,7 +43,7 @@ export function UninstallDialog({ open, pluginName, onConfirm, onCancel, loading
               className="rounded text-primary-600 focus:ring-primary-500" />
             <div>
               <p className="text-sm font-medium text-gray-900 dark:text-white">删除配置文件</p>
-              <p className="text-[11px] text-gray-500">移除 data/config/ 下的配置 JSON 文件</p>
+              <p className="text-[11px] text-gray-500">移除本账户 data/accounts/{'{id}'}/config、permissions/ 下的插件配置</p>
             </div>
           </label>
           <label className="flex items-center gap-3 cursor-pointer">
@@ -52,7 +52,7 @@ export function UninstallDialog({ open, pluginName, onConfirm, onCancel, loading
               className="rounded text-primary-600 focus:ring-primary-500" />
             <div>
               <p className="text-sm font-medium text-gray-900 dark:text-white">删除持久化数据</p>
-              <p className="text-[11px] text-gray-500">移除 data/plugins/ 下的插件数据目录</p>
+              <p className="text-[11px] text-gray-500">移除本账户 data/accounts/{'{id}'}/plugins/ 下的插件数据目录</p>
             </div>
           </label>
         </div>

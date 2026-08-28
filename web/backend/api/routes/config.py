@@ -12,10 +12,9 @@ from pathlib import Path
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
-from core import MissevanServer
+from core.account import AccountManager
 from core.config import ServerConfig
-from api.deps import get_server
-from api.schemas import BotCookieResponse
+from api.deps import get_account_manager
 
 router = APIRouter()
 
@@ -34,7 +33,7 @@ _PROJECT_ROOT = _HOME
 # ================================================================== #
 
 @router.get("/config")
-async def get_config(s: MissevanServer = Depends(get_server)):
+async def get_config():
     """返回当前生效的配置（合并默认值后的结果）。"""
     cfg = ServerConfig.load(_CONFIG_PATH)
     return {
@@ -48,7 +47,7 @@ async def get_config(s: MissevanServer = Depends(get_server)):
 # ================================================================== #
 
 @router.put("/config")
-async def update_config(body: dict, s: MissevanServer = Depends(get_server)):
+async def update_config(body: dict):
     """合并写入配置——仅更新传入的键，其他保持不变。"""
     try:
         # 读取当前文件内容
@@ -144,7 +143,9 @@ async def set_log_level(body: dict):
 # ================================================================== #
 
 @router.put("/config/ports")
-async def update_ports(body: dict, s: MissevanServer = Depends(get_server)):
+async def update_ports(
+    body: dict, manager: AccountManager = Depends(get_account_manager)
+):
     """修改 API 端口，保存配置后立即重启后端。Web 端口只能通过启动脚本修改。"""
     api_port = body.get("api_port", 8080)
 
@@ -157,8 +158,8 @@ async def update_ports(body: dict, s: MissevanServer = Depends(get_server)):
     with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
-    # 关闭当前服务器
-    await s.shutdown()
+    # 关闭全部账户运行时
+    await manager.shutdown_all()
 
     # 0.5s 后重启后端
     def _restart():
@@ -170,25 +171,6 @@ async def update_ports(body: dict, s: MissevanServer = Depends(get_server)):
     loop.call_later(0.5, _restart)
 
     return {"success": True, "message": f"API 端口已改为 {api_port}，后端即将重启"}
-
-
-# ================================================================== #
-# Cookie 直读（无需权限，仅供管理面板使用）
-# ================================================================== #
-
-@router.get("/config/cookie", response_model=BotCookieResponse)
-async def read_cookie(s: MissevanServer = Depends(get_server)):
-    """从持久化文件直接读取 Cookie，无需 EXPOSE_COOKIE 权限。"""
-    state_path = os.path.join(s._data_dir, s._state_file)
-    if not os.path.exists(state_path):
-        raise HTTPException(status_code=404, detail="未找到持久化数据文件")
-    try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        cookie = state.get("bot", {}).get("cookie", "")
-        return BotCookieResponse(cookie=cookie, length=len(cookie))
-    except (json.JSONDecodeError, OSError) as e:
-        raise HTTPException(status_code=500, detail=f"读取失败: {e}")
 
 
 # ================================================================== #

@@ -1,21 +1,29 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, ExternalLink, Loader2 } from 'lucide-react';
-import { fetchPluginDetail } from '../api/client';
+import { fetchAccountPluginDetail } from '../api/client';
 import type { PluginDetail } from '../api/types';
 import { PluginUI } from '../components/PluginUI';
 import { Button } from '../components/Button';
 import { MarqueeText } from '../components/MarqueeText';
+import { useAuth } from '../hooks/useAuth';
+import { isAccountPortalHost } from '../utils/host';
 
 export function PluginPageView() {
-  const { name } = useParams<{ name: string }>();
+  const { id, name } = useParams<{ id: string; name: string }>();
+  const auth = useAuth();
+  // 子域名入口无 :id 参数,回退到登录账户自身
+  const accountId = id ? Number(id) : (auth.accountId ?? 0);
+  const backPath = (isAccountPortalHost() || auth.role === 'account')
+    ? '/account/home'
+    : `/account/${accountId}`;
   const [detail, setDetail] = useState<PluginDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!name) return;
-    fetchPluginDetail(name).then(setDetail).finally(() => setLoading(false));
-  }, [name]);
+    if (!name || !accountId) return;
+    fetchAccountPluginDetail(accountId, name).then(setDetail).finally(() => setLoading(false));
+  }, [name, accountId]);
 
   if (loading) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>;
@@ -25,7 +33,7 @@ export function PluginPageView() {
     return (
       <div className="text-center py-16">
         <p className="text-gray-500">插件未找到</p>
-        <Link to="/plugin" className="text-primary-500 text-sm mt-2 inline-block">返回插件中心</Link>
+        <Link to={backPath} className="text-primary-500 text-sm mt-2 inline-block">返回账户</Link>
       </div>
     );
   }
@@ -34,7 +42,7 @@ export function PluginPageView() {
     return (
       <div className="text-center py-16">
         <p className="text-gray-500">此插件没有 Web 前端页面</p>
-        <Link to="/plugin" className="text-primary-500 text-sm mt-2 inline-block">返回插件中心</Link>
+        <Link to={backPath} className="text-primary-500 text-sm mt-2 inline-block">返回账户</Link>
       </div>
     );
   }
@@ -45,7 +53,7 @@ export function PluginPageView() {
     <div className="animate-fade-in max-w-5xl">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2 lg:gap-3 min-w-0">
-          <Link to="/plugin" className="btn-ghost btn-sm shrink-0">
+          <Link to={backPath} className="btn-ghost btn-sm shrink-0">
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div className="min-w-0 flex-1">
@@ -55,12 +63,16 @@ export function PluginPageView() {
             <p className="text-[10px] lg:text-xs text-gray-500 truncate">{detail.plugin_id} · v{detail.version}</p>
           </div>
         </div>
-        <Link to={`/plugin`} className="shrink-0">
-          <Button variant="ghost" size="sm" icon={<ExternalLink />}>插件中心</Button>
+        <Link to={backPath} className="shrink-0">
+          <Button variant="ghost" size="sm" icon={<ExternalLink />}>返回账户</Button>
         </Link>
       </div>
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 lg:p-6">
-        <PluginUI schema={detail.ui_schema as any} pluginName={detail.name} />
+        <PluginUI
+          schema={detail.ui_schema as any}
+          pluginName={detail.name}
+          apiBase={`/api/accounts/${accountId}/plugin/${detail.name}/ui`}
+        />
       </div>
     </div>
   );

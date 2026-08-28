@@ -76,9 +76,9 @@ class LiveAddRequest(BaseModel):
 
 
 class LiveMessageRequest(BaseModel):
-    """发送弹幕请求。"""
+    """发送弹幕请求(账户级路由下 live_id 由账户决定,可不传)。"""
 
-    live_id: int = Field(..., gt=0)
+    live_id: int | None = Field(default=None, gt=0)
     text: str = Field(..., min_length=1)
     priority: int = Field(default=0, ge=0)
 
@@ -98,6 +98,10 @@ class LivestreamInfo(BaseModel):
     enabled: bool = False
     medal_name: str | None = None
     medal_level: int | None = None
+    cover_url: str = ""
+    creator_avatar: str = ""
+    creator_intro: str = ""
+    is_streaming: bool = False
 
 
 class LiveListResponse(BaseModel):
@@ -236,3 +240,139 @@ class WSLogMessage(BaseModel):
     level: str = "INFO"
     message: str
     timestamp: float = 0.0
+
+
+# ================================================================== #
+# 多账户面板
+# ================================================================== #
+
+
+class AccountCreateRequest(BaseModel):
+    """创建账户请求。"""
+
+    name: str = Field(..., min_length=1, max_length=64)
+    room_id: int | None = Field(default=None, gt=0, description="绑定的直播间 ID")
+    bot_mode: str = Field(default="private", description="private | public")
+    cookie: str = Field(default="", description="private 模式的 Cookie")
+    permissions: list[str] = Field(default=["SEND_LIVESTREAM_MESSAGE"])
+    duration_days: int = Field(
+        default=-1,
+        description="有效时长(天):N 为 N 天;-1 为永久",
+    )
+    username: str = Field(..., min_length=1, max_length=64, description="账户登录用户名(必填,全局唯一,用于账户分辨)")
+    password: str = Field(default="", min_length=4, max_length=64, description="账户登录密码(至少 4 位)")
+
+
+class AccountUpdateRequest(BaseModel):
+    """更新账户请求(仅提交需要修改的字段)。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    room_id: int | None = Field(default=None, gt=0)
+    bot_mode: str | None = Field(default=None, description="private | public")
+    cookie: str | None = Field(default=None, description="切换 private 模式时的 Cookie")
+
+
+class AccountCredentialsRequest(BaseModel):
+    """重置账户登录凭据请求。"""
+
+    username: str = Field(default="", max_length=64, description="新用户名(留空保持不变)")
+    password: str = Field(default="", min_length=4, max_length=64, description="新密码(至少 4 位)")
+
+
+class RenewRequest(BaseModel):
+    """续期请求:days 与 expires_at 二选一。"""
+
+    days: int | None = Field(default=None, gt=0)
+    expires_at: str | None = Field(default=None, description="直接设置到期时间")
+
+
+class RedeemRequest(BaseModel):
+    """兑换授权码请求。"""
+
+    code: str = Field(..., min_length=1)
+
+
+class AccountSummary(BaseModel):
+    """账户摘要(面板列表用)。"""
+
+    id: int
+    name: str
+    username: str = ""
+    room_id: int | None = None
+    bot_mode: str = "private"
+    expires_at: str | None = None
+    expired: bool = False
+    days_left: int | None = None
+    paused_reason: str | None = None
+    resume_error: str | None = None
+    bot_enabled: bool = False
+    bot_available: bool = False
+    bot_name: str = ""
+    bot_public: bool = False
+    room_connected: bool = False
+    room_enabled: bool = False
+    room_name: str = ""
+    plugin_count: int = 0
+    enabled_plugin_count: int = 0
+    timer_message_count: int = 0
+
+
+class PanelOverview(BaseModel):
+    """面板总览。"""
+
+    accounts: list[AccountSummary] = []
+    total: int = 0
+    expired_count: int = 0
+    running_count: int = 0
+    public_bot_configured: bool = False
+    library_plugin_count: int = 0
+    license_unused: int = 0
+
+
+class PublicBotResponse(BaseModel):
+    """公共 Bot 信息(面板级可见,账户上下文不可见)。"""
+
+    configured: bool
+    cookie_length: int = 0
+    permissions: list[str] = []
+    updated_at: float = 0.0
+    name: str = ""
+    user_id: int = 0
+    introduction: str = ""
+    icon_url: str = ""
+    available: bool = False
+
+
+class PublicBotVerifyResponse(BaseModel):
+    """公共 Cookie 验证结果。"""
+
+    valid: bool
+    name: str = ""
+    message: str = ""
+
+
+class PublicBotSetRequest(BaseModel):
+    """设置公共 Bot 请求。"""
+
+    cookie: str = Field(..., min_length=1)
+    permissions: list[str] = Field(default=["SEND_LIVESTREAM_MESSAGE"])
+
+
+class LicenseInfo(BaseModel):
+    """授权码信息。"""
+
+    code: str
+    days: int
+    batch: str = ""
+    note: str = ""
+    generated_at: str = ""
+    used_at: str | None = None
+    used_by_account_id: int | None = None
+
+
+class LicenseGenerateRequest(BaseModel):
+    """生成授权码请求。"""
+
+    count: int = Field(default=1, ge=1, le=100)
+    days: int = Field(..., gt=0)
+    note: str = ""

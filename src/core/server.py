@@ -42,10 +42,29 @@ class MissevanServer(ServerInterface):
     Bot、插件、直播间默认均为**禁用**状态，需显式启用。
     """
 
-    def __init__(self, config: ServerConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: ServerConfig | None = None,
+        *,
+        data_dir: str | None = None,
+        state_file: str | None = None,
+        plugin_library_dir: str = "plugins",
+        timer_interval_persist: str = "config",
+        plugin_ui_prefix=None,
+    ) -> None:
         self._config = config or ServerConfig.load()
-        self._data_dir: str = self._config.get_str("server.data_dir", "data")
-        self._state_file: str = self._config.get_str("server.state_file", "server_state.json")
+        # 多账户模式:每个账户一个独立实例,data_dir 指向 data/accounts/{id}
+        self._data_dir: str = data_dir or self._config.get_str("server.data_dir", "data")
+        self._state_file: str = state_file or self._config.get_str("server.state_file", "server_state.json")
+        # 共享插件库目录(面板级 plugins/),各账户实例只从中读取与启用
+        self._plugin_library_dir: str = plugin_library_dir
+        # timer_interval 持久化位置: "config"(旧行为,写 config.yml) | "state"(per-account state 文件)
+        self._timer_interval_persist: str = timer_interval_persist
+        # 插件 UI 路由前缀(多账户模式按账户隔离,见 plugin_manager.ui_route_prefix)
+        self._plugin_ui_prefix = plugin_ui_prefix
+        # 账户上下文(由 AccountManager 附加)
+        self.account_id: int | None = None
+        self.account_record = None
 
         self._bot: MissevanBot = MissevanBot(
             "",
@@ -69,8 +88,12 @@ class MissevanServer(ServerInterface):
         """注入 FastAPI app 引用——必须在 :meth:`start` 前调用。"""
         self._app = app
 
-    async def start(self) -> None:
-        """启动服务器——从磁盘加载持久化数据。"""
+    async def start(self, *, auto_resume: bool = True) -> None:
+        """启动服务器——从磁盘加载持久化数据。
+
+        :param auto_resume: 为 False 时恢复状态但**不**自动启用 Bot、连接直播间、
+            恢复插件（供已过期账户冷启动,由续期流程显式恢复）
+        """
         _log.info("服务器启动中 ...")
         self._ensure_data_dir()
 
@@ -83,6 +106,15 @@ class MissevanServer(ServerInterface):
             # 恢复定时消息（Bot 恢复完成后）
             self._bot.restore_timer_state(state.get("timer_messages") or {})
 
+        # 定时消息间隔（per-account 持久化优先,回退 config）
+        try:
+            self._bot.timer_interval = float(
+                state.get("timer_interval")
+                or self._config.get_float("bot.timer_interval", 60.0)
+            )
+        except (TypeError, ValueError):
+            pass
+
         # 恢复 Livestream
         for live_id in state.get("livestreams", []):
             await self._restore_livestream(live_id)
@@ -94,20 +126,27 @@ class MissevanServer(ServerInterface):
             if live.enabled and lid not in self._enabled_livestreams:
                 _log.info("自动纳入已启用直播间: live_id={}", lid)
                 self._enabled_livestreams.add(lid)
-        # 自动连接（使用 enable_livestream 确保完整流程）
-        for lid in list(self._enabled_livestreams):
-            if lid in self._livestreams:
-                try:
-                    await self.enable_livestream(lid)
-                    _log.info("已自动连接直播间: live_id={}", lid)
-                except Exception as e:
-                    _log.warning("自动连接直播间失败 live_id={}: {}", lid, e)
+        if auto_resume:
+            # 自动连接（使用 enable_livestream 确保完整流程）
+            for lid in list(self._enabled_livestreams):
+                if lid in self._livestreams:
+                    try:
+                        await self.enable_livestream(lid)
+                        _log.info("已自动连接直播间: live_id={}", lid)
+                    except Exception as e:
+                        _log.warning("自动连接直播间失败 live_id={}: {}", lid, e)
+        else:
+            # 过期账户冷启动:不连接,实例标记同步为停用
+            _log.info("auto_resume=False,直播间保持断开")
+            for lid, live in self._livestreams.items():
+                live.enabled = False
+            self._enabled_livestreams = set()
 
         # 加载插件（首次加载的插件默认禁用）
         enabled_plugins: list[str] = state.get("enabled_plugins", [])
         command_router = CommandRouter(self._event_bus)
         self._plugin_manager = PluginManager(
-            plugin_dir="plugins",
+            plugin_dir=self._plugin_library_dir,
             event_bus=self._event_bus,
             config_dir=os.path.join(self._data_dir, "config"),
             permission_dir=os.path.join(self._data_dir, "permissions"),
@@ -115,6 +154,7 @@ class MissevanServer(ServerInterface):
             disabled_plugins=[],  # 初始全部禁用，由 enabled_plugins 决定
             command_router=command_router,
             pip_mirror=self._config.get_str("plugin.pip_mirror"),
+            ui_route_prefix=self._plugin_ui_prefix,
         )
         self._plugin_manager.set_server(self)
         await self._plugin_manager.load_all()
@@ -127,6 +167,9 @@ class MissevanServer(ServerInterface):
         # 在 resume_all 之前注入 app 引用，确保 _ensure_plugin_loaded 注册路由时 _app 已可用
         if self._app is not None:
             self._plugin_manager.set_app(self._app)
+        if not auto_resume:
+            # 过期账户冷启动:强制停用 Bot（持久化,避免重启后状态不一致）
+            self._bot.enabled = False
         # Bot 可用且启用时，加载所有标记为启用的插件
         if self._bot_available and self._bot.enabled:
             pm.resume_all()
@@ -220,10 +263,14 @@ class MissevanServer(ServerInterface):
         _log.info("Bot 创建成功: {}", bot)
         return bot
 
-    async def update_cookie(self, new_cookie: str) -> MissevanBot:
-        old_perms = self._bot.permissions
+    async def update_cookie(
+        self, new_cookie: str, permissions: Any = None
+    ) -> MissevanBot:
+        """更新 Bot Cookie(默认保留原权限;切换 Bot 模式时可显式指定权限)。"""
+        if permissions is None:
+            permissions = self._bot.permissions
         _log.info("更新 Bot Cookie ...")
-        return await self.create_bot(new_cookie, permissions=old_perms)
+        return await self.create_bot(new_cookie, permissions=permissions)
 
     # ------------------------------------------------------------------ #
     # 跨 worker 状态同步（Docker 多 worker 兼容）
@@ -721,10 +768,15 @@ class MissevanServer(ServerInterface):
     def set_timer_interval(self, interval: float) -> None:
         """设置定时消息发送间隔（秒），实时生效，不重置位置指针。
 
-        同时立即持久化到 ``config.yml`` 的 ``bot.timer_interval``，
-        防止程序异常关闭丢失；重启后 Bot 创建时自动读回。
+        同时立即持久化（防止程序异常关闭丢失）:
+        - ``timer_interval_persist="config"``(旧行为):写入 ``config.yml``
+        - ``timer_interval_persist="state"``(多账户):写入账户 state 文件
         """
         self._bot.timer_interval = interval
+        if self._timer_interval_persist == "state":
+            self._save_state()
+            _log.info("定时消息间隔已持久化到账户 state: {}s", interval)
+            return
         try:
             self._config.set("bot.timer_interval", interval)
             self._config.save()
@@ -770,6 +822,7 @@ class MissevanServer(ServerInterface):
             if timer_state["global"] or timer_state["rooms"]:
                 state["timer_messages"] = timer_state
         state["livestreams"] = list(self._livestreams.keys())
+        state["timer_interval"] = self._bot.timer_interval
         # 原子写入：先写临时文件再替换，防止写一半崩溃导致文件损坏
         tmp_path = self._state_path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:

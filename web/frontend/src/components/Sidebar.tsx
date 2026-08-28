@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Bot, Radio, Puzzle, Server, Settings,
+  LayoutDashboard, Puzzle, Server, Settings,
   Moon, Sun, Terminal, ChevronLeft, ChevronRight, LogOut,
-  Clock, Download,
+  Download, Radio, Bot, Clock,
 } from 'lucide-react';
 import { t } from '../i18n';
 import { useAuth } from '../hooks/useAuth';
@@ -17,35 +17,53 @@ interface Props {
 }
 
 // 与移动端菜单相同的分组分类
-const navGroups = [
+const adminNavGroups = [
   {
     title: t('sidebar.groupMonitor'),
     items: [
-      { to: '/', icon: LayoutDashboard, label: t('sidebar.dashboard'), end: true },
-      { to: '/logs', icon: Terminal, label: t('sidebar.logs') },
+      { to: '/', icon: LayoutDashboard, label: t('sidebar.accounts'), end: true },
+      { to: '/logs', icon: Terminal, label: t('sidebar.logs') , end: false },
     ],
   },
   {
     title: t('sidebar.groupManage'),
     items: [
-      { to: '/bot', icon: Bot, label: t('sidebar.botManagement') },
-      { to: '/live', icon: Radio, label: t('sidebar.livestream') },
-      { to: '/plugin', icon: Puzzle, label: t('sidebar.pluginCenter') },
-      { to: '/timer', icon: Clock, label: t('sidebar.timer') },
+      { to: '/library', icon: Puzzle, label: t('sidebar.pluginLibrary') , end: false },
     ],
   },
   {
     title: t('sidebar.groupSystem'),
     items: [
-      { to: '/server', icon: Server, label: t('sidebar.server') },
-      { to: '/update', icon: Download, label: t('sidebar.update') },
-      { to: '/settings', icon: Settings, label: t('sidebar.settings') },
+      { to: '/server', icon: Server, label: t('sidebar.server') , end: false },
+      { to: '/update', icon: Download, label: t('sidebar.update') , end: false },
+      { to: '/settings', icon: Settings, label: t('sidebar.settings') , end: false },
+    ],
+  },
+];
+
+// 账户持有者:v1.0.1 风格左侧导航(无面板功能)
+const accountNavGroups = [
+  {
+    title: '监控',
+    items: [
+      { to: '/account/home', icon: LayoutDashboard, label: '概览', end: true },
+    ],
+  },
+  {
+    title: '管理',
+    items: [
+      { to: '/account/live', icon: Radio, label: '直播间' , end: false },
+      { to: '/account/bot', icon: Bot, label: 'Bot' , end: false },
+      { to: '/account/timer', icon: Clock, label: '定时消息' , end: false },
+      { to: '/account/plugins', icon: Puzzle, label: '插件' , end: false },
+      { to: '/account/library', icon: Puzzle, label: '插件库' , end: false },
     ],
   },
 ];
 
 export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Props) {
-  const { logout } = useAuth();
+  const { logout, role } = useAuth();
+  const navGroups = role === 'account' ? accountNavGroups : adminNavGroups;
   const [version, setVersion] = useState('');
 
   // 当前版本号（显示在 Logo 旁）
@@ -75,8 +93,8 @@ export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Pro
       <aside
         className={`fixed top-0 left-0 h-full z-30 flex flex-col
                     bg-white dark:bg-surface-900 border-r border-surface-200 dark:border-surface-700
-                    transition-[width] duration-300 overflow-hidden
-                    ${collapsed ? 'w-16' : 'w-64'}`}
+                    transition-[width] duration-300
+                    ${collapsed ? 'w-16 overflow-visible' : 'w-64 overflow-hidden'}`}
       >
         {/* Logo */}
         <div className="flex items-center h-16 px-4 border-b border-surface-200 dark:border-surface-700">
@@ -103,7 +121,7 @@ export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Pro
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 py-4 px-2 space-y-4 overflow-y-auto">
+        <nav className={`flex-1 py-4 px-2 space-y-4 ${collapsed ? 'overflow-visible' : 'overflow-y-auto'}`}>
           {navGroups.map((group) => (
             <div key={group.title}>
               {!collapsed && (
@@ -128,7 +146,17 @@ export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Pro
                   >
                     <item.icon className="w-5 h-5 shrink-0" />
                     {!collapsed && <span className="truncate">{item.label}</span>}
-                    {collapsed && <HoverTip text={item.label} />}
+                    {collapsed && (
+                      <span
+                        role="tooltip"
+                        className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 z-50
+                                   whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
+                                   bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
+                                   opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+                      >
+                        {item.label}
+                      </span>
+                    )}
                   </NavLink>
                 ))}
               </div>
@@ -155,7 +183,17 @@ export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Pro
           >
             {dark ? <Sun className="w-5 h-5 shrink-0" /> : <Moon className="w-5 h-5 shrink-0" />}
             {!collapsed && <span className="whitespace-nowrap">{dark ? t('sidebar.lightMode') : t('sidebar.darkMode')}</span>}
-            {collapsed && <HoverTip text={dark ? t('sidebar.lightMode') : t('sidebar.darkMode')} />}
+            {collapsed && (
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 z-50
+                           whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
+                           bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
+                           opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+              >
+                {dark ? t('sidebar.lightMode') : t('sidebar.darkMode')}
+              </span>
+            )}
           </button>
 
           <button

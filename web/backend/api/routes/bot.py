@@ -1,4 +1,10 @@
-"""Bot 管理 API 路由。"""
+"""Bot 管理 API 路由(账户级)。
+
+挂载于 ``/api/accounts/{account_id}/bot``。
+
+- private 模式:账户私有 Cookie,可查看/更新
+- public 模式:使用面板公共 Cookie,账户内不可查看/修改 Cookie
+"""
 
 from __future__ import annotations
 
@@ -13,7 +19,7 @@ from core.exceptions import (
     CoreApiException,
 )
 from interfaces.bot import BotPermission
-from api.deps import get_server
+from api.deps import require_account, require_active_account
 from api.schemas import (
     BotCreateRequest,
     BotInfoResponse,
@@ -64,14 +70,31 @@ def _has_permission(bot, perm: BotPermission) -> bool:
         return False
 
 
+def _is_public(s: MissevanServer) -> bool:
+    return bool(getattr(s.account_record, "bot_mode", "private") == "public")
+
+
+def _reject_public_cookie_op() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail="该账户使用面板公共 Cookie,不可在账户内查看/修改",
+    )
+
+
 # ================================================================== #
 # 路由
 # ================================================================== #
 
 
 @router.post("/create", response_model=BotInfoResponse)
-async def create_bot(req: BotCreateRequest, s: MissevanServer = Depends(get_server)):
-    """创建或更新 Bot——传入 Cookie 和权限列表。"""
+async def create_bot(
+    account_id: int,
+    req: BotCreateRequest,
+    s: MissevanServer = Depends(require_active_account),
+):
+    """创建或更新 Bot——传入 Cookie 和权限列表(private 模式)。"""
+    if _is_public(s):
+        raise _reject_public_cookie_op()
     try:
         perms = _parse_permissions(req.permissions)
         bot = await s.create_bot(req.cookie, permissions=perms)
@@ -82,15 +105,43 @@ async def create_bot(req: BotCreateRequest, s: MissevanServer = Depends(get_serv
         raise HTTPException(status_code=502, detail=f"API 错误: {e}")
 
 
+@router.post("/mode", response_model=BotInfoResponse)
+async def bot_set_mode(
+    account_id: int, body: dict, s: MissevanServer = Depends(require_active_account)
+):
+    """切换 Bot 模式:public(面板公共 Cookie)/ private(自定义 Cookie)。
+
+    - public:权限强制为仅发送直播间消息
+    - private:可传 ``permissions`` 名称列表做完整权限设置
+    """
+    mode = str(body.get("mode", "")).strip()
+    cookie = str(body.get("cookie", "")).strip()
+    if mode not in ("public", "private"):
+        raise HTTPException(status_code=400, detail="mode 必须为 public 或 private")
+    from api.deps import get_account_manager
+    permissions = _parse_permissions(body.get("permissions", []))
+    try:
+        await get_account_manager().switch_bot_mode(
+            account_id, mode, cookie, permissions=permissions
+        )
+    except CoreCookieException as e:
+        raise HTTPException(status_code=400, detail=f"Cookie 无效: {e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _bot_to_response(s)
+
+
 @router.get("/info", response_model=BotInfoResponse)
-async def bot_info(s: MissevanServer = Depends(get_server)):
+async def bot_info(account_id: int, s: MissevanServer = Depends(require_account)):
     """获取当前 Bot 信息。"""
     await s._ensure_bot_restored()
     return _bot_to_response(s)
 
 
 @router.post("/refresh", response_model=StatusResponse)
-async def bot_refresh(s: MissevanServer = Depends(get_server)):
+async def bot_refresh(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
     """刷新 Bot 信息（验证 Cookie）。"""
     await s._ensure_bot_restored()
     try:
@@ -103,8 +154,10 @@ async def bot_refresh(s: MissevanServer = Depends(get_server)):
 
 
 @router.get("/cookie", response_model=BotCookieResponse)
-async def bot_cookie(s: MissevanServer = Depends(get_server)):
-    """获取 Bot Cookie（需要 EXPOSE_COOKIE 权限）。"""
+async def bot_cookie(account_id: int, s: MissevanServer = Depends(require_account)):
+    """获取 Bot Cookie（需要 EXPOSE_COOKIE 权限,仅 private 模式）。"""
+    if _is_public(s):
+        raise _reject_public_cookie_op()
     await s._ensure_bot_restored()
     try:
         cookie = s.bot.get_cookie()
@@ -116,7 +169,7 @@ async def bot_cookie(s: MissevanServer = Depends(get_server)):
 
 
 @router.post("/verify", response_model=StatusResponse)
-async def bot_verify(s: MissevanServer = Depends(get_server)):
+async def bot_verify(account_id: int, s: MissevanServer = Depends(require_account)):
     """验证 Cookie 是否有效。"""
     await s._ensure_bot_restored()
     ok = await s.verify_bot()
@@ -127,7 +180,9 @@ async def bot_verify(s: MissevanServer = Depends(get_server)):
 
 
 @router.post("/enable", response_model=StatusResponse)
-async def bot_enable(s: MissevanServer = Depends(get_server)):
+async def bot_enable(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
     """启用 Bot，恢复所有标记为已启用的插件。"""
     await s._ensure_bot_restored()
     try:
@@ -139,31 +194,31 @@ async def bot_enable(s: MissevanServer = Depends(get_server)):
 
 
 @router.delete("/", response_model=StatusResponse)
-async def bot_delete(s: MissevanServer = Depends(get_server)):
-    """删除 Bot，恢复为无 Bot 状态。"""
+async def bot_delete(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
+    """删除 Bot(private)或仅停用(public,公共 Cookie 由面板管理)。"""
+    if _is_public(s):
+        s.bot.enabled = False
+        s._save_state()
+        s._plugin_manager.suspend_all()
+        return StatusResponse(
+            success=True,
+            message="公共模式 Bot 已停用（公共 Cookie 请在面板设置中管理）",
+        )
     s.bot.enabled = False
     s._bot = MissevanBot("", timer_interval=s._config.get_float("bot.timer_interval", 60.0))
     s._bot_available = False
     s._bot_cookie = ""
     s._bot_permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
     s._save_state()
-    return StatusResponse(success=True, message="Bot 已删除，服务器恢复为无 Bot 状态")
-
-
-@router.put("/timer-interval", response_model=StatusResponse)
-async def bot_timer_interval(body: dict, s: MissevanServer = Depends(get_server)):
-    """动态修改定时消息间隔（秒）。"""
-    interval = body.get("interval", 60)
-    if not isinstance(interval, (int, float)) or interval < 1:
-        raise HTTPException(status_code=400, detail="间隔必须 >= 1 秒")
-    # 复用 set_timer_interval：实时生效 + 通过 ServerConfig.save 原子持久化，
-    # 避免在此直接读改写 config.yml（与其他写入并发时可能互相覆盖）
-    s.set_timer_interval(float(interval))
-    return StatusResponse(success=True, message=f"定时消息间隔已设为 {interval:g} 秒")
+    return StatusResponse(success=True, message="Bot 已删除，账户恢复为无 Bot 状态")
 
 
 @router.post("/disable", response_model=StatusResponse)
-async def bot_disable(s: MissevanServer = Depends(get_server)):
+async def bot_disable(
+    account_id: int, s: MissevanServer = Depends(require_active_account)
+):
     """停用 Bot，暂停所有插件（不修改 enabled 标记和持久化状态）。"""
     s.bot.enabled = False
     s._save_state()

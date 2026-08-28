@@ -20,9 +20,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from core import MissevanServer
+from core.account import AccountManager
 from core.config import ServerConfig
-from api.deps import get_server
+from api.deps import get_account_manager
 from api.schemas import StatusResponse
 
 router = APIRouter()
@@ -575,7 +575,7 @@ async def update_changelog(version: str):
 
 
 @router.post("/settings", response_model=StatusResponse)
-async def update_settings(body: dict, s: MissevanServer = Depends(get_server)):
+async def update_settings(body: dict, manager: AccountManager = Depends(get_account_manager)):
     """保存更新配置（镜像站 / 代理）。"""
     repo = str(body.get("repo", _GITHUB_REPO)).strip() or _GITHUB_REPO
     mirror = str(body.get("mirror", "")).strip()
@@ -585,7 +585,7 @@ async def update_settings(body: dict, s: MissevanServer = Depends(get_server)):
 
 
 @router.post("/apply", response_model=StatusResponse)
-async def update_apply(body: dict, s: MissevanServer = Depends(get_server)):
+async def update_apply(body: dict, manager: AccountManager = Depends(get_account_manager)):
     """执行更新到指定版本。
 
     请求体：``{"version": "1.0.0-beta.4", "asset_name": "mismiss.zip"}``
@@ -681,7 +681,7 @@ async def update_apply(body: dict, s: MissevanServer = Depends(get_server)):
 
 
 @router.post("/rollback", response_model=StatusResponse)
-async def update_rollback(s: MissevanServer = Depends(get_server)):
+async def update_rollback(manager: AccountManager = Depends(get_account_manager)):
     """回滚到上一版本。"""
     if _IS_DOCKER:
         if not _docker_ready():

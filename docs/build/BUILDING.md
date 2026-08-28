@@ -267,6 +267,31 @@ docker compose up -d
 
 资源限制（默认）：App 128 MB ~ 512 MB，Nginx ≤ 64 MB。
 
+### 4.9 多账户模型（v1.1.0+）
+
+自 v1.1.0 起，主面板是 **Server（账户）管理后台**：
+
+```
+面板（单管理员登录，auth.json 保留）
+├── 账户 A ── 1 个直播间 + 1 个 Bot（私有 cookie 或面板公共 cookie）
+├── 账户 B ── 1 个直播间 + 1 个 Bot（公共 cookie，账户内不可见）
+└── ...
+```
+
+- **数据目录**：`data/panel.json`（账户记录/公共 cookie/授权码）+
+  `data/accounts/{id}/server_state.json`（运行时）+
+  `data/accounts/{id}/{config,permissions,plugins}/`（插件按账户隔离）
+- **插件库**：`plugins/` 目录面板级统一管理，各账户按需启用；
+  同名插件多账户启用互不冲突（每账户独立实例/事件总线/命令路由）
+- **升级迁移**：旧单服务器数据自动备份到
+  `data/backup/pre-multiaccount-<时间戳>/`（全新开始，auth.json 保留）
+- **公共 Bot**：面板「设置」配置公共 Cookie，一键下发到全部公共账户；
+  多账户并发共享同一 cookie（独立会话，注意平台限流）
+- **订阅/授权**：账户到期时间 + 授权码（`MM-XXXX-XXXX-XXXX`）；
+  到期硬停用（停 Bot/断房间/暂停插件，写操作 403），续期自动恢复，60s 调度器兜底
+- **必须单 worker**（`MISMISS_WORKERS=1`）：连接/定时器/插件实例为单实例资源
+- 数据目录可用环境变量 `MISMISS_DATA_DIR` 覆盖（数据卷分离）
+
 ---
 
 ## 五、Linux 原生部署（systemd + venv）
