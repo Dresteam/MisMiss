@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mismiss"
-version = "1.0.1"
+version = "1.2.0"
 description = "MIST 标准实现 · 猫耳FM 直播场控机器人框架"
 readme = "README.md"
 license = {text = "AGPL-3.0"}
