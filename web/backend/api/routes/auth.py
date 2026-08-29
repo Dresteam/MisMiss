@@ -98,6 +98,23 @@ def _clear_all_tokens() -> None:
         pass
 
 
+def _clear_account_tokens(account_id: int) -> None:
+    """清除指定账户的全部登录 token(账户自助改密后强制重新登录)。"""
+    try:
+        for f in TOKEN_DIR.iterdir():
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if data.get("account_id") == account_id:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except FileNotFoundError:
+        pass
+
+
 def _load_auth() -> dict:
     """Load auth data, create or repair default if missing/corrupted."""
     default = {"username": "MisMiss", "password": _hash("MisMiss"), "first_login": True}

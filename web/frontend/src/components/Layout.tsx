@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { ToastContainer } from './Toast';
-import { Menu, X, Moon, Sun, LogOut, LayoutDashboard, Puzzle, Server, Settings, Terminal, Download, Radio, Bot, Clock } from 'lucide-react';
+import { Menu, X, Moon, Sun, LogOut, LayoutDashboard, Puzzle, Server, Settings, Terminal, Download, Radio, Bot, Clock, KeyRound } from 'lucide-react';
 import type { Toast as ToastType } from '../hooks/useToast';
 import { useAuth } from '../hooks/useAuth';
 
@@ -54,6 +54,12 @@ const accountMobileGroups = [
       { to: '/account/timer', icon: Clock, label: '定时消息' , end: false },
       { to: '/account/plugins', icon: Puzzle, label: '插件' , end: false },
       { to: '/account/library', icon: Puzzle, label: '插件库' , end: false },
+    ],
+  },
+  {
+    title: '系统',
+    items: [
+      { to: '/account/password', icon: KeyRound, label: '修改密码' , end: false },
     ],
   },
 ];

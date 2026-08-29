@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Puzzle, Server, Settings,
   Moon, Sun, Terminal, ChevronLeft, ChevronRight, LogOut,
-  Download, Radio, Bot, Clock,
+  Download, Radio, Bot, Clock, KeyRound,
 } from 'lucide-react';
 import { t } from '../i18n';
 import { useAuth } from '../hooks/useAuth';
@@ -57,6 +57,12 @@ const accountNavGroups = [
       { to: '/account/timer', icon: Clock, label: '定时消息' , end: false },
       { to: '/account/plugins', icon: Puzzle, label: '插件' , end: false },
       { to: '/account/library', icon: Puzzle, label: '插件库' , end: false },
+    ],
+  },
+  {
+    title: '系统',
+    items: [
+      { to: '/account/password', icon: KeyRound, label: '修改密码' , end: false },
     ],
   },
 ];

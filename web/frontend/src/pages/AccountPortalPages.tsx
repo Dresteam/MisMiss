@@ -4,22 +4,20 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
 } from 'recharts';
-import { Bot as BotIcon, Radio, Puzzle, Clock, Loader2, KeyRound, RefreshCw, Plus } from 'lucide-react';
+import { Bot as BotIcon, Radio, Puzzle, Clock, Loader2, KeyRound } from 'lucide-react';
 import {
   fetchAccountSummary, enableAccountBot, disableAccountBot, redeemAccountCode,
-  fetchAccountLibrary, installAccountPlugin,
+  changeAccountPassword,
 } from '../api/client';
-import type { AccountSummary, LibraryPlugin } from '../api/types';
+import type { AccountSummary } from '../api/types';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
-import { MarqueeText } from '../components/MarqueeText';
 import { RenewDialog } from '../components/AccountDialogs';
-import { PluginDrawer } from '../components/PluginDrawer';
 import { useAuth } from '../hooks/useAuth';
 import { showToast } from '../hooks/useToast';
 import {
-  OverviewTab, LiveTab, BotTab, TimerTab, PluginsTab,
+  OverviewTab, LiveTab, BotTab, TimerTab, PluginsTab, LibraryTab,
 } from './AccountDetailPage';
 
 // ================================================================== //
@@ -252,136 +250,11 @@ function PageShell({ title, children }: { title: string; children: React.ReactNo
 }
 
 export function AccountLibraryPage() {
-  const auth = useAuth();
   const { acc } = useAccountSummary();
-  const [library, setLibrary] = useState<LibraryPlugin[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState('');
-  const [detailTarget, setDetailTarget] = useState<{ name: string; tab?: string } | null>(null);
-
-  const load = useCallback(async () => {
-    if (!auth.accountId) return;
-    try {
-      setLibrary(await fetchAccountLibrary(auth.accountId));
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, [auth.accountId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (loading) {
+  if (!acc) {
     return <div className="flex justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-primary-500" /></div>;
   }
-
-  return (
-    <div className="space-y-6 animate-fade-in max-w-5xl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">插件库</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            安装 = 拷贝源码副本到本账户独立运行 · {library.length} 个插件
-          </p>
-        </div>
-        <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />}
-          onClick={() => { setLoading(true); load(); }}>
-          刷新
-        </Button>
-      </div>
-
-      {library.length === 0 ? (
-        <div className="card"><div className="card-body text-center py-12 text-gray-400">插件库为空</div></div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {library.map((p) => (
-            <div key={p.name}
-              className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
-              {/* 卡片主体(v1.0.1 样式) */}
-              <div className="p-5 flex-1">
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">
-                      <MarqueeText text={p.display_name || p.name} />
-                    </h3>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs font-mono text-gray-400 dark:text-gray-500">v{p.version}</span>
-                      <span className="text-gray-300 dark:text-gray-600">·</span>
-                      <span className="text-xs text-gray-400 dark:text-gray-500">{p.author}</span>
-                    </div>
-                  </div>
-                  <span className={
-                    'inline-flex items-center gap-1.5 rounded-full font-medium text-[10px] px-1.5 py-0 ' +
-                    (p.installed
-                      ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
-                      : 'bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-400')
-                  }>
-                    <span className={`inline-block rounded-full w-1.5 h-1.5 ${p.installed ? 'bg-emerald-500' : 'bg-surface-400'}`} />
-                    {p.installed ? '已安装' : '未安装'}
-                  </span>
-                </div>
-                <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-1">
-                  {p.short_desc || p.desc || '无描述'}
-                </p>
-                <p className="text-[11px] font-mono text-gray-400 dark:text-gray-500 truncate">
-                  {p.plugin_id}
-                </p>
-              </div>
-              {/* 底部操作区 */}
-              <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-xl">
-                <Button size="sm" variant="ghost"
-                  onClick={() => setDetailTarget({ name: p.name, tab: 'readme' })}>
-                  详情
-                </Button>
-                {!p.installed ? (
-                  <Button size="sm" variant="success" icon={<Plus className="w-4 h-4" />}
-                    loading={processing === p.name} disabled={processing === p.name}
-                    onClick={async () => {
-                      if (!auth.accountId) return;
-                      setProcessing(p.name);
-                      try {
-                        await installAccountPlugin(auth.accountId, p.name);
-                        showToast('success', `已安装 ${p.display_name || p.name}(默认停用)`);
-                        load();
-                      } catch (e: any) {
-                        showToast('error', '安装失败', e.message);
-                      } finally { setProcessing(''); }
-                    }}>
-                    安装
-                  </Button>
-                ) : (
-                  <span className="text-xs text-gray-400">已安装 —— 请在「插件」页面启用与配置</span>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 插件详情抽屉(库模式:文档/更新日志/使用账户) */}
-      {detailTarget && (() => {
-        const meta = library.find((p) => p.name === detailTarget.name);
-        return (
-          <PluginDrawer
-            pluginName={detailTarget.name}
-            open
-            onClose={() => setDetailTarget(null)}
-            onUpdate={load}
-            initialTab={detailTarget.tab}
-            showAccountsTab={false}
-            accounts={acc ? [{ id: acc.id, name: acc.name }] : []}
-            usedByAccounts={meta?.used_by_accounts ?? []}
-            libraryMeta={meta ? {
-              name: meta.name,
-              display_name: meta.display_name,
-              plugin_id: meta.plugin_id,
-              version: meta.version,
-              has_readme: meta.has_readme,
-              has_changelog: meta.has_changelog,
-            } : undefined}
-          />
-        );
-      })()}
-    </div>
-  );
+  return <LibraryTab acc={acc} />;
 }
 
 export function AccountLivePage() {
@@ -414,4 +287,64 @@ export function AccountPluginsPage() {
     return <div className="flex justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-primary-500" /></div>;
   }
   return <PageShell title="插件"><PluginsTab acc={acc} /></PageShell>;
+}
+
+export function AccountPasswordPage() {
+  const auth = useAuth();
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    if (!auth.accountId) return;
+    if (!current) { setError('请输入原密码'); return; }
+    if (next.length < 4) { setError('新密码至少 4 位'); return; }
+    if (next !== confirm) { setError('两次输入的新密码不一致'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await changeAccountPassword(auth.accountId, current, next, confirm);
+      showToast('success', '密码已修改,请重新登录', '');
+      // 稍候再登出,让成功提示可见(服务端 token 已立即失效)
+      setTimeout(() => auth.logout(), 1200);
+    } catch (e: any) {
+      setError(e.message || '修改失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <PageShell title="修改密码">
+      <div className="card max-w-md">
+        <div className="card-body space-y-4">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            修改后需使用新密码重新登录
+          </p>
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">原密码</label>
+            <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+              className="input w-full" placeholder="当前使用的密码" autoFocus />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">新密码</label>
+            <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+              className="input w-full" placeholder="至少 4 位" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">确认新密码</label>
+            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              className="input w-full" placeholder="再次输入新密码"
+              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} />
+          </div>
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+          <Button className="w-full" onClick={submit} loading={busy}>
+            修改密码
+          </Button>
+        </div>
+      </div>
+    </PageShell>
+  );
 }

@@ -17,9 +17,11 @@ import {
   disableAccountPlugin, reloadAccountPlugin, renewAccount, redeemAccount,
   fetchAccountPluginReadme, fetchAccountPluginConfig, updateAccountPluginConfig,
   getAccountBotCookie, uninstallAccountPluginFromAccount, fetchAccountLibrary,
+  installAccountPlugin,
 } from '../api/client';
 import type {
-  AccountSummary, BotInfo, LivestreamInfo, PluginSummary, TimerData, TimerMessageItem,
+  AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
+  TimerData, TimerMessageItem,
 } from '../api/types';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
@@ -823,7 +825,12 @@ const PLUGIN_FILTERS = [
 ] as const;
 type PluginFilter = (typeof PLUGIN_FILTERS)[number]['id'];
 
-export function PluginsTab({ acc, pluginPageBase }: { acc: AccountSummary; pluginPageBase?: string }) {
+export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
+  acc: AccountSummary;
+  pluginPageBase?: string;
+  /** 提供时(管理端 Tab 模式)按钮切换回调;未提供时(账户门户)链接到 /account/library */
+  onOpenLibrary?: () => void;
+}) {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [libraryVersions, setLibraryVersions] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<PluginFilter>('all');
@@ -892,16 +899,21 @@ export function PluginsTab({ acc, pluginPageBase }: { acc: AccountSummary; plugi
   return (
     <div className="space-y-4">
       {/* 头部 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-bold text-gray-900 dark:text-white">已安装插件</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {plugins.length} 个插件 · {enabledCount} 个已启用
           </p>
         </div>
-        <Link to="/account/library">
-          <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />}>插件库</Button>
-        </Link>
+        {onOpenLibrary ? (
+          <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />} className="shrink-0"
+            onClick={onOpenLibrary}>插件库</Button>
+        ) : (
+          <Link to="/account/library" className="shrink-0">
+            <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />}>插件库</Button>
+          </Link>
+        )}
       </div>
 
       {/* 筛选 */}
@@ -1106,10 +1118,147 @@ function BookOpenIcon() {
 }
 
 // ================================================================== //
+// 插件库 Tab(账户可安装的库插件列表 + 安装)
+// 账户持有者门户与管理端账户详情共用。
+// ================================================================== //
+
+export function LibraryTab({ acc }: { acc: AccountSummary }) {
+  const [library, setLibrary] = useState<LibraryPlugin[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState('');
+  const [detailTarget, setDetailTarget] = useState<{ name: string; tab?: string } | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setLibrary(await fetchAccountLibrary(acc.id));
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [acc.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) {
+    return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-primary-500" /></div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 头部 */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">插件库</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            安装 = 拷贝源码副本到本账户独立运行 · {library.length} 个插件
+          </p>
+        </div>
+        <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />} className="shrink-0"
+          onClick={() => { setLoading(true); load(); }}>
+          刷新
+        </Button>
+      </div>
+
+      {library.length === 0 ? (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+          <div className="p-10 text-center text-gray-400 text-sm">插件库为空</div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {library.map((p) => (
+            <div key={p.name}
+              className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
+              {/* 卡片主体(v1.0.1 样式) */}
+              <div className="p-5 flex-1">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">
+                      <MarqueeText text={p.display_name || p.name} />
+                    </h3>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-xs font-mono text-gray-400 dark:text-gray-500">v{p.version}</span>
+                      <span className="text-gray-300 dark:text-gray-600">·</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">{p.author}</span>
+                    </div>
+                  </div>
+                  <span className={
+                    'inline-flex items-center gap-1.5 rounded-full font-medium text-[10px] px-1.5 py-0 ' +
+                    (p.installed
+                      ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-400')
+                  }>
+                    <span className={`inline-block rounded-full w-1.5 h-1.5 ${p.installed ? 'bg-emerald-500' : 'bg-surface-400'}`} />
+                    {p.installed ? '已安装' : '未安装'}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-1">
+                  {p.short_desc || p.desc || '无描述'}
+                </p>
+                <p className="text-[11px] font-mono text-gray-400 dark:text-gray-500 truncate">
+                  {p.plugin_id}
+                </p>
+              </div>
+              {/* 底部操作区 */}
+              <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-xl">
+                <Button size="sm" variant="ghost"
+                  onClick={() => setDetailTarget({ name: p.name, tab: 'readme' })}>
+                  详情
+                </Button>
+                {!p.installed ? (
+                  <Button size="sm" variant="success" icon={<Plus className="w-4 h-4" />}
+                    loading={processing === p.name} disabled={processing === p.name}
+                    onClick={async () => {
+                      setProcessing(p.name);
+                      try {
+                        await installAccountPlugin(acc.id, p.name);
+                        showToast('success', `已安装 ${p.display_name || p.name}(默认停用)`, '');
+                        load();
+                      } catch (e: any) {
+                        showToast('error', '安装失败', e.message);
+                      } finally { setProcessing(''); }
+                    }}>
+                    安装
+                  </Button>
+                ) : (
+                  <span className="text-xs text-gray-400">已安装 —— 请在「插件」页面启用与配置</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 插件详情抽屉(库模式:文档/更新日志/使用账户) */}
+      {detailTarget && (() => {
+        const meta = library.find((p) => p.name === detailTarget.name);
+        return (
+          <PluginDrawer
+            pluginName={detailTarget.name}
+            open
+            onClose={() => setDetailTarget(null)}
+            onUpdate={load}
+            initialTab={detailTarget.tab}
+            showAccountsTab={false}
+            accounts={[{ id: acc.id, name: acc.name }]}
+            usedByAccounts={meta?.used_by_accounts ?? []}
+            libraryMeta={meta ? {
+              name: meta.name,
+              display_name: meta.display_name,
+              plugin_id: meta.plugin_id,
+              version: meta.version,
+              has_readme: meta.has_readme,
+              has_changelog: meta.has_changelog,
+            } : undefined}
+          />
+        );
+      })()}
+    </div>
+  );
+}
+
+// ================================================================== //
 // 页面主体
 // ================================================================== //
 
-type TabKey = 'overview' | 'live' | 'bot' | 'timer' | 'plugins';
+type TabKey = 'overview' | 'live' | 'bot' | 'timer' | 'plugins' | 'library';
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'overview', label: '概览', icon: <BotIcon className="w-4 h-4" /> },
@@ -1117,6 +1266,7 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'bot', label: 'Bot', icon: <BotIcon className="w-4 h-4" /> },
   { key: 'timer', label: '定时消息', icon: <Clock className="w-4 h-4" /> },
   { key: 'plugins', label: '插件', icon: <Puzzle className="w-4 h-4" /> },
+  { key: 'library', label: '插件库', icon: <Puzzle className="w-4 h-4" /> },
 ];
 
 export function AccountDetailPage() {
@@ -1227,7 +1377,8 @@ export function AccountDetailPage() {
       {tab === 'live' && <LiveTab acc={acc} />}
       {tab === 'bot' && <BotTab acc={acc} onAccountChanged={load} />}
       {tab === 'timer' && <TimerTab acc={acc} />}
-      {tab === 'plugins' && <PluginsTab acc={acc} pluginPageBase={`/account/${acc.id}/plugin`} />}
+      {tab === 'plugins' && <PluginsTab acc={acc} pluginPageBase={`/account/${acc.id}/plugin`} onOpenLibrary={() => setTab('library')} />}
+      {tab === 'library' && <LibraryTab acc={acc} />}
 
       <RenewDialog
         open={renewOpen}

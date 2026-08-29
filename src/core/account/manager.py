@@ -351,6 +351,27 @@ class AccountManager:
         _log.info("账户 {} 登录凭据已重置 (username={})", rec.id, rec.username)
         return rec
 
+    def change_account_password(
+        self, account_id: int, current_password: str, new_password: str
+    ) -> AccountRecord:
+        """账户自助修改密码(需验证原密码)。
+
+        :param current_password: 原密码,错误时抛 ValueError("原密码错误")
+        :param new_password: 新密码(至少 4 位)
+        :raises ValueError: 原密码错误 / 新密码不足 4 位
+        """
+        rec = self.get_record(account_id)
+        if self._hash_password(current_password or "") != rec.password_hash:
+            raise ValueError("原密码错误")
+        pwd = (new_password or "").strip()
+        if len(pwd) < 4:
+            raise ValueError("新密码至少 4 位")
+        rec.password_hash = self._hash_password(pwd)
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        _log.info("账户 {} 已自助修改登录密码", rec.id)
+        return rec
+
     def get_record(self, account_id: int) -> AccountRecord:
         rec = self._records.get(int(account_id))
         if rec is None:
@@ -920,6 +941,12 @@ class AccountManager:
             raise ValueError(f"插件 '{plugin_name}' 已安装到该账户")
         shutil.copytree(src, dest)
         await server.refresh_plugins()
+        # 安装后立即注册 UI 路由:新插件处于禁用状态只有元数据,
+        # 需补创建轻量实例以注册路由,否则插件主页 404(须等到启用或重启)
+        pm = server._plugin_manager
+        meta = pm.get_plugin(plugin_name)
+        if meta is not None:
+            pm._ensure_plugin_loaded(meta)
         _log.info("账户 {} 已安装插件 {}", account_id, plugin_name)
 
     async def uninstall_plugin_from_account(

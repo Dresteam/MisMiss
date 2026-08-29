@@ -76,7 +76,7 @@ class Live(LiveWebSocket):
             "room:close": self._handle_room_close,
             "room:statistics": self._handle_statistics,
             "message:new": self._handle_message,
-            "message:cross_new": self._handle_message,
+            # "message:cross_new": self._handle_message,
             "member:join_queue": self._handle_join_queue,
             "member:followed": self._handle_follow,
             "gift:send": self._handle_gift,

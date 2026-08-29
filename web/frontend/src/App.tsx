@@ -5,7 +5,7 @@ import { AccountsPage } from './pages/AccountsPage';
 import { AccountDetailPage } from './pages/AccountDetailPage';
 import {
   AccountOverviewPage, AccountLivePage, AccountBotPage, AccountTimerPage, AccountPluginsPage,
-  AccountLibraryPage,
+  AccountLibraryPage, AccountPasswordPage,
 } from './pages/AccountPortalPages';
 import { PluginLibraryPage } from './pages/PluginLibraryPage';
 import { ServerPage } from './pages/ServerPage';
@@ -56,6 +56,7 @@ function AccountPortalApp({
           <Route path="account/timer" element={<AccountTimerPage />} />
           <Route path="account/plugins" element={<AccountPluginsPage />} />
           <Route path="account/library" element={<AccountLibraryPage />} />
+          <Route path="account/password" element={<AccountPasswordPage />} />
           <Route path="account/plugin/:name/page" element={<PluginPageView />} />
           <Route path="*" element={<Navigate to="/account/home" replace />} />
         </Route>
@@ -167,6 +168,7 @@ function App() {
             <Route path="account/timer" element={auth.role === 'account' ? <AccountTimerPage /> : <Navigate to="/" replace />} />
             <Route path="account/plugins" element={auth.role === 'account' ? <AccountPluginsPage /> : <Navigate to="/" replace />} />
             <Route path="account/library" element={auth.role === 'account' ? <AccountLibraryPage /> : <Navigate to="/" replace />} />
+            <Route path="account/password" element={auth.role === 'account' ? <AccountPasswordPage /> : <Navigate to="/" replace />} />
             <Route path="account/plugin/:name/page" element={auth.role === 'account' ? <PluginPageView /> : <Navigate to="/" replace />} />
             <Route path="account/:id" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <AccountDetailPage />} />
             <Route path="account/:id/plugin/:name/page" element={<PluginPageView />} />
