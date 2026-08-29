@@ -7,7 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from core import MissevanServer
 from core.exceptions import CoreAccountNotFoundException, CoreLicenseException
 from api.deps import get_account_manager, require_account
-from api.schemas import AccountSummary, RedeemRequest, StatusResponse
+from api.routes.auth import _clear_account_tokens
+from api.schemas import (
+    AccountPasswordChangeRequest,
+    AccountSummary,
+    RedeemRequest,
+    StatusResponse,
+)
 
 router = APIRouter()
 
@@ -32,3 +38,28 @@ async def account_redeem(
     except CoreLicenseException as e:
         raise HTTPException(status_code=400, detail=str(e))
     return AccountSummary(**manager._account_snapshot(rec))
+
+
+@router.post("/change-password", response_model=StatusResponse)
+async def account_change_password(
+    account_id: int,
+    req: AccountPasswordChangeRequest,
+    s: MissevanServer = Depends(require_account),
+):
+    """账户自助修改密码(需原密码,新密码与确认密码一致)。
+
+    修改成功后清除该账户的全部登录 token,强制重新登录。
+    """
+    manager = get_account_manager()
+    rec = manager.get_record(account_id)
+    if manager.authenticate_account(rec.username, req.current_password) is None:
+        raise HTTPException(status_code=403, detail="原密码错误")
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=400, detail="两次输入的新密码不一致")
+    try:
+        manager.change_account_password(account_id, req.current_password, req.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # 清除该账户的全部登录 token,强制重新登录
+    _clear_account_tokens(account_id)
+    return StatusResponse(success=True, message="密码已修改,请重新登录")

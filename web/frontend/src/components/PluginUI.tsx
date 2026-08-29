@@ -1,8 +1,8 @@
 import {useCallback, useEffect, useState} from 'react';
+import {createPortal} from 'react-dom';
 import {ExternalLink, Loader2, RefreshCw, Trash2, X} from 'lucide-react';
 import {Button} from './Button';
 import {ConfirmDialog} from './ConfirmDialog';
-import {HoverTip} from './HoverTip';
 
 // =====================================================================
 // Schema 定义 —— 所有预设类型及其字段
@@ -40,6 +40,8 @@ interface ActionPrompt {
   input_type?: string;
   /** select 的选项 */
   options?: { label: string; value: string }[];
+  /** 多字段弹窗中可选填 */
+  optional?: boolean;
 }
 interface UISchema {
   // ── 通用 ──
@@ -53,6 +55,12 @@ interface UISchema {
     method: string;
     url: string;
     prompt_field?: ActionPrompt;
+    /** 多字段输入弹窗(与 prompt_field 二选一,多字段时优先) */
+    prompt_fields?: ActionPrompt[];
+    /** 仅行内显示(工具栏隐藏),用于依赖行数据的操作 */
+    row_only?: boolean;
+    /** 仅工具栏显示(行内隐藏),用于新增类操作 */
+    toolbar_only?: boolean;
     show_when?: string;
     /** 从行数据构建 body，如 {"status": "{{row.status}}"} */
     body_template?: Record<string, string>;
@@ -183,11 +191,21 @@ interface Props {
 
 export function PluginUI({ schema, pluginName, apiBase }: Props) {
   const base = apiBase ?? '/api/plugin/' + pluginName + '/ui';
+
+  // 多账户模式:schema 内硬编码的 /api/plugin/{name}/ui/... 重写为账户级 apiBase
+  const rewriteUrl = (url: string) => {
+    if (apiBase && url.startsWith('/api/plugin/')) {
+      const suffix = url.split('/ui')[1] ?? '';
+      return apiBase + suffix;
+    }
+    return url;
+  };
   const [data, setData] = useState<any[] | Record<string, any> | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [promptAction, setPromptAction] = useState<NonNullable<UISchema['actions']>[number] | null>(null);
   const [promptValue, setPromptValue] = useState('');
+  const [promptValues, setPromptValues] = useState<Record<string, string>>({});
   const [promptRow, setPromptRow] = useState<any>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [roomId, setRoomId] = useState<number>(0);
@@ -203,6 +221,13 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   const [confirmMsg, setConfirmMsg] = useState('');
   const [confirmDanger, setConfirmDanger] = useState(false);
   const [confirmCallback, setConfirmCallback] = useState<(() => void) | null>(null);
+  // 悬浮提示 —— portal 渲染到 body(fixed 定位),规避滚动容器 overflow 裁剪与行间层叠遮挡
+  const [tip, setTip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const showTip = (e: React.MouseEvent, text: string) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setTip({ x: r.left + r.width / 2, y: r.top, text });
+  };
+  const hideTip = () => setTip(null);
 
   // ────────────────────────────────────────────────────────────────
   // 数据加载
@@ -213,19 +238,15 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
     setLoading(true);
     try {
       const token = localStorage.getItem('auth_token');
-      let url = schema.api;
-      // 多账户模式:schema 内硬编码的 /api/plugin/{name}/ui/... 重写为 apiBase
-      if (apiBase && url.startsWith('/api/plugin/')) {
-        const suffix = url.split('/ui')[1] ?? '';
-        url = apiBase + suffix;
-      }
+      let url = rewriteUrl(schema.api);
       if (schema.type === 'playlist' && roomId) url += '?room_id=' + roomId;
       const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
       const result = await res.json();
       setData(result);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [schema.api, schema.type, roomId]);
+    /* eslint-disable-next-line */
+  }, [schema.api, schema.type, roomId, apiBase]);
 
   const loadRooms = useCallback(async () => {
     try {
@@ -245,6 +266,13 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
     load();
     /* eslint-disable-next-line */
   }, []);
+  // 悬浮提示可见期间,任何滚动立即隐藏(避免 fixed 提示停留在旧坐标)
+  useEffect(() => {
+    if (!tip) return;
+    const onScroll = () => setTip(null);
+    window.addEventListener('scroll', onScroll, true);
+    return () => window.removeEventListener('scroll', onScroll, true);
+  }, [tip]);
   useEffect(() => { if (schema.type === 'playlist' && roomId) load(); }, [roomId, load]);
   // Form defaults — init once when form fields change
   useEffect(() => {
@@ -259,7 +287,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   // 操作处理
   // ────────────────────────────────────────────────────────────────
 
-  const closePrompt = () => { setPromptAction(null); setPromptValue(''); setPromptRow(null); };
+  const closePrompt = () => { setPromptAction(null); setPromptValue(''); setPromptValues({}); setPromptRow(null); };
 
   const doFetch = async (url: string, method: string, body?: any) => {
     const token = localStorage.getItem('auth_token');
@@ -271,14 +299,21 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   };
 
   const submitPrompt = async () => {
-    if (!promptAction || !promptAction.prompt_field) return;
+    if (!promptAction) return;
+    // 单字段(prompt_field)与多字段(prompt_fields)统一收集
+    const fields: ActionPrompt[] = promptAction.prompt_fields && promptAction.prompt_fields.length > 0
+      ? promptAction.prompt_fields
+      : promptAction.prompt_field ? [promptAction.prompt_field] : [];
+    if (fields.length === 0) return;
     setActionLoading(promptAction.label);
     try {
-      let url = promptAction.url;
+      let url = rewriteUrl(promptAction.url);
       if (promptRow) url = url.replace('{id}', promptRow.id || '');
       const body: Record<string, any> = {};
-      body[promptAction.prompt_field.key] = promptAction.prompt_field.input_type === 'number'
-        ? Number(promptValue) : promptValue;
+      for (const f of fields) {
+        const v = promptValues[f.key] ?? '';
+        body[f.key] = f.input_type === 'number' ? Number(v) : v;
+      }
       await doFetch(url, promptAction.method, body);
       closePrompt();
       await load();
@@ -288,10 +323,12 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
 
   const handleAction = async (action: NonNullable<UISchema['actions']>[number], row?: any) => {
     if (!action) return;
-    if (action.prompt_field) { setPromptAction(action); setPromptValue(''); setPromptRow(row || null); return; }
+    if (action.prompt_field || (action.prompt_fields && action.prompt_fields.length > 0)) {
+      setPromptAction(action); setPromptValue(''); setPromptValues({}); setPromptRow(row || null); return;
+    }
     setActionLoading(action.label);
     try {
-      let url = action.url;
+      let url = rewriteUrl(action.url);
       if (row) url = url.replace('{id}', row.id || '');
       let body: Record<string, string> | undefined;
       if (action.body_template) {
@@ -310,7 +347,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   const handleSwitchToggle = async (col: ColumnDef, row: any, newVal: boolean) => {
     if (!col.switch_url) return;
     try {
-      await doFetch(col.switch_url, 'POST', { [col.key]: newVal, id: row.id });
+      await doFetch(rewriteUrl(col.switch_url), 'POST', { [col.key]: newVal, id: row.id });
       await load();
     } catch { /* ignore */ }
   };
@@ -321,10 +358,15 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
 
   const renderActions = (row?: any) => {
     if (!schema.actions) return null;
+    const hasRow = row !== undefined;
     return (
       <div className="flex items-center gap-1 flex-wrap">
         {schema.actions
-          .filter(a => !a.show_when || Boolean(row?.[a.show_when]))
+          .filter(a => {
+            if (a.row_only && !hasRow) return false;
+            if (a.toolbar_only && hasRow) return false;
+            return !a.show_when || Boolean(row?.[a.show_when]);
+          })
           .map((action) => (
             <Button key={action.label} variant="ghost" size="sm"
               loading={actionLoading === action.label}
@@ -337,9 +379,13 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   };
 
   const renderPromptDialog = () => {
-    if (!promptAction || !promptAction.prompt_field) return null;
-    const pf = promptAction.prompt_field;
-    const isSelect = pf.input_type === 'select' && pf.options;
+    if (!promptAction) return null;
+    // 单字段(prompt_field)与多字段(prompt_fields)共用弹窗
+    const fields: ActionPrompt[] = promptAction.prompt_fields && promptAction.prompt_fields.length > 0
+      ? promptAction.prompt_fields
+      : promptAction.prompt_field ? [promptAction.prompt_field] : [];
+    if (fields.length === 0) return null;
+    const canSubmit = fields.every(f => f.optional || (promptValues[f.key] ?? '').trim() !== '');
     return (
       <div className="fixed inset-0 z-[70] flex items-center justify-center">
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={closePrompt} />
@@ -349,24 +395,32 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
             <button onClick={closePrompt} className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"><X className="w-4 h-4" /></button>
           </div>
           <div className="p-5 space-y-3">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">{pf.label}</label>
-            {isSelect ? (
-              <select value={promptValue} onChange={e => setPromptValue(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-primary-500">
-                <option value="">-- 请选择 --</option>
-                {pf.options!.map((o: {label: string; value: string}) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            ) : (
-              <input type={pf.input_type || 'text'} value={promptValue}
-                onChange={(e) => setPromptValue(e.target.value)}
-                placeholder={pf.placeholder || ''}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                onKeyDown={(e) => { if (e.key === 'Enter') submitPrompt(); }} autoFocus />
-            )}
+            {fields.map((f, idx) => {
+              const isSelect = f.input_type === 'select' && f.options;
+              return (
+                <div key={f.key}>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{f.label}</label>
+                  {isSelect ? (
+                    <select value={promptValues[f.key] ?? ''}
+                      onChange={e => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-primary-500">
+                      <option value="">-- 请选择 --</option>
+                      {f.options!.map((o: {label: string; value: string}) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  ) : (
+                    <input type={f.input_type || 'text'} value={promptValues[f.key] ?? ''}
+                      onChange={(e) => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
+                      placeholder={f.placeholder || ''}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                      onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) submitPrompt(); }} autoFocus={idx === 0} />
+                  )}
+                </div>
+              );
+            })}
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="ghost" size="sm" onClick={closePrompt}>取消</Button>
               <Button variant="primary" size="sm" onClick={submitPrompt}
-                loading={actionLoading === promptAction.label} disabled={!promptValue.trim()}>确定</Button>
+                loading={actionLoading === promptAction.label} disabled={!canSubmit}>确定</Button>
             </div>
           </div>
         </div>
@@ -594,7 +648,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
         const token = localStorage.getItem('auth_token');
         const body: Record<string, any> = {};
         body[promptAction.prompt_field.key] = promptValue;
-        await fetch(promptAction.url + qs(), {
+        await fetch(rewriteUrl(promptAction.url) + qs(), {
           method: promptAction.method,
           headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
           body: JSON.stringify(body),
@@ -661,22 +715,24 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
             );
             const statusButtons = (
               <div className="flex gap-0.5">
+                {/* 悬浮提示由 portal 渲染到 body(fixed + 最高层级),不受本滚动容器裁剪/遮挡 */}
                 {['playing', 'working', 'done', 'pending'].map(s => {
-                  const btnCls = 'relative group px-2 py-1.5 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
+                  const btnCls = 'px-2 py-1.5 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors' + (s === st ? ' opacity-30 cursor-default' : '');
                   return <button key={s} disabled={s === st} className={btnCls}
+                    onMouseEnter={e => showTip(e, statusLabels[s])} onMouseLeave={hideTip}
                     onClick={async () => { if (s === st) return; await doFetch(base + '/status' + qs(), 'POST', { index: i, status: s }); await load(); }}>
                     {statusIcons[s]}
-                    {s !== st && <HoverTip text={statusLabels[s]} />}
                   </button>
                 })}
 
                 <button
-                  className="relative group px-2 py-1.5 text-sm rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                  className="px-2 py-1.5 text-sm rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                  onMouseEnter={e => showTip(e, '删除')} onMouseLeave={hideTip}
                   onClick={async () => {
                     if (!confirm('确定删除 #' + (item.index || i + 1) + '「' + item.song_name + '」？')) return;
                     await doFetch(base + '/delete' + qs(), 'POST', { index: i });
                     setSelected(prev => { const n = new Set(prev); n.delete(i); return n; }); await load();
-                  }}>✕<HoverTip text="删除" /></button>
+                  }}>✕</button>
               </div>
             );
 
@@ -764,6 +820,18 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
             onConfirm={() => { confirmCallback?.(); setConfirmOpen(false); setConfirmCallback(null); }}
             onCancel={() => { setConfirmOpen(false); setConfirmCallback(null); }} />
         )}
+
+        {/* 悬浮提示 —— portal 到 body(fixed + z-100),滚动容器无法裁剪、任何行无法遮挡 */}
+        {tip && createPortal(
+          <div className="pointer-events-none fixed z-[100] -translate-x-1/2 -translate-y-full"
+            style={{ left: tip.x, top: tip.y - 6 }}>
+            <div className="px-2 py-1 rounded-md text-[11px] font-medium whitespace-nowrap
+                            bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg">
+              {tip.text}
+            </div>
+          </div>,
+          document.body,
+        )}
       </div>
     );
   }
@@ -778,7 +846,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
       if (!schema.submit) return;
       setFormSubmitting(true);
       try {
-        await doFetch(schema.submit.url, schema.submit.method, formValues);
+        await doFetch(rewriteUrl(schema.submit.url), schema.submit.method, formValues);
         // Reset to defaults on success
         const defaults: Record<string, any> = {};
         schema.form_fields!.forEach(f => { defaults[f.key] = f.default ?? (f.type === 'switch' ? false : ''); });
@@ -873,7 +941,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                 {sec.title}
               </h3>
             )}
-            <PluginUI schema={sec} pluginName={pluginName} />
+            <PluginUI schema={sec} pluginName={pluginName} apiBase={apiBase} />
           </div>
         ))}
       </div>

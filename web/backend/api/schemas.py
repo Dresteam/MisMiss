@@ -279,6 +279,14 @@ class AccountCredentialsRequest(BaseModel):
     password: str = Field(default="", min_length=4, max_length=64, description="新密码(至少 4 位)")
 
 
+class AccountPasswordChangeRequest(BaseModel):
+    """账户自助修改密码请求(需原密码与确认密码)。"""
+
+    current_password: str = Field(..., min_length=1, description="当前(原)密码")
+    new_password: str = Field(..., min_length=4, max_length=64, description="新密码(至少 4 位)")
+    confirm_password: str = Field(..., min_length=1, description="确认新密码(须与新密码一致)")
+
+
 class RenewRequest(BaseModel):
     """续期请求:days 与 expires_at 二选一。"""
 

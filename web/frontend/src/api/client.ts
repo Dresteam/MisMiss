@@ -387,6 +387,23 @@ export async function redeemAccountCode(id: number, code: string): Promise<Accou
   });
 }
 
+/** 账户自助修改密码(需原密码,新密码与确认密码一致)。 */
+export async function changeAccountPassword(
+  id: number,
+  currentPassword: string,
+  newPassword: string,
+  confirmPassword: string,
+): Promise<StatusResponse> {
+  return request<StatusResponse>(`/accounts/${id}/change-password`, {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+      confirm_password: confirmPassword,
+    }),
+  });
+}
+
 export async function fetchPublicBot(): Promise<PublicBotInfo> {
   return request<PublicBotInfo>('/panel/public-bot');
 }

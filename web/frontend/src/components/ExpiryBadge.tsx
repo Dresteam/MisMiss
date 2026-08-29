@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { clsx } from 'clsx';
 
 interface Props {
@@ -8,6 +9,13 @@ interface Props {
 
 /** 账户到期徽标:永久 / 剩余 X 天 / ≤7 天到期提醒 / 已过期(含暂停原因)。 */
 export function ExpiryBadge({ expiresAt, pausedReason, size = 'sm' }: Props) {
+  // 每分钟重算剩余天数,徽标随时间自动更新,不依赖父组件轮询
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!expiresAt) return;
+    const t = setInterval(() => setTick((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, [expiresAt]);
   const cls = clsx(
     'inline-flex items-center gap-1 rounded-full font-medium',
     size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm',
