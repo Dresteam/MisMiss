@@ -113,9 +113,6 @@ export function ServerPage() {
               <p className="text-xs text-surface-500">插件</p>
               <p className="text-2xl font-bold text-surface-900 dark:text-white mt-1">
                 {status?.enabled_plugin_count || 0}
-                <span className="text-sm font-normal text-surface-400">
-                  /{status?.plugin_count || 0}
-                </span>
               </p>
             </div>
           </div>

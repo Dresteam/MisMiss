@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Settings2, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
-  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock,
+  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
@@ -23,7 +23,7 @@ export function AccountsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [renewTarget, setRenewTarget] = useState<AccountSummary | null>(null);
-  const [renewMode, setRenewMode] = useState<'days' | 'code'>('days');
+  const [renewMode, setRenewMode] = useState<'days' | 'set' | 'code'>('days');
   const [renewing, setRenewing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AccountSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -212,6 +212,8 @@ export function AccountsPage() {
                   <div className="flex gap-1">
                     <Button variant="ghost" size="sm" icon={<CalendarClock className="w-4 h-4" />}
                       tooltip="续期" onClick={() => { setRenewMode('days'); setRenewTarget(acc); }} />
+                    <Button variant="ghost" size="sm" icon={<Hourglass className="w-4 h-4" />}
+                      tooltip="设置剩余天数" onClick={() => { setRenewMode('set'); setRenewTarget(acc); }} />
                     <Button variant="ghost" size="sm" icon={<KeyRound className="w-4 h-4" />}
                       tooltip="兑换授权码" onClick={() => { setRenewMode('code'); setRenewTarget(acc); }} />
                     <Button variant="ghost" size="sm" icon={<Lock className="w-4 h-4" />}

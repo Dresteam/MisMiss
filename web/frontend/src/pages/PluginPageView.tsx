@@ -14,9 +14,10 @@ export function PluginPageView() {
   const auth = useAuth();
   // 子域名入口无 :id 参数,回退到登录账户自身
   const accountId = id ? Number(id) : (auth.accountId ?? 0);
+  // 返回插件界面:账户门户 → 插件页;管理端 → 账户详情的插件 Tab(?tab=plugins)
   const backPath = (isAccountPortalHost() || auth.role === 'account')
-    ? '/account/home'
-    : `/account/${accountId}`;
+    ? '/account/plugins'
+    : `/account/${accountId}?tab=plugins`;
   const [detail, setDetail] = useState<PluginDetail | null>(null);
   const [loading, setLoading] = useState(true);
 

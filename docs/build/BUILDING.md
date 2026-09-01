@@ -136,15 +136,15 @@ Browser (:18080)
 
 ```bash
 # Windows
-powershell -File scripts\docker-release.ps1 -Version 1.1.1
+powershell -File scripts\docker-release.ps1 -Version 1.1.2
 
 # Linux / macOS
-bash scripts/docker-release.sh 1.1.1
+bash scripts/docker-release.sh 1.1.2
 ```
 
-产物：`dist/mismiss-1.1.1-docker.zip`（Windows 同时产出 `.tar.gz`）或 `dist/mismiss-1.1.1-docker.tar.gz`（Linux / macOS）。
+产物：`dist/mismiss-1.1.2-docker.zip`（Windows 同时产出 `.tar.gz`）或 `dist/mismiss-1.1.2-docker.tar.gz`（Linux / macOS）。
 
-版本号未指定时自动解析（与 release.sh 一致）：`pyproject.toml` → git tag → 日期。例如当前项目会得到 `mismiss-1.1.1-docker.zip`，与 `release/` 目录产物命名保持同一格式。
+版本号未指定时自动解析（与 release.sh 一致）：`pyproject.toml` → git tag → 日期。例如当前项目会得到 `mismiss-1.1.2-docker.zip`，与 `release/` 目录产物命名保持同一格式。
 
 部署包内容（扁平结构，无顶层目录，可直接解压到部署目录）：
 
@@ -160,10 +160,10 @@ deploy.sh               # 服务器一键部署脚本
 
 ```bash
 # 1. 上传部署包
-scp dist/mismiss-1.1.1-docker.zip user@server:/opt/mismiss/
+scp dist/mismiss-1.1.2-docker.zip user@server:/opt/mismiss/
 
 # 2. 解压 + 一键部署（导入镜像 → 引导配置 → 启动）
-cd /opt/mismiss && unzip -o mismiss-1.1.1-docker.zip
+cd /opt/mismiss && unzip -o mismiss-1.1.2-docker.zip
 bash deploy.sh
 ```
 
@@ -181,11 +181,11 @@ bash deploy.sh
 
 ```bash
 # 本地
-powershell -File scripts\docker-release.ps1 -Version 1.1.1
-scp dist/mismiss-1.1.1-docker.zip user@server:/opt/mismiss/
+powershell -File scripts\docker-release.ps1 -Version 1.1.2
+scp dist/mismiss-1.1.2-docker.zip user@server:/opt/mismiss/
 
 # 服务器
-cd /opt/mismiss && unzip -o mismiss-1.1.1-docker.zip
+cd /opt/mismiss && unzip -o mismiss-1.1.2-docker.zip
 bash deploy.sh
 ```
 
@@ -467,8 +467,8 @@ scripts\start.bat backend       # 仅 API
 
 ```bash
 # Docker 部署包（镜像不推仓库，推荐，见第四章）
-bash scripts/docker-release.sh 1.1.1             # 构建镜像 + 打包 → dist/
-powershell -File scripts\docker-release.ps1 -Version 1.1.1
+bash scripts/docker-release.sh 1.1.2             # 构建镜像 + 打包 → dist/
+powershell -File scripts\docker-release.ps1 -Version 1.1.2
 
 # 服务器端（在部署包解压目录内）
 bash deploy.sh                                   # 导入镜像 + 启动 / 更新
@@ -566,7 +566,7 @@ release/
 
 ```bash
 # 指定版本号
-bash scripts/release.sh -v 1.1.1
+bash scripts/release.sh -v 1.1.2
 
 # 跳过 PyInstaller（更快，适合 Linux 发版）
 bash scripts/release.sh --skip-pyinstaller

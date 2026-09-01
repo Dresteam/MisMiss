@@ -10,7 +10,6 @@ import asyncio
 import importlib
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -1523,9 +1522,25 @@ class PluginManager:
         SPA 兜底路由 ``/{full_path:path}`` 在模块加载时已注册到列表末尾，
         若直接 ``include_router`` 会追加到兜底路由之后，导致请求被兜底路由拦截。
 
-        此方法先暂存并移除兜底路由，再通过 ``include_router`` 以标准流程
-        注册插件路由，最后将兜底路由恢复到列表末尾。
+        此方法先移除同前缀的旧插件路由（重载/重新激活插件时，
+        旧实例的过期路由会抢先匹配，导致 Web UI 与直播间数据不同步），
+        再暂存并移除兜底路由，通过 ``include_router`` 以标准流程
+        注册新路由，最后将兜底路由恢复到列表末尾。
         """
+        prefix = getattr(plugin_router, "prefix", "") or ""
+        if prefix:
+            # 移除同前缀的旧路由（旧插件实例的过期注册）
+            removed = 0
+            kept: list[Any] = []
+            for route in app.router.routes:
+                if PluginManager._route_prefix(route) == prefix:
+                    removed += 1
+                else:
+                    kept.append(route)
+            app.router.routes[:] = kept
+            if removed:
+                _log.info("已移除 {} 条同前缀旧插件路由: {}", removed, prefix)
+
         # 找到并暂存 SPA 兜底路由（避免它拦截插件 UI 请求）
         catch_all = None
         for i, route in enumerate(app.router.routes):
@@ -1568,8 +1583,39 @@ class PluginManager:
         except RuntimeError:
             pass
 
+        # 移除该插件已注册的 UI 路由（防止旧实例路由继续响应请求）
+        self._remove_plugin_routes(metadata)
+
         metadata.plugin_instance = None
         metadata.enabled = False
+
+    def _remove_plugin_routes(self, metadata: PluginMetadata) -> None:
+        """从 FastAPI 移除指定插件的 UI 路由。"""
+        if self._app is None:
+            return
+        prefix = self._plugin_ui_prefix(metadata.name)
+        removed = 0
+        kept: list[Any] = []
+        for route in self._app.router.routes:
+            if PluginManager._route_prefix(route) == prefix:
+                removed += 1
+            else:
+                kept.append(route)
+        if removed:
+            self._app.router.routes[:] = kept
+            _log.info("已移除插件 UI 路由: {} ({} 条)", metadata.name, removed)
+
+    @staticmethod
+    def _route_prefix(route: Any) -> str:
+        """提取路由的注册前缀。
+
+        新版 Starlette 通过 ``_IncludedRouter`` 包装 include_router 的结果，
+        前缀保存在 ``original_router.prefix``；普通路由则用 ``path``。
+        """
+        orig = getattr(route, "original_router", None)
+        if orig is not None:
+            return getattr(orig, "prefix", "") or ""
+        return getattr(route, "path", "") or ""
 
     @staticmethod
     def _purge_modules(metadata: PluginMetadata) -> None:

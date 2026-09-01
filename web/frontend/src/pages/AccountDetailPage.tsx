@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Bot as BotIcon, Radio, Puzzle, Clock, Send, RefreshCw,
   Plus, Trash2, Pencil, ChevronUp, ChevronDown, SkipForward, Loader2, Eye, EyeOff,
-  Power, XCircle, CalendarClock, KeyRound, ExternalLink,
+  Power, XCircle, CalendarClock, KeyRound, ExternalLink, Hourglass,
 } from 'lucide-react';
 import {
   fetchAccountSummary, fetchAccountBot, createAccountBot, refreshAccountBot,
@@ -1272,11 +1272,16 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
 export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
   const accountId = Number(id);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [acc, setAcc] = useState<AccountSummary | null>(null);
-  const [tab, setTab] = useState<TabKey>('overview');
+  // Tab 与 URL 同步(?tab=...),插件主页等返回时可直达对应标签页
+  const [tab, setTab] = useState<TabKey>(() => {
+    const t = searchParams.get('tab');
+    return TABS.some((x) => x.key === t) ? (t as TabKey) : 'overview';
+  });
   const [loading, setLoading] = useState(true);
   const [renewOpen, setRenewOpen] = useState(false);
-  const [renewMode, setRenewMode] = useState<'days' | 'code'>('days');
+  const [renewMode, setRenewMode] = useState<'days' | 'code' | 'set'>('days');
   const [renewing, setRenewing] = useState(false);
 
   const load = useCallback(async () => {
@@ -1287,6 +1292,26 @@ export function AccountDetailPage() {
   }, [accountId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 浏览器前进/后退等外部 URL 变化时同步 Tab 状态
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && TABS.some((x) => x.key === t) && t !== tab) {
+      setTab(t as TabKey);
+    }
+    /* eslint-disable-next-line */
+  }, [searchParams]);
+
+  const switchTab = (key: TabKey) => {
+    setTab(key);
+    const next = new URLSearchParams(searchParams);
+    if (key === 'overview') {
+      next.delete('tab');
+    } else {
+      next.set('tab', key);
+    }
+    setSearchParams(next, { replace: true });
+  };
 
   if (loading || !acc) {
     return (
@@ -1327,7 +1352,7 @@ export function AccountDetailPage() {
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl">
       {/* 头部 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <Link to="/" className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
             <ArrowLeft className="w-5 h-5" />
@@ -1353,6 +1378,8 @@ export function AccountDetailPage() {
         <div className="flex gap-2">
           <Button size="sm" variant="secondary" icon={<KeyRound className="w-4 h-4" />}
             onClick={() => { setRenewMode('code'); setRenewOpen(true); }}>兑换</Button>
+          <Button size="sm" variant="secondary" icon={<Hourglass className="w-4 h-4" />}
+            onClick={() => { setRenewMode('set'); setRenewOpen(true); }}>设置剩余</Button>
           <Button size="sm" icon={<CalendarClock className="w-4 h-4" />}
             onClick={() => { setRenewMode('days'); setRenewOpen(true); }}>续期</Button>
         </div>
@@ -1361,7 +1388,7 @@ export function AccountDetailPage() {
       {/* Tabs(移动端均分,无横向滚动条) */}
       <div className="flex border-b border-gray-200 dark:border-gray-700">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key} onClick={() => switchTab(t.key)}
             className={
               'flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-4 py-2.5 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors ' +
               (tab === t.key
@@ -1377,7 +1404,7 @@ export function AccountDetailPage() {
       {tab === 'live' && <LiveTab acc={acc} />}
       {tab === 'bot' && <BotTab acc={acc} onAccountChanged={load} />}
       {tab === 'timer' && <TimerTab acc={acc} />}
-      {tab === 'plugins' && <PluginsTab acc={acc} pluginPageBase={`/account/${acc.id}/plugin`} onOpenLibrary={() => setTab('library')} />}
+      {tab === 'plugins' && <PluginsTab acc={acc} pluginPageBase={`/account/${acc.id}/plugin`} onOpenLibrary={() => switchTab('library')} />}
       {tab === 'library' && <LibraryTab acc={acc} />}
 
       <RenewDialog
