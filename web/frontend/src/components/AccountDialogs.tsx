@@ -134,12 +134,19 @@ interface RenewDialogProps {
   open: boolean;
   accountId: number;
   accountName: string;
-  mode: 'days' | 'code';
+  /** days=续期叠加天数 set=直接设置剩余天数(覆盖) code=兑换授权码 */
+  mode: 'days' | 'set' | 'code';
   loading?: boolean;
   onRenew: (id: number, data: RenewRequest) => void;
   onRedeem: (id: number, code: string) => void;
   onCancel: () => void;
 }
+
+const MODE_TITLE: Record<string, string> = {
+  days: '续期',
+  set: '设置剩余天数',
+  code: '兑换授权码',
+};
 
 export function RenewDialog({ open, accountId, accountName, mode, loading, onRenew, onRedeem, onCancel }: RenewDialogProps) {
   const [days, setDays] = useState('30');
@@ -149,10 +156,15 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
   if (!open) return null;
 
   const submit = () => {
-    if (mode === 'days') {
+    if (mode === 'days' || mode === 'set') {
       const d = Number(days);
       if (!Number.isInteger(d) || d <= 0) { setError('请输入正整数天数'); return; }
-      onRenew(accountId, { days: d });
+      if (mode === 'days') {
+        onRenew(accountId, { days: d });
+      } else {
+        // 直接覆盖到期时间 = 当前时间 + N 天(用于调整永久/剩余天数)
+        onRenew(accountId, { expires_at: new Date(Date.now() + d * 86400000).toISOString() });
+      }
     } else {
       if (!code.trim()) { setError('请输入授权码'); return; }
       onRedeem(accountId, code.trim().toUpperCase());
@@ -165,24 +177,31 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
       <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm mx-4 animate-slide-in-up">
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
           <h3 className="font-semibold text-gray-900 dark:text-white">
-            {mode === 'days' ? `续期 · ${accountName}` : `兑换授权码 · ${accountName}`}
+            {MODE_TITLE[mode]} · {accountName}
           </h3>
           <button onClick={onCancel} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
         <div className="p-5 space-y-4">
-          {mode === 'days' ? (
-            <div>
-              <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">续期天数</label>
-              <input value={days} onChange={(e) => setDays(e.target.value)}
-                className="input w-full" inputMode="numeric" placeholder="30" />
-            </div>
-          ) : (
+          {mode === 'code' ? (
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">授权码</label>
               <input value={code} onChange={(e) => setCode(e.target.value)}
                 className="input w-full font-mono" placeholder="MM-XXXX-XXXX-XXXX" />
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                {mode === 'days' ? '续期天数' : '剩余天数'}
+              </label>
+              <input value={days} onChange={(e) => setDays(e.target.value)}
+                className="input w-full" inputMode="numeric" placeholder="30" />
+              <p className="text-xs text-gray-400 mt-1">
+                {mode === 'days'
+                  ? '在当前到期时间基础上叠加 N 天'
+                  : '直接设置为 N 天后到期(忽略当前到期时间,可用于永久账户改为限时)'}
+              </p>
             </div>
           )}
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
@@ -190,7 +209,7 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
         <div className="flex justify-end gap-2 px-5 pb-4">
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>取消</Button>
           <Button variant="primary" size="sm" onClick={submit} loading={loading}>
-            {mode === 'days' ? '续期' : '兑换'}
+            {mode === 'days' ? '续期' : mode === 'set' ? '设置' : '兑换'}
           </Button>
         </div>
       </div>
