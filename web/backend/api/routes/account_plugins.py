@@ -149,6 +149,24 @@ async def plugin_install_to_account(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{plugin_name}/update", response_model=StatusResponse)
+async def plugin_update_from_library(
+    plugin_name: str, account_id: int, s: MissevanServer = Depends(require_active_account)
+):
+    """从插件库更新账户插件副本:覆盖源码并重载,保留启用状态与既有配置。
+
+    新版本配置 schema 新增的字段自动补默认值。
+    """
+    from api.deps import get_account_manager
+    try:
+        await get_account_manager().update_plugin_in_account(account_id, plugin_name)
+        return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已更新到库版本")
+    except CorePluginNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except CorePluginLoadException as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ================================================================== #
 # 路由 —— 列表 & 详情
 # ================================================================== #

@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Bot as BotIcon, Radio, Puzzle, Clock, Send, RefreshCw,
   Plus, Trash2, Pencil, ChevronUp, ChevronDown, SkipForward, Loader2, Eye, EyeOff,
-  Power, XCircle, CalendarClock, KeyRound, ExternalLink, Hourglass,
+  Power, XCircle, CalendarClock, KeyRound, ExternalLink, Hourglass, Download,
 } from 'lucide-react';
 import {
   fetchAccountSummary, fetchAccountBot, createAccountBot, refreshAccountBot,
@@ -17,7 +17,7 @@ import {
   disableAccountPlugin, reloadAccountPlugin, renewAccount, redeemAccount,
   fetchAccountPluginReadme, fetchAccountPluginConfig, updateAccountPluginConfig,
   getAccountBotCookie, uninstallAccountPluginFromAccount, fetchAccountLibrary,
-  installAccountPlugin,
+  installAccountPlugin, updateAccountPlugin,
 } from '../api/client';
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
@@ -1011,6 +1011,11 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                 </button>
 
                 <div className="flex items-center gap-0.5 lg:gap-1 flex-nowrap">
+                  {updateVersion(p) && (
+                    <IconBtn icon={<Download className="w-3.5 h-3.5" />} label={`更新到 v${updateVersion(p)}`}
+                      loading={processing === `update-${p.name}`} disabled={processing === `update-${p.name}`}
+                      onClick={() => act(`update-${p.name}`, () => updateAccountPlugin(acc.id, p.name), '已更新到库版本')} />
+                  )}
                   <IconBtn icon={<Eye className="w-3.5 h-3.5" />} label="基本信息" onClick={() => openDrawer(p.name, 'info')} />
                   <IconBtn icon={<SettingsIcon />} label="配置" onClick={() => openDrawer(p.name, 'config')} />
                   <IconBtn icon={<RefreshCw className="w-3.5 h-3.5" />} label="重载"
