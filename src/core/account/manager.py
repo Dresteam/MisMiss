@@ -949,6 +949,51 @@ class AccountManager:
             pm._ensure_plugin_loaded(meta)
         _log.info("账户 {} 已安装插件 {}", account_id, plugin_name)
 
+    async def update_plugin_in_account(self, account_id: int, plugin_name: str) -> None:
+        """从插件库更新账户插件副本:覆盖源码并重载实例(保留启用状态)。
+
+        新版本配置 schema 中的新字段由 load_config_with_defaults 自动补默认值,
+        既有字段的用户配置值保留;插件数据目录不变。
+
+        :raises CorePluginNotFoundException: 插件库或账户中不存在
+        """
+        from core.exceptions import CorePluginNotFoundException
+        src = os.path.join("plugins", plugin_name)
+        if not os.path.isdir(src):
+            raise CorePluginNotFoundException(plugin_name)
+        server = self.get_server(account_id)
+        dest = os.path.join(self._server_dirs(account_id), "installed_plugins", plugin_name)
+        if not os.path.isdir(dest):
+            raise CorePluginNotFoundException(f"账户尚未安装插件 '{plugin_name}'")
+        pm = server._plugin_manager
+        meta = pm.get_plugin(plugin_name)
+        was_enabled = bool(meta is not None and meta.enabled)
+
+        # 1. 停用旧实例(终止钩子/取消注册/移除旧 UI 路由)
+        if was_enabled:
+            try:
+                await pm.disable_plugin(plugin_name)
+            except Exception as e:
+                _log.warning("账户 {} 更新插件 {} 时停用旧实例失败: {}", account_id, plugin_name, e)
+        # 2. 清除旧模块缓存并移除元数据条目(load_all 增量合并不会覆盖已存在条目)
+        if meta is not None:
+            pm._purge_modules(meta)
+            pm._plugins.pop(plugin_name, None)
+        pm._failed_plugins.pop(plugin_name, None)
+        # 3. 覆盖源码副本
+        shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(src, dest)
+        # 4. 重新扫描元数据 → 轻量实例注册 UI 路由(禁用状态插件主页亦可用)
+        await server.refresh_plugins()
+        new_meta = pm.get_plugin(plugin_name)
+        if new_meta is not None:
+            pm._ensure_plugin_loaded(new_meta)
+        # 5. 原启用状态则重新启用(完整激活,新字段自动补默认值)
+        if was_enabled:
+            await server.enable_plugin(plugin_name)
+        server._save_state()
+        _log.info("账户 {} 已更新插件 {} 到库版本", account_id, plugin_name)
+
     async def uninstall_plugin_from_account(
         self, account_id: int, plugin_name: str,
         delete_config: bool = False, delete_data: bool = False,

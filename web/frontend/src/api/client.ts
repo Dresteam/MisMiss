@@ -661,6 +661,13 @@ export async function installAccountPlugin(id: number, name: string): Promise<St
   });
 }
 
+/** 从插件库更新账户插件副本(保留启用状态与既有配置,新字段自动补默认值)。 */
+export async function updateAccountPlugin(id: number, name: string): Promise<StatusResponse> {
+  return request<StatusResponse>(`/accounts/${id}/plugins/${encodeURIComponent(name)}/update`, {
+    method: 'POST',
+  });
+}
+
 export async function uninstallAccountPluginFromAccount(
   id: number,
   name: string,
