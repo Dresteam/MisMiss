@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
+import importlib.util
 import os
 import shutil
 import sys
@@ -115,11 +117,64 @@ class PluginManager:
         self._failed_plugins: dict[str, dict[str, Any]] = {}
         self._app = None  # FastAPI app 引用
         self._server = None  # MissevanServer 引用，供插件获取直播间列表等
-        self._server = None  # MissevanServer 引用
 
     def set_server(self, server) -> None:
         """注入 MissevanServer 引用，供插件查询直播间列表等。"""
         self._server = server
+
+    def _purge_plugin_timers(self, plugin_name: str) -> None:
+        """清理某个插件注册的全部定时消息。
+
+        插件消息不落盘，只能靠框架按插件名回收。两处必须调用：
+
+        - **停用/挂起/卸载时**——保证插件不再广播
+        - **激活前**——插件异常终止时不会执行 ``terminate``，其消息会
+          残留；激活前先清一遍，杜绝重复注册
+
+        :param plugin_name: 插件名
+        """
+        server = self._server
+        if server is None or not plugin_name:
+            return
+        try:
+            server.unregister_plugin_timer_messages(plugin_name)
+        except Exception as e:
+            _log.warning("清理插件 {} 的定时消息失败: {}", plugin_name, e)
+
+    async def notify_livestream_bound(self, livestream) -> None:
+        """通知所有已启用插件：账户已绑定直播间。
+
+        :param livestream: 已绑定的直播间实例
+        """
+        for metadata in list(self._plugins.values()):
+            instance = metadata.plugin_instance
+            if instance is None or not metadata.enabled:
+                continue
+            await self._call_livestream_bound(instance, metadata.name, livestream)
+
+    async def _notify_bound_livestream(self, metadata: PluginMetadata) -> None:
+        """插件激活后，若账户已绑定直播间则补发一次绑定通知。
+
+        让插件只需在 ``on_livestream_bound`` 里注册依赖直播间的资源，
+        无需再靠弹幕事件兜底重试。
+        """
+        instance = metadata.plugin_instance
+        server = self._server
+        if instance is None or server is None:
+            return
+        lives = getattr(server, "livestreams", None) or {}
+        if not lives:
+            return
+        await self._call_livestream_bound(
+            instance, metadata.name, next(iter(lives.values()))
+        )
+
+    async def _call_livestream_bound(self, instance, plugin_name: str, livestream) -> None:
+        """安全调用插件的 on_livestream_bound 钩子。"""
+        try:
+            await instance.on_livestream_bound(livestream)
+        except Exception as e:
+            _log.warning("插件 [{}] on_livestream_bound 异常: {}", plugin_name, e)
 
     def _plugin_ui_prefix(self, name: str) -> str:
         """计算插件 UI 路由前缀（多账户模式下由构造参数决定）。"""
@@ -173,6 +228,59 @@ class PluginManager:
         if os.path.exists(os.path.join(plugin_path, f"{dir_name}.py")):
             return dir_name
         return None
+
+    def _import_plugin_module(
+        self, plugin_path: str, module_file: str, dir_name: str
+    ) -> tuple[Any, str]:
+        """按文件路径导入插件主模块，返回 ``(module, 模块名)``。
+
+        **不能用 ``import plugins.<dir>.<mod>``**：账户的源码副本位于
+        ``installed_plugins/<dir>/``，而账户目录下的 ``plugins/`` 是**插件数据目录**
+        （存 ``*_data.json`` 之类）。由于 ``plugins`` 是命名空间包（没有
+        ``__init__.py``），``sys.path`` 上仓库的 ``plugins/`` 会被合并进同一个
+        命名空间并抢先命中，于是账户实际加载的是**插件库**的源码，而不是自己的
+        副本——副本隔离形同虚设，「可更新」徽标也就失去意义。
+
+        改为按绝对路径加载并取一个与路径绑定的唯一模块名：
+
+        - 各账户得到**独立模块对象**，模块级状态不再跨账户共享
+        - 与仓库 ``plugins/`` 命名空间彻底解耦
+        - 保留 ``submodule_search_locations``，插件内的相对导入照常可用
+
+        :param plugin_path: 插件目录绝对路径
+        :param module_file: 主模块文件名（不含 ``.py``）
+        :param dir_name: 插件目录名（用于报错信息）
+        :return: ``(模块对象, 写入 sys.modules 的模块名)``
+        :raises CorePluginLoadException: 文件缺失或导入失败
+        """
+        file_path = os.path.join(plugin_path, f"{module_file}.py")
+        if not os.path.isfile(file_path):
+            raise CorePluginLoadException(dir_name, f"未找到 {module_file}.py")
+
+        digest = hashlib.sha1(
+            os.path.abspath(plugin_path).encode("utf-8")
+        ).hexdigest()[:12]
+        module_name = f"mismiss_plugin_{digest}_{dir_name}"
+
+        cached = sys.modules.get(module_name)
+        if cached is not None:
+            return cached, module_name
+
+        spec = importlib.util.spec_from_file_location(
+            module_name, file_path, submodule_search_locations=[plugin_path]
+        )
+        if spec is None or spec.loader is None:
+            raise CorePluginLoadException(dir_name, f"无法加载模块: {file_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        # 先入 sys.modules：模块内的相对导入与自引用都依赖它在册
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)  # 失败不留半成品
+            raise
+        return module, module_name
 
     def _scan_plugin_dirs(self) -> list[tuple[str, str]]:
         """扫描 ``plugins/`` 目录，发现所有合法插件。
@@ -522,10 +630,13 @@ class PluginManager:
         if os.path.exists(ui_schema_path):
             metadata.ui_schema_path = ui_schema_path
 
-        # 3. 记录 README 路径
+        # 3. 记录 README / CHANGELOG 路径
         readme_path = os.path.join(plugin_path, "README.md")
         if os.path.exists(readme_path):
             metadata.readme_path = readme_path
+        changelog_path = os.path.join(plugin_path, "CHANGELOG.md")
+        if os.path.exists(changelog_path):
+            metadata.changelog_path = changelog_path
 
         # 4. 记录路径信息用于后续完整加载
         metadata.module_path = None  # 尚未导入
@@ -716,15 +827,9 @@ class PluginManager:
         module_file = self._find_main_module(plugin_path)
         if module_file is None:
             raise CorePluginLoadException(dir_name, "未找到 main.py")
-        import_path = f"plugins.{dir_name}.{module_file}"
-        project_root = (
-            os.path.dirname(self._plugin_dir)
-            if os.path.isabs(self._plugin_dir)
-            else os.path.abspath(self._plugin_dir)
+        module, import_path = self._import_plugin_module(
+            plugin_path, module_file, dir_name
         )
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        module = importlib.import_module(import_path)
 
         # 查找 Plugin 子类
         plugin_cls = self._find_plugin_class(module, dir_name)
@@ -780,6 +885,9 @@ class PluginManager:
             metadata.routes_registered = True
             _log.info("插件已注册自定义 UI 路由: {}", metadata.name)
 
+        # 初始化前先清掉可能残留的插件定时消息（异常终止的插件不会走 terminate）
+        self._purge_plugin_timers(metadata.name)
+
         # 初始化
         miss_config = MissConfig(plugin_config) if plugin_config else MissConfig({})
         try:
@@ -813,6 +921,9 @@ class PluginManager:
             if names:
                 _log.info("插件已注册 {} 个指令: {}", len(names), names)
 
+        # 账户已绑定直播间则补发绑定通知（插件据此注册依赖直播间的资源）
+        await self._notify_bound_livestream(metadata)
+
     async def enable_plugin(self, plugin_name: str) -> None:
         """启用插件——若尚未激活则完整加载（等待激活完成）。
 
@@ -839,11 +950,14 @@ class PluginManager:
             if self._command_router is not None:
                 self._command_router.register_plugin(metadata.plugin_instance)
             metadata.enabled = True
+            # 调用 on_enable 前先清残留，避免插件重复注册定时消息
+            self._purge_plugin_timers(plugin_name)
             # 重新启用已初始化实例 → 调用 on_enable 钩子（恢复定时消息等）
             try:
                 await metadata.plugin_instance.on_enable()
             except Exception as e:
                 _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
+            await self._notify_bound_livestream(metadata)
 
         _log.info("插件已启用: {}", plugin_name)
 
@@ -875,6 +989,8 @@ class PluginManager:
                 await metadata.plugin_instance.terminate()
             except Exception as e:
                 _log.warning("插件 [{}] terminate 异常: {}", plugin_name, e)
+            # 兜底：插件若未在 terminate 中自行清理，由框架强制回收其定时消息
+            self._purge_plugin_timers(plugin_name)
 
         _log.info("插件已禁用: {}", plugin_name)
 
@@ -888,6 +1004,9 @@ class PluginManager:
                 loop.create_task(metadata.plugin_instance.terminate())
             except RuntimeError:
                 pass
+            # terminate 是 fire-and-forget，框架同步回收定时消息，
+            # 保证暂停后不再广播（也避免把清理塞进异步任务引发状态写入竞态）
+            self._purge_plugin_timers(plugin_name)
         _log.info("插件已暂停: {}", plugin_name)
 
     def resume_plugin(self, plugin_name: str) -> None:
@@ -910,6 +1029,8 @@ class PluginManager:
             self._event_bus.register_new_event(metadata.plugin_instance)
             # 补充注册路由（_app 可能在实例创建后才设置）
             self._register_routes_if_needed(metadata)
+            # 调用 on_enable 前先清残留，避免插件重复注册定时消息
+            self._purge_plugin_timers(plugin_name)
             # 恢复已初始化实例 → 异步调用 on_enable 钩子（恢复定时消息等）
             try:
                 loop = asyncio.get_running_loop()
@@ -919,11 +1040,12 @@ class PluginManager:
         _log.info("插件已恢复: {}", plugin_name)
 
     async def _call_on_enable(self, metadata: PluginMetadata, plugin_name: str) -> None:
-        """安全调用插件的 on_enable 钩子。"""
+        """安全调用插件的 on_enable 钩子，随后补发直播间绑定通知。"""
         try:
             await metadata.plugin_instance.on_enable()
         except Exception as e:
             _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
+        await self._notify_bound_livestream(metadata)
 
     def _register_routes_if_needed(self, metadata: PluginMetadata) -> None:
         """为已有实例补注册 UI 路由（兜底：_app 延迟设置时）。
@@ -957,11 +1079,9 @@ class PluginManager:
             if not module_file:
                 _log.warning("插件 [{}] 未找到主模块，跳过加载", metadata.name)
                 return
-            import_path = f"plugins.{dir_name}.{module_file}"
-            project_root = os.path.abspath(self._plugin_dir)
-            if project_root not in sys.path:
-                sys.path.insert(0, project_root)
-            module = importlib.import_module(import_path)
+            module, import_path = self._import_plugin_module(
+                plugin_path, module_file, dir_name
+            )
             plugin_cls = self._find_plugin_class(module, dir_name)
             cfg: dict = {}
             if metadata.config_schema_path and os.path.exists(metadata.config_schema_path):
@@ -1018,6 +1138,8 @@ class PluginManager:
         instance = metadata.plugin_instance
         if instance is None:
             return
+        # 初始化前先清掉可能残留的插件定时消息（异常终止的插件不会走 terminate）
+        self._purge_plugin_timers(metadata.name)
         miss_config = MissConfig(metadata.config) if metadata.config else MissConfig({})
         try:
             await instance.initialize(config=miss_config)
@@ -1047,6 +1169,8 @@ class PluginManager:
             names = cmds.get(metadata.name, [])
             if names:
                 _log.info("插件已注册 {} 个指令: {}", len(names), names)
+        # 账户已绑定直播间则补发绑定通知（插件据此注册依赖直播间的资源）
+        await self._notify_bound_livestream(metadata)
         self._notify_state_changed()
 
     def suspend_all(self) -> None:
@@ -1585,6 +1709,9 @@ class PluginManager:
 
         # 移除该插件已注册的 UI 路由（防止旧实例路由继续响应请求）
         self._remove_plugin_routes(metadata)
+
+        # 回收该插件的定时消息（terminate 是 fire-and-forget，不能依赖它）
+        self._purge_plugin_timers(metadata.name)
 
         metadata.plugin_instance = None
         metadata.enabled = False

@@ -184,7 +184,8 @@ class LiveWebSocket:
                 return
 
             self._retry_count += 1
-            delay = 2.0 * self._retry_count
+            # 指数退避:2s → 4s → 8s → 16s → 32s(_MAX_RETRIES=5)
+            delay = min(2.0 ** self._retry_count, 60.0)
             await asyncio.sleep(delay)
 
             try:

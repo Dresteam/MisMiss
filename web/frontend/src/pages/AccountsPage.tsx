@@ -197,7 +197,12 @@ export function AccountsPage() {
                 {/* 统计 */}
                 <div className="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400">
                   <span className="flex items-center gap-1"><Puzzle className="w-3.5 h-3.5" />插件 {acc.enabled_plugin_count}/{acc.plugin_count}</span>
-                  <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" />定时 {acc.timer_message_count}</span>
+                  <span className="flex items-center gap-1" title="面板添加的普通定时消息数">
+                    <Clock className="w-3.5 h-3.5" />普通 {acc.normal_timer_message_count}
+                  </span>
+                  <span className="flex items-center gap-1" title="插件注册的定时消息数">
+                    <Hourglass className="w-3.5 h-3.5" />插件定时 {acc.plugin_timer_message_count}
+                  </span>
                 </div>
                 {acc.resume_error && (
                   <p className="text-xs text-red-600 dark:text-red-400 truncate" title={acc.resume_error}>

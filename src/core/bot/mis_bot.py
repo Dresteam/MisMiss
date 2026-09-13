@@ -10,7 +10,8 @@ import asyncio
 import time
 import uuid
 from collections import namedtuple
-from typing import TYPE_CHECKING, Optional
+from collections.abc import Callable
+from typing import Optional
 
 from interfaces.bot.bot import Bot, BotPermission
 from interfaces.entity.gift import Gift
@@ -30,14 +31,16 @@ from ..network.endpoints.gift import GiftSendAPI
 from ..network.endpoints.message import MessageSendAPI
 from ..network.endpoints.online import OnlineAPI
 
-if TYPE_CHECKING:
-    pass
-
 # 内部使用的消息条目
 _MessageItem = namedtuple("_MessageItem", ["priority", "live_id", "message"])
 
 # 定时消息条目
-_TimerEntry = namedtuple("_TimerEntry", ["message_id", "live_id", "message"])
+# ``only_when_live`` 目前仅由插件消息使用：为 True 时直播间未开播则跳过该条
+_TimerEntry = namedtuple(
+    "_TimerEntry",
+    ["message_id", "live_id", "message", "only_when_live"],
+    defaults=(False,),
+)
 
 # 默认定时消息间隔（秒）
 _DEFAULT_TIMER_INTERVAL: float = 120.0
@@ -94,6 +97,15 @@ class MissevanBot(Bot):
         # 每个直播间独立的定时消息队列
         self._room_timer_entries: dict[int, dict[str, _TimerEntry]] = {}
         self._room_timer_cycles: dict[int, list[str]] = {}
+        # 插件注册的定时消息队列（与房间队列平行，但合并轮转时置顶）
+        # 插件消息不参与持久化，由 PluginManager 在插件停用时按插件名清理
+        self._plugin_timer_entries: dict[int, dict[str, _TimerEntry]] = {}
+        self._plugin_timer_cycles: dict[int, list[str]] = {}
+        self._plugin_timer_owners: dict[str, str] = {}  # message_id -> plugin_name
+        # 合并轮转缓存：三段拼接结果，结构性变更时整体失效
+        self._cycle_cache: dict[int, list[str]] = {}
+        # 「直播间是否开播」查询函数，由 Server 注入（插件消息的仅开播条件用）
+        self._live_checker: Callable[[int], bool] | None = None
         # 每个直播间的合并轮转位置指针: live_id -> 轮转索引
         self._room_positions: dict[int, int] = {}
         self._timer_task: asyncio.Task[None] | None = None
@@ -502,6 +514,7 @@ class MissevanBot(Bot):
             # 初始化该直播间的轮转位置指针
             self._room_positions.setdefault(live_id, 0)
 
+        self._invalidate_cycles()
         self._ensure_timer_running()
         _log.info(
             "定时消息已注册: id={} live={} msg={} 全局={}",
@@ -513,8 +526,14 @@ class MissevanBot(Bot):
     def unregister_timer_message(self, message_id: str) -> None:
         """取消注册的定时消息。
 
+        插件注册的消息不可由此删除——请用
+        :meth:`unregister_plugin_timer_messages`。
+
         :param message_id: :meth:`register_timer_message` 返回的消息 ID
         """
+        if self.is_plugin_timer_message(message_id):
+            _log.warning("插件定时消息不可删除: id={}", message_id)
+            return
         # 全局队列
         if message_id in self._global_timer_entries:
             del self._global_timer_entries[message_id]
@@ -532,6 +551,7 @@ class MissevanBot(Bot):
                 self._room_timer_cycles.pop(live_id, None)
                 self._room_timer_entries.pop(live_id, None)
                 self._room_positions.pop(live_id, None)
+        self._invalidate_cycles()
         _log.info("定时消息已取消: id={}", message_id)
 
     def register_timer_messages(
@@ -551,6 +571,129 @@ class MissevanBot(Bot):
         """
         for mid in message_ids:
             self.unregister_timer_message(mid)
+
+    # ------------------------------------------------------------------ #
+    # 定时消息 —— 插件消息
+    #
+    # 与普通消息的区别：
+    #   - 只能通过本组方法注册/清理（插件侧入口见 Plugin.register_timer_message）
+    #   - 不参与持久化（export_timer_state 不导出，插件重启后自行重新注册）
+    #   - 合并轮转时置顶，但与普通消息共用同一个执行指针
+    #   - 不可编辑 / 删除 / 重排（只能整插件清理）
+    # ------------------------------------------------------------------ #
+
+    def register_plugin_timer_message(
+        self,
+        plugin_name: str,
+        live_id: int,
+        message: str,
+        *,
+        only_when_live: bool = False,
+    ) -> str:
+        """注册一条插件定时消息（置顶于合并轮转）。
+
+        :param plugin_name: 注册方插件名（用于按插件批量清理）
+        :param live_id: 目标直播间 ID
+        :param message: 消息文本
+        :param only_when_live: 为 ``True`` 时仅在直播间开播期间发送
+        :return: 唯一消息 ID
+        """
+        message_id = uuid.uuid4().hex[:8]
+        entry = _TimerEntry(
+            message_id=message_id,
+            live_id=live_id,
+            message=message,
+            only_when_live=only_when_live,
+        )
+
+        self._plugin_timer_entries.setdefault(live_id, {})[message_id] = entry
+        self._plugin_timer_cycles.setdefault(live_id, []).append(message_id)
+        self._plugin_timer_owners[message_id] = plugin_name
+        # 插件消息插在合并轮转最前面 → 既有指针整体后移一位，保持指向同一条消息
+        self._shift_positions(live_id, 1)
+        self._room_positions.setdefault(live_id, 0)
+
+        self._invalidate_cycles()
+        self._ensure_timer_running()
+        _log.info(
+            "插件定时消息已注册: id={} live={} plugin={} msg={}",
+            message_id, live_id, plugin_name, message[:30],
+        )
+        return message_id
+
+    def unregister_plugin_timer_messages(self, plugin_name: str) -> int:
+        """清理某个插件注册的全部定时消息（跨所有直播间）。
+
+        :param plugin_name: 插件名
+        :return: 实际清理的消息条数
+        """
+        removed = 0
+        for live_id in list(self._plugin_timer_cycles.keys()):
+            cycle = self._plugin_timer_cycles[live_id]
+            keep = [m for m in cycle if self._plugin_timer_owners.get(m) != plugin_name]
+            if len(keep) == len(cycle):
+                continue
+            dropped = len(cycle) - len(keep)
+            entries = self._plugin_timer_entries.get(live_id, {})
+            for mid in cycle:
+                if self._plugin_timer_owners.get(mid) == plugin_name:
+                    entries.pop(mid, None)
+                    self._plugin_timer_owners.pop(mid, None)
+            # 指针前移相同位数，保持指向同一条消息
+            self._shift_positions(live_id, -dropped)
+            if keep:
+                self._plugin_timer_cycles[live_id] = keep
+            else:
+                self._plugin_timer_cycles.pop(live_id, None)
+                self._plugin_timer_entries.pop(live_id, None)
+            removed += dropped
+
+        if removed:
+            self._invalidate_cycles()
+            _log.info("插件 {} 的 {} 条定时消息已清理", plugin_name, removed)
+        return removed
+
+    def is_plugin_timer_message(self, message_id: str) -> bool:
+        """该消息是否由插件注册。"""
+        return message_id in self._plugin_timer_owners
+
+    def set_live_checker(self, checker: Callable[[int], bool] | None) -> None:
+        """注入「直播间是否开播」查询函数，供插件消息的仅开播条件使用。
+
+        由 :class:`~core.server.MissevanServer` 在创建/替换 Bot 时注入
+        （Bot 自身不持有直播间对象）。
+
+        :param checker: ``(live_id) -> bool``，传 ``None`` 取消注入
+        """
+        self._live_checker = checker
+
+    def _is_live(self, live_id: int) -> bool:
+        """直播间是否开播。
+
+        未注入检查器或查询异常时一律视为开播——「仅开播时发送」是过滤条件，
+        不应因为查不到状态就把消息吞掉。
+        """
+        if self._live_checker is None:
+            return True
+        try:
+            return bool(self._live_checker(live_id))
+        except Exception:
+            return True
+
+    def _shift_positions(self, live_id: int, delta: int) -> None:
+        """补偿插件消息增删导致的合并轮转下标偏移。
+
+        插件消息位于合并轮转最前面，增删一条会让该房间的既有下标整体错位，
+        因此把指针做等量位移，使指针仍指向原来那条消息（与
+        :meth:`set_timer_interval` 不重置指针的约定一致）。
+
+        插件队列按直播间分桶，故只有该直播间的轮转受影响。
+
+        :param live_id: 发生变化的直播间
+        :param delta: 新增为 ``1``，删除为负的删除条数
+        """
+        if live_id in self._room_positions:
+            self._room_positions[live_id] += delta
 
     # ------------------------------------------------------------------ #
     # 定时消息 —— 持久化（随 state 文件保存，重启 / Cookie 更新后恢复）
@@ -605,6 +748,7 @@ class MissevanBot(Bot):
                 )
                 self._room_timer_entries.setdefault(live_id, {})[entry.message_id] = entry
                 self._room_timer_cycles.setdefault(live_id, []).append(entry.message_id)
+        self._invalidate_cycles()
         if self._enabled:
             # 仅启用状态才启动计时循环，避免停用期间每间隔空转告警
             self._ensure_timer_running()
@@ -624,13 +768,17 @@ class MissevanBot(Bot):
         return max(0.0, self._next_tick_at - time.monotonic())
 
     def list_timer_messages(self) -> dict:
-        """列出全局与各直播间的定时消息（含轮转指针与倒计时）。
+        """列出插件、全局与各直播间的定时消息（含轮转指针与倒计时）。
 
-        每个直播间按「全局消息 + 独立消息」组成合并轮转，
-        每 ``timer_interval`` 秒发送一条；倒计时即该消息
-        轮到执行时距当前时刻的秒数。
+        每个直播间的合并轮转为「插件消息 → 全局消息 → 房间独立消息」，
+        每 ``timer_interval`` 秒发送一条；倒计时即该消息轮到执行时
+        距当前时刻的秒数。房间的 ``messages`` 按合并轮转顺序返回，
+        因此 ``position % len(messages)`` 即当前指针所指。
 
-        :return: ``{"interval", "next_tick_in", "global": [...], "rooms": [...]}``
+        每条消息带 ``source``（``"plugin"`` / ``"normal"``）与
+        ``plugin_name``，供前端区分插件托管的消息。
+
+        :return: ``{"interval", "next_tick_in", "global", "plugin", "rooms"}``
         """
         interval = self._timer_interval
         next_tick_in = self.timer_next_tick_in()
@@ -641,12 +789,42 @@ class MissevanBot(Bot):
 
             :param idx: 消息在合并轮转中的索引
             :param pos: 当前执行指针
-            :param length: 合并轮转总长度（全局 + 独立）
+            :param length: 合并轮转总长度（插件 + 全局 + 房间）
             """
             if length <= 0:
                 return 0
             ticks = (idx - pos) % length
             return int(next_tick_in + ticks * interval)
+
+        def _plugin_len(live_id: int) -> int:
+            return len(self._plugin_timer_cycles.get(live_id, []))
+
+        def _merged_len(live_id: int) -> int:
+            return (
+                _plugin_len(live_id)
+                + global_len
+                + len(self._room_timer_cycles.get(live_id, []))
+            )
+
+        # 插件消息（倒计时取各直播间中最近的执行时刻，与全局消息同理）
+        plugin_list = []
+        for live_id in sorted(self._plugin_timer_cycles.keys()):
+            cycle = self._plugin_timer_cycles[live_id]
+            length = _merged_len(live_id)
+            pos = self._room_positions.get(live_id, 0) % max(1, length)
+            for idx, mid in enumerate(cycle):
+                entry = self._plugin_timer_entries.get(live_id, {}).get(mid)
+                if entry is None:
+                    continue
+                plugin_list.append({
+                    "message_id": entry.message_id,
+                    "live_id": live_id,
+                    "message": entry.message,
+                    "index": idx,
+                    "seconds_until_next": _countdown(idx, pos, length),
+                    "source": "plugin",
+                    "plugin_name": self._plugin_timer_owners.get(mid),
+                })
 
         global_list = []
         for idx, mid in enumerate(self._global_timer_cycle):
@@ -656,8 +834,10 @@ class MissevanBot(Bot):
             # 全局消息的倒计时取所有直播间中最近的执行时刻
             min_cd = None
             for live_id, pos in self._room_positions.items():
-                length = global_len + len(self._room_timer_cycles.get(live_id, []))
-                cd = _countdown(idx, pos % max(1, length), length)
+                length = _merged_len(live_id)
+                cd = _countdown(
+                    _plugin_len(live_id) + idx, pos % max(1, length), length
+                )
                 if min_cd is None or cd < min_cd:
                     min_cd = cd
             global_list.append({
@@ -666,24 +846,36 @@ class MissevanBot(Bot):
                 "message": entry.message,
                 "index": idx,
                 "seconds_until_next": min_cd if min_cd is not None else int(next_tick_in),
+                "source": "normal",
+                "plugin_name": None,
             })
 
         rooms = []
-        for live_id in sorted(self._room_timer_cycles.keys()):
-            messages = []
-            cycle = self._room_timer_cycles[live_id]
-            length = global_len + len(cycle)
+        for live_id in sorted(
+            set(self._room_timer_cycles.keys())
+            | set(self._plugin_timer_cycles.keys())
+            | set(self._room_positions.keys())
+        ):
+            # 按合并轮转顺序返回（插件段置顶），使 position % len(messages) 即指针
+            cycle = self._combined_cycle(live_id)
+            length = len(cycle)
             pos = self._room_positions.get(live_id, 0) % max(1, length)
+            messages = []
             for idx, mid in enumerate(cycle):
-                entry = self._room_timer_entries.get(live_id, {}).get(mid)
+                entry = self._find_timer_entry(mid)
                 if entry is None:
                     continue
+                is_plugin = self.is_plugin_timer_message(mid)
                 messages.append({
                     "message_id": entry.message_id,
-                    "live_id": live_id,
+                    "live_id": entry.live_id,
                     "message": entry.message,
                     "index": idx,
-                    "seconds_until_next": _countdown(global_len + idx, pos, length),
+                    "seconds_until_next": _countdown(idx, pos, length),
+                    "source": "plugin" if is_plugin else "normal",
+                    "plugin_name": (
+                        self._plugin_timer_owners.get(mid) if is_plugin else None
+                    ),
                 })
             rooms.append({
                 "live_id": live_id,
@@ -694,30 +886,40 @@ class MissevanBot(Bot):
             "interval": interval,
             "next_tick_in": int(next_tick_in),
             "global": global_list,
+            "plugin": plugin_list,
             "rooms": rooms,
         }
 
     def _find_timer_entry(self, message_id: str) -> _TimerEntry | None:
-        """在全局和各直播间队列中查找消息。"""
+        """在插件、全局和各直播间队列中查找消息。"""
         if message_id in self._global_timer_entries:
             return self._global_timer_entries[message_id]
+        for entries in self._plugin_timer_entries.values():
+            if message_id in entries:
+                return entries[message_id]
         for entries in self._room_timer_entries.values():
             if message_id in entries:
                 return entries[message_id]
         return None
 
     def update_timer_message(self, message_id: str, message: str) -> bool:
-        """编辑定时消息内容。
+        """编辑定时消息内容（插件消息不可编辑）。
 
         :param message_id: 消息 ID
         :param message: 新消息文本
         :return: 是否找到并更新
         """
+        if self.is_plugin_timer_message(message_id):
+            _log.warning("插件定时消息不可编辑: id={}", message_id)
+            return False
         old = self._find_timer_entry(message_id)
         if old is None:
             return False
         new_entry = _TimerEntry(
-            message_id=old.message_id, live_id=old.live_id, message=message
+            message_id=old.message_id,
+            live_id=old.live_id,
+            message=message,
+            only_when_live=old.only_when_live,
         )
         if old.live_id == 0:
             self._global_timer_entries[message_id] = new_entry
@@ -727,12 +929,15 @@ class MissevanBot(Bot):
         return True
 
     def move_timer_message(self, message_id: str, direction: int) -> bool:
-        """在所属队列中上移/下移一条定时消息。
+        """在所属队列中上移/下移一条定时消息（插件消息位置固定，不可移动）。
 
         :param message_id: 消息 ID
         :param direction: ``-1`` 上移一位，``1`` 下移一位
         :return: 是否成功移动
         """
+        if self.is_plugin_timer_message(message_id):
+            _log.warning("插件定时消息不可移动: id={}", message_id)
+            return False
         old = self._find_timer_entry(message_id)
         if old is None:
             return False
@@ -745,6 +950,7 @@ class MissevanBot(Bot):
         if new_idx < 0 or new_idx >= len(cycle):
             return False  # 已在边界
         cycle[idx], cycle[new_idx] = cycle[new_idx], cycle[idx]
+        self._invalidate_cycles()  # 原地交换，缓存持有的拼接副本不会同步更新
         _log.info("定时消息已移动: id={} {}→{}", message_id, idx, new_idx)
         return True
 
@@ -810,24 +1016,20 @@ class MissevanBot(Bot):
             if not target_live_id or target_live_id <= 0:
                 _log.warning("全局定时消息立即发送需要目标直播间: id={}", message_id)
                 return False
-            send_entry = _TimerEntry(entry.message_id, target_live_id, entry.message)
-            # 推进该直播间的轮转指针越过这条全局消息
-            pos = self._room_positions.get(target_live_id)
-            if pos is not None and self._global_timer_cycle:
-                idx = self._global_timer_cycle.index(message_id)
-                self._room_positions[target_live_id] = (
-                    (idx + 1) % len(self._combined_cycle(target_live_id))
-                )
+            send_entry = _TimerEntry(
+                entry.message_id, target_live_id, entry.message, entry.only_when_live
+            )
+            room_id = target_live_id
         else:
+            # 房间消息与插件消息都发往其所属直播间
             send_entry = entry
-            pos = self._room_positions.get(entry.live_id)
-            cycle = self._room_timer_cycles.get(entry.live_id, [])
-            if pos is not None and cycle:
-                idx = cycle.index(message_id)
-                self._room_positions[entry.live_id] = (
-                    (len(self._global_timer_cycle) + idx + 1)
-                    % len(self._combined_cycle(entry.live_id))
-                )
+            room_id = entry.live_id
+
+        # 推进该直播间的合并轮转指针越过这条消息（视为立即执行）。
+        # 用合并轮转定位，三段（插件/全局/房间）消息统一处理。
+        cycle = self._combined_cycle(room_id)
+        if cycle and message_id in cycle:
+            self._room_positions[room_id] = (cycle.index(message_id) + 1) % len(cycle)
 
         _log.info("定时消息立即发送: id={} live={}", message_id, send_entry.live_id)
         return await self._send_message_entry(send_entry)
@@ -867,7 +1069,9 @@ class MissevanBot(Bot):
             # 轮转目标 = 有消息的直播间 ∪ 有位置指针的直播间
             # (全局消息重定向目标/账户单房间场景下,房间可能没有独立消息)
             room_ids = sorted(
-                set(self._room_timer_cycles.keys()) | set(self._room_positions.keys())
+                set(self._room_timer_cycles.keys())
+                | set(self._plugin_timer_cycles.keys())
+                | set(self._room_positions.keys())
             )
             for live_id in room_ids:
                 ok = await self._send_next_combined(live_id)
@@ -876,16 +1080,43 @@ class MissevanBot(Bot):
                     return
 
     def _has_any_timer_messages(self) -> bool:
-        """是否还有任何定时消息(全局队列与各直播间队列)。"""
-        return bool(self._global_timer_cycle or self._room_timer_cycles)
+        """是否还有任何定时消息(插件队列、全局队列与各直播间队列)。"""
+        return bool(
+            self._plugin_timer_cycles
+            or self._global_timer_cycle
+            or self._room_timer_cycles
+        )
 
     def _combined_cycle(self, live_id: int) -> list[str]:
-        """该直播间当前的合并轮转：全局消息在前，独立消息在后。
+        """该直播间当前的合并轮转：插件消息置顶，其次全局，最后房间独立消息。
+
+        结果按直播间缓存，队列结构变化时由 :meth:`_invalidate_cycles` 失效。
+        返回值仅供读取，调用方不得修改。
 
         :param live_id: 直播间 ID
         :return: message_id 轮转列表
         """
-        return self._global_timer_cycle + self._room_timer_cycles.get(live_id, [])
+        cached = self._cycle_cache.get(live_id)
+        if cached is not None:
+            return cached
+        cycle = (
+            self._plugin_timer_cycles.get(live_id, [])
+            + self._global_timer_cycle
+            + self._room_timer_cycles.get(live_id, [])
+        )
+        self._cycle_cache[live_id] = cycle
+        return cycle
+
+    def _invalidate_cycles(self) -> None:
+        """丢弃合并轮转缓存。
+
+        **不变量**：任何对 ``_global_timer_cycle`` / ``_room_timer_cycles`` /
+        ``_plugin_timer_cycles`` 的改动——包括原地交换这类不改变容器本身的操作
+        ——都必须调用本方法；缓存保存的是拼接后的副本，不会自动跟随源列表。
+
+        直播间数量很少，整体清空即可，无需按房间精细失效。
+        """
+        self._cycle_cache.clear()
 
     async def _send_message_entry(self, entry: _TimerEntry) -> bool:
         """发送一条定时消息（处理异常）。
@@ -942,9 +1173,16 @@ class MissevanBot(Bot):
         entry = self._find_timer_entry(msg_id)
         if entry is None:
             return True
+        # 插件消息可声明「仅开播时发送」：未开播则跳过本条（指针已推进）
+        target = live_id if entry.live_id == 0 else entry.live_id
+        if entry.only_when_live and not self._is_live(target):
+            _log.debug("直播间未开播，跳过定时消息 id={} live={}", msg_id, target)
+            return True
         # 全局消息发送到目标直播间（entry.live_id == 0，重定向到 live_id）
         if entry.live_id == 0:
-            entry = _TimerEntry(entry.message_id, live_id, entry.message)
+            entry = _TimerEntry(
+                entry.message_id, live_id, entry.message, entry.only_when_live
+            )
         return await self._send_message_entry(entry)
 
     def _clear_all_timer_queues(self) -> None:
@@ -953,14 +1191,28 @@ class MissevanBot(Bot):
         self._global_timer_cycle.clear()
         self._room_timer_entries.clear()
         self._room_timer_cycles.clear()
+        self._plugin_timer_entries.clear()
+        self._plugin_timer_cycles.clear()
+        self._plugin_timer_owners.clear()
         self._room_positions.clear()
+        self._invalidate_cycles()
 
     @property
-    def timer_message_count(self) -> int:
-        """当前注册的定时消息数量（只读）。"""
+    def normal_timer_message_count(self) -> int:
+        """普通（非插件）定时消息数量（只读）。"""
         return len(self._global_timer_cycle) + sum(
             len(c) for c in self._room_timer_cycles.values()
         )
+
+    @property
+    def plugin_timer_message_count(self) -> int:
+        """由插件注册的定时消息数量（只读）。"""
+        return sum(len(c) for c in self._plugin_timer_cycles.values())
+
+    @property
+    def timer_message_count(self) -> int:
+        """定时消息总数（普通 + 插件，只读）。"""
+        return self.normal_timer_message_count + self.plugin_timer_message_count
 
     # ------------------------------------------------------------------ #
     # 辅助方法

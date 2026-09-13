@@ -191,8 +191,10 @@ export function PluginLibraryPage() {
                   <Button size="sm" variant="ghost"
                     onClick={async () => {
                       try {
-                        const tb = await fetch(`/api/plugin/failed/${f.dir_name}`, { headers: { Authorization: 'Bearer ' + localStorage.getItem('auth_token') } })
-                          .then((r) => r.json().catch(() => ({})));
+                        const token = localStorage.getItem('auth_token');
+                        const tb = await fetch(`/api/plugin/failed/${f.dir_name}`, {
+                          headers: token ? { Authorization: `Bearer ${token}` } : {},
+                        }).then((r) => r.json().catch(() => ({})));
                         setErrorLog(tb.traceback || f.error || '');
                       } catch { /* ignore */ }
                     }}>日志</Button>

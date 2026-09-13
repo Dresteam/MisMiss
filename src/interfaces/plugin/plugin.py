@@ -14,7 +14,9 @@ from interfaces.plugin.miss_config import MissConfig
 
 if TYPE_CHECKING:
     from interfaces.plugin.plugin import Plugin as _Plugin
+    from interfaces.livestream.livestream import Livestream
     from core.plugin.data_manager import PluginDataManager
+    from core.server import MissevanServer
 
 # ------------------------------------------------------------------ #
 # 插件上下文 —— 用于在执行事件处理器时追踪当前插件，
@@ -52,11 +54,14 @@ class Plugin(Listener, ABC):
     - :attr:`name` — 插件名称
     - :attr:`author` — 插件作者
     - :attr:`plugin_id` — 插件唯一标识（``{author}/{name}``）
+    - :attr:`data` / :attr:`data_dir` — 数据目录与沙箱化读写器
+    - :attr:`_server` — 所属 :class:`~core.server.MissevanServer`
 
     **生命周期钩子**（均可选覆写）：
 
     - :meth:`initialize` — 插件加载、注册到事件总线后调用
     - :meth:`terminate` — 插件卸载或禁用前调用，用于清理资源
+    - :meth:`on_enable` — 已初始化过的实例被重新启用时调用
 
     用法示例::
 
@@ -112,6 +117,13 @@ class Plugin(Listener, ABC):
         self.data.write_json("playlist.json", songs)
     """
 
+    _server: "MissevanServer | None" = None
+    """所属服务器实例，由 PluginManager 注入。
+
+    可用于查询 :attr:`livestreams` 等；:meth:`register_timer_message`
+    也依赖它。未注入时为 ``None``。
+    """
+
     # ------------------------------------------------------------------ #
     # 构造
     # ------------------------------------------------------------------ #
@@ -165,3 +177,70 @@ class Plugin(Listener, ABC):
 
         .. versionadded:: 1.2
         """
+
+    async def on_livestream_bound(self, livestream: "Livestream") -> None:
+        """账户绑定直播间后调用——注册依赖直播间的资源的正确时机。
+
+        触发时机有两种：
+
+        - 账户**新绑定**直播间时
+        - 插件被**启用 / 重新启用**时，若账户已绑定直播间，框架会补发一次
+
+        因此插件不必再靠弹幕事件兜底重试：把 :meth:`register_timer_message`
+        等依赖直播间的注册动作放在这里，就能保证「启用时有直播间」与
+        「启用后才绑定直播间」两条路径都被覆盖到。
+
+        :param livestream: 已绑定的直播间实例
+
+        .. versionadded:: 1.3
+        """
+
+    # ------------------------------------------------------------------ #
+    # 定时消息（插件注册的唯一入口）
+    # ------------------------------------------------------------------ #
+
+    def register_timer_message(
+        self, message: str, *, only_when_live: bool = False
+    ) -> str:
+        """注册一条定时消息（**插件消息**）。
+
+        这是插件注册定时消息的唯一入口。经此注册的消息会被标记为插件消息，
+        与面板添加的普通消息区别对待：
+
+        - **不写入**持久化文件——插件重启后自行重新注册，不会因异常终止
+          而在队列里残留、进而在下次启动时重复注册
+        - 面板**不可编辑 / 删除 / 上下移动**（但可「跳过」或「立即发送」）
+        - 在轮转中**置顶**，与普通消息共用同一个执行指针
+
+        框架会在插件被禁用/挂起/卸载/重载时自动清理其全部插件消息，
+        因此插件**不需要**自己保存消息 ID 去反注册——注册动作放在
+        :meth:`on_livestream_bound` 里即可，重复启用不会产生重复消息。
+
+        账户尚未绑定直播间时返回空串。正常情况下用 :meth:`on_livestream_bound`
+        作为注册时机就不会遇到；若在别处调用则需自行重试。
+
+        :param message: 消息文本
+        :param only_when_live: 为 ``True`` 时仅在直播间开播期间发送
+        :return: 消息 ID；账户未绑定直播间或 server 未注入时为空串
+
+        .. versionadded:: 1.3
+        """
+        server = self._server
+        if server is None:
+            return ""
+        return server.register_plugin_timer_message(
+            self.name, message, only_when_live=only_when_live
+        )
+
+    def unregister_timer_messages(self) -> None:
+        """撤销本插件注册的全部定时消息。
+
+        通常无需调用——框架会在插件停用时自动清理。仅当插件需要在运行期间
+        主动放弃自己的定时消息时才使用（例如配置变更后准备重新注册）。
+
+        .. versionadded:: 1.3
+        """
+        server = self._server
+        if server is None:
+            return
+        server.unregister_plugin_timer_messages(self.name)

@@ -33,6 +33,19 @@ def _target_room(s: MissevanServer) -> int | None:
     return int(room_id) if room_id else None
 
 
+def _reject_plugin_message(s: MissevanServer, message_id: str, action: str) -> None:
+    """拦截对插件消息的修改操作。
+
+    插件消息的内容与顺序由插件托管,只能「立即发送」或「跳过」
+    (它们只推进共用的轮转指针,不改消息本身)。
+    """
+    if s.is_plugin_timer_message(message_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"插件消息由插件托管,不可{action}",
+        )
+
+
 # ================================================================== #
 # 路由
 # ================================================================== #
@@ -101,8 +114,9 @@ async def timer_add(
 async def timer_update(
     account_id: int, message_id: str, body: dict, s: MissevanServer = Depends(require_active_account)
 ):
-    """编辑定时消息内容。"""
+    """编辑定时消息内容（插件消息不可编辑）。"""
     _require_bot(s)
+    _reject_plugin_message(s, message_id, "编辑")
     message = str(body.get("message", "")).strip()
     if not message:
         raise HTTPException(status_code=400, detail="消息内容不能为空")
@@ -115,8 +129,9 @@ async def timer_update(
 async def timer_delete(
     account_id: int, message_id: str, s: MissevanServer = Depends(require_active_account)
 ):
-    """删除一条定时消息。"""
+    """删除一条定时消息（插件消息不可删除）。"""
     _require_bot(s)
+    _reject_plugin_message(s, message_id, "删除")
     s.unregister_timer_message(message_id)
     return StatusResponse(success=True, message=f"定时消息 {message_id} 已删除")
 
@@ -125,8 +140,9 @@ async def timer_delete(
 async def timer_move(
     account_id: int, message_id: str, body: dict, s: MissevanServer = Depends(require_active_account)
 ):
-    """上移/下移定时消息。"""
+    """上移/下移定时消息（插件消息固定置顶，不可移动）。"""
     _require_bot(s)
+    _reject_plugin_message(s, message_id, "移动")
     direction = int(body.get("direction", 0))
     if direction not in (-1, 1):
         raise HTTPException(status_code=400, detail="direction 必须为 -1 或 1")

@@ -10,6 +10,8 @@ export interface LogEntry {
 interface UseLogStreamReturn {
   entries: LogEntry[];
   connected: boolean;
+  /** WebSocket 因未登录/无权限被拒(关闭码 4401)——此时不再自动重连 */
+  authRequired: boolean;
   loading: boolean;
   latestSeq: number;
   total: number;
@@ -30,6 +32,7 @@ const PAGE_SIZE = 100;
 export function useLogStream(levels: string[] = []): UseLogStreamReturn {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [connected, setConnected] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [latestSeq, setLatestSeq] = useState(0);
   const [total, setTotal] = useState(0);
@@ -207,7 +210,10 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.host; // 含端口（非标准端口时）
       const lv = levelsKey ? `&levels=${encodeURIComponent(levelsKey)}` : '';
-      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?last_seq=${lastSeq}${lv}`;
+      // 浏览器 WebSocket API 无法设置 Authorization header,故 token 走查询参数
+      const token = localStorage.getItem('auth_token');
+      const tk = token ? `&token=${encodeURIComponent(token)}` : '';
+      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?last_seq=${lastSeq}${lv}${tk}`;
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -216,6 +222,7 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
         ws.onopen = () => {
           if (!stopped) {
             setConnected(true);
+            setAuthRequired(false);
             reconnectDelay = 1000; // reset on success
           }
         };
@@ -267,10 +274,15 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
           } catch { /* ignore */ }
         };
 
-        ws.onclose = () => {
+        ws.onclose = (event) => {
           if (!stopped) {
             setConnected(false);
             wsRef.current = null;
+            if (event.code === 4401) {
+              // 未登录 / 非管理员——重连也不会成功,直接停下并交由页面提示
+              setAuthRequired(true);
+              return;
+            }
             reconnectTimer = setTimeout(connect, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 2, 30000); // 1s → 2s → 4s → ... → 30s max
           }
@@ -300,5 +312,5 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
     };
   }, [refreshKey, levelsKey]);
 
-  return { entries, connected, loading, latestSeq, total, hasMore, loadMore, refresh };
+  return { entries, connected, authRequired, loading, latestSeq, total, hasMore, loadMore, refresh };
 }

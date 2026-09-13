@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -49,15 +48,7 @@ def _plugin_to_summary(meta) -> PluginSummary:
         has_config=meta.config_schema_path is not None,
         has_readme=meta.readme_path is not None,
         has_ui=meta.ui_schema_path is not None,
-        has_changelog=bool(
-            meta.module_path and
-            os.path.exists(
-                os.path.join(
-                    os.path.dirname(meta.module_path.replace(".", "/")),
-                    "CHANGELOG.md",
-                )
-            )
-        ),
+        has_changelog=meta.changelog_path is not None,
     )
 
 
@@ -385,18 +376,6 @@ async def plugin_readme(
     """获取插件的 README.md 内容。"""
     try:
         content = s.get_plugin_readme(plugin_name)
-        return {"content": content or "", "plugin_name": plugin_name}
-    except CorePluginNotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.get("/{plugin_name}/changelog")
-async def plugin_changelog(
-    plugin_name: str, account_id: int, s: MissevanServer = Depends(require_account)
-):
-    """获取插件的 CHANGELOG.md 内容。"""
-    try:
-        content = s.get_plugin_changelog(plugin_name)
         return {"content": content or "", "plugin_name": plugin_name}
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))

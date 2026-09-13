@@ -93,6 +93,9 @@ class PluginMetadata:
     readme_path: str | None = None
     """``README.md`` 的绝对路径，若不存在则为 ``None``。"""
 
+    changelog_path: str | None = None
+    """``CHANGELOG.md`` 的绝对路径，若不存在则为 ``None``。"""
+
     requirements_path: str | None = None
     """``requirements.txt`` 的绝对路径，若不存在则为 ``None``。"""
 

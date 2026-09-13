@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Loader2 } from 'lucide-react';
+import { X } from 'lucide-react';
 import { Button } from './Button';
 import type { AccountCreateRequest, RenewRequest } from '../api/types';
 
@@ -276,10 +276,3 @@ export function CredentialsDialog({
   );
 }
 
-// ================================================================== //
-// 通用操作中状态
-// ================================================================== //
-
-export function InlineLoader() {
-  return <Loader2 className="w-4 h-4 animate-spin" />;
-}

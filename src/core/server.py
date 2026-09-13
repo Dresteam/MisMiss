@@ -71,6 +71,7 @@ class MissevanServer(ServerInterface):
             timer_interval=self._config.get_float("bot.timer_interval", 60.0),
         )
         self._bot_available: bool = False
+        self._bind_bot_live_checker()
         self._bot_cookie: str = ""
         self._bot_permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
         self._livestreams: dict[int, MissevanLivestream] = {}
@@ -242,6 +243,7 @@ class MissevanServer(ServerInterface):
         # 2. 切换到新 Bot（保留定时消息，避免更新 Cookie 后丢失）
         bot.restore_timer_state(self._bot.export_timer_state())
         self._bot = bot
+        self._bind_bot_live_checker()
         self._bot_available = True
         self._bot_cookie = cookie
         self._bot_permissions = permissions
@@ -339,6 +341,7 @@ class MissevanServer(ServerInterface):
                 "",
                 timer_interval=self._config.get_float("bot.timer_interval", 60.0),
             )
+            self._bind_bot_live_checker()
             self._bot_available = False
             self._bot_cookie = ""
             self._bot_permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
@@ -458,6 +461,8 @@ class MissevanServer(ServerInterface):
         _log.info(
             "直播间已添加: live_id={} name={}", live_id, livestream.room_name
         )
+        # 通知已启用插件：账户已绑定直播间（插件据此注册依赖直播间的资源）
+        await self._plugin_manager.notify_livestream_bound(livestream)
         return livestream
 
     async def remove_livestream(self, live_id: int) -> None:
@@ -567,41 +572,20 @@ class MissevanServer(ServerInterface):
         return metadata
 
     async def enable_plugin(self, plugin_name: str) -> None:
+        """启用插件。
+
+        分支逻辑统一由 :meth:`PluginManager.enable_plugin` 负责——
+        此处若自行复刻一遍，会漏掉它内部的定时消息清理与直播间绑定通知。
+        """
         pm = self._require_plugin_manager()
-        metadata = pm.get_plugin(plugin_name)
-        if metadata is None:
+        if pm.get_plugin(plugin_name) is None:
             raise CorePluginNotFoundException(plugin_name)
-        if metadata.enabled and metadata.plugin_instance is not None:
-            _log.info("插件已处于启用状态: {}", plugin_name)
-            return
-
-        pm._disabled_plugins.discard(plugin_name)
-
-        if metadata.plugin_instance is None:
-            # 尚未激活 → 完整加载（_activate_plugin 内部会处理初始化）
-            try:
-                await pm._activate_plugin(metadata)
-            except Exception as e:
-                raise CorePluginLoadException(plugin_name, str(e))
-        elif not metadata.initialized:
-            # 实例已存在（由 set_app 提前创建）但从未初始化
-            try:
-                await pm._finish_activation(metadata)
-            except Exception as e:
-                raise CorePluginLoadException(plugin_name, str(e))
-        else:
-            # 已初始化，仅重新注册到事件总线（从 suspend 恢复）
-            pm._event_bus.register_new_event(metadata.plugin_instance)
-            if pm._command_router is not None:
-                pm._command_router.register_plugin(metadata.plugin_instance)
-            metadata.enabled = True
-            # 重新启用已初始化实例 → 调用 on_enable 钩子（恢复定时消息等）
-            try:
-                await metadata.plugin_instance.on_enable()
-            except Exception as e:
-                _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
-
-        _log.info("插件已启用: {}", plugin_name)
+        try:
+            await pm.enable_plugin(plugin_name)
+        except CorePluginLoadException:
+            raise
+        except Exception as e:
+            raise CorePluginLoadException(plugin_name, str(e))
         self._save_state()
 
     async def disable_plugin(self, plugin_name: str) -> None:
@@ -716,8 +700,89 @@ class MissevanServer(ServerInterface):
         self._bot.unregister_timer_messages(message_ids)
         self._save_state()
 
+    # ---------------- 插件定时消息 ----------------
+    #
+    # 与普通消息分类的依据：凡经此组接口注册的都算插件消息
+    # （插件侧唯一入口是 Plugin.register_timer_message）。
+    # 插件消息不写入 state 文件、面板不可编辑/删除/重排、轮转时置顶。
+
+    def register_plugin_timer_message(
+        self, plugin_name: str, message: str, *, only_when_live: bool = False
+    ) -> str:
+        """注册一条插件定时消息。
+
+        账户未绑定直播间时返回空串（不抛异常），由插件稍后重试——
+        沿用插件既有的「未就绪就等下次」模式。
+
+        :param plugin_name: 注册方插件名
+        :param message: 消息文本
+        :param only_when_live: 为 ``True`` 时仅在直播间开播期间发送
+        :return: 消息 ID；账户未绑定直播间时为空串
+        """
+        live_id = self._account_room_id()
+        if live_id <= 0:
+            _log.info("账户未绑定直播间，插件 {} 的定时消息暂不注册", plugin_name)
+            return ""
+        return self._bot.register_plugin_timer_message(
+            plugin_name, live_id, message, only_when_live=only_when_live
+        )
+
+    def unregister_plugin_timer_messages(self, plugin_name: str) -> int:
+        """清理某个插件的全部定时消息。
+
+        插件消息不落盘，故无需保存状态。
+
+        :param plugin_name: 插件名
+        :return: 实际清理的条数
+        """
+        return self._bot.unregister_plugin_timer_messages(plugin_name)
+
+    def is_plugin_timer_message(self, message_id: str) -> bool:
+        """该定时消息是否由插件注册（决定面板能否编辑/删除）。"""
+        return self._bot.is_plugin_timer_message(message_id)
+
+    def _account_room_id(self) -> int:
+        """账户绑定的直播间 ID（多账户模型下一个账户仅一个直播间）。"""
+        room_id = getattr(self.account_record, "room_id", None)
+        if room_id:
+            try:
+                return int(room_id)
+            except (TypeError, ValueError):
+                pass
+        return next(iter(self._livestreams.keys()), 0)
+
+    def _bind_bot_live_checker(self) -> None:
+        """把「直播间是否开播」的查询能力交给 Bot。
+
+        Bot 不持有直播间对象，插件消息的「仅开播时发送」条件需要由
+        Server 提供这一查询。每次替换 ``self._bot`` 后都必须重新绑定。
+        """
+        self._bot.set_live_checker(self._is_livestream_live)
+
+    def _is_livestream_live(self, live_id: int) -> bool:
+        """该直播间当前是否开播。
+
+        查不到直播间时返回 ``True``（不拦截）——「仅开播时发送」是过滤条件，
+        不应因为状态缺失就把消息吞掉。
+        """
+        live = self._livestreams.get(live_id)
+        if live is None:
+            return True
+        return bool(getattr(live, "is_streaming", False))
+
+    @property
+    def normal_timer_message_count(self) -> int:
+        """普通（非插件）定时消息数量。"""
+        return self._bot.normal_timer_message_count
+
+    @property
+    def plugin_timer_message_count(self) -> int:
+        """由插件注册的定时消息数量。"""
+        return self._bot.plugin_timer_message_count
+
     @property
     def timer_message_count(self) -> int:
+        """定时消息总数（普通 + 插件）。"""
         return self._bot.timer_message_count
 
     def list_timer_messages(self) -> dict:
@@ -858,6 +923,7 @@ class MissevanServer(ServerInterface):
                 permissions=permissions,
                 timer_interval=self._config.get_float("bot.timer_interval", 60.0),
             )
+            self._bind_bot_live_checker()
             await self._bot.refresh()
             self._bot_available = True
             self._bot_cookie = cookie

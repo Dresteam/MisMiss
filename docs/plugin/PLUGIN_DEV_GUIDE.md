@@ -579,18 +579,58 @@ PluginManager                    PluginManager                    EventBus
 
 ### 11.3 定时消息
 
-注册到**账户直播间队列**（账户仅一个直播间，统一由该队列轮转发送）：
+插件注册定时消息有**唯一入口** —— 基类的 `self.register_timer_message()`，
+注册时机则是 `on_livestream_bound` 钩子：
 
 ```python
-async def initialize(self, config: MissConfig) -> None:
-    # 获取账户直播间 ID
-    lives = self._server.livestreams
-    room_id = next(iter(lives.keys()), 0)
-    if room_id > 0:
-        mid = self._server.register_timer_message(room_id, "欢迎来到直播间～")
+async def on_livestream_bound(self, livestream) -> None:
+    # 账户已绑定直播间——注册依赖直播间的资源
+    text = self._config.get_str("my_timer_message", "欢迎来到直播间～")
+    if text:
+        self.register_timer_message(text)
 ```
 
-不要使用 `live_id=0`（全局队列）：多账户版本下账户消息统一注册在房间队列，定时消息页与轮转发送都基于它。
+**为什么用 `on_livestream_bound` 而不是 `initialize`**：账户可能尚未绑定直播间。
+该钩子在两种时机触发，两条路径都能覆盖：
+
+- 账户**新绑定**直播间时
+- 插件被**启用 / 重新启用**时，若账户已绑定直播间，框架会**补发**一次
+
+因此**不需要**再靠弹幕事件兜底重试注册。若仍在 `initialize` 里注册，就必须自行处理
+「返回空串 → 以后重试」的分支。
+
+经此注册的消息是**插件消息**，与面板添加的普通消息区别对待：
+
+| 维度 | 普通消息 | 插件消息 |
+|------|---------|---------|
+| 注册途径 | 面板「定时消息」页 | `self.register_timer_message()` |
+| 持久化 | 写入账户 state 文件 | **不写入** |
+| 编辑 / 删除 / 排序 | 允许 | **禁止** |
+| 立即发送 / 跳过 | 允许 | **允许**（只推进指针，不改消息） |
+| 轮转位置 | 队列中段 | **置顶**（在全局消息与房间消息之前） |
+| 执行指针 | 与插件消息共用同一个 | 同左 |
+| 生命周期 | 由面板管理 | 插件停用 / 挂起 / 卸载 / 重载时**由框架自动清理** |
+
+**插件不需要自己保存 `message_id`**。框架在插件停用时回收其全部插件消息，激活前还会先清一遍——
+因此即使上一次是异常终止（`terminate` 没跑到），重新启用也不会累积出重复消息。
+只有在运行期想主动放弃自己的定时消息时才调用 `self.unregister_timer_messages()`（撤销本插件全部）。
+
+**仅开播时发送**：把 `only_when_live` 置为 `True`，该消息在直播间未开播期间会被自动跳过
+（跳过时指针照常推进，不影响其他消息的轮转）：
+
+```python
+async def on_livestream_bound(self, livestream) -> None:
+    self.register_timer_message("本场直播的欢迎语", only_when_live=True)
+```
+
+**账户未绑定直播间时** `register_timer_message()` 返回空串（不抛异常）。
+用 `on_livestream_bound` 作为注册时机就不会遇到这种情况；若确实在别处调用，
+需自行判断返回值并稍后重试。
+
+**不要**改用 `self._server.register_timer_message(live_id, msg)`：那是普通消息通道，
+经它注册的消息会落盘、面板可编辑删除，失去插件消息的全部保护。
+
+> 发送间隔 `timer_interval` 是账户级的，插件消息与普通消息共用。
 
 ### 11.4 Bot 权限天花板
 
@@ -612,7 +652,11 @@ async def initialize(self, config: MissConfig) -> None:
 
 ### 11.6 重要约束
 
-- **模块级全局变量跨账户共享**：同一进程内所有账户共用 Python 模块缓存（`sys.modules`）。插件状态必须放在实例属性上（或使用 `self.data`），**禁止**用模块级变量保存可写状态；
+- **状态优先放实例属性**：每个账户的插件模块是**独立加载**的（按副本绝对路径加载，模块名含路径指纹），
+  模块级变量不再跨账户共享。但仍建议把可写状态放在实例属性或 `self.data` 上——
+  同一账户内重载插件会重新执行模块代码，模块级状态同样会丢；
+- **副本即运行代码**：账户从插件库「安装」后，实际运行的是 `data/accounts/{id}/installed_plugins/<name>/`
+  下的**副本**。改库不会影响已安装账户，需在账户插件页点「更新」才会覆盖副本；
 - 必须单 worker 部署（`MISMISS_WORKERS=1`），连接/定时器/插件实例均为单实例资源；
 - 建议账户规模 ≤ 30~50（每账户 ≈ 1 个 WebSocket 连接 + 1 个定时循环 + N 个插件实例）。
 
@@ -630,27 +674,27 @@ async def initialize(self, config: MissConfig) -> None:
 | `self.data_dir` | `str` | 实例化后 | 数据目录路径 |
 | `self.data` | `PluginDataManager\|None` | 实例化后 | 数据文件管理器 |
 | `self.permissions` | `dict\|None` | `__init__` | 运行时权限 |
-| `self._server` | `MissevanServer` | 实例化后 | 服务器引用（直播间列表、定时消息等） |
+| `self._server` | `MissevanServer\|None` | 实例化后 | 服务器引用（查询直播间列表等） |
 
 ### 服务引用（self._server）
 
-框架将 `MissevanServer` 实例注入插件，可用于查询直播间列表、注册定时消息等：
+框架将 `MissevanServer` 实例注入插件，可用于查询直播间列表等：
 
 ```python
 async def initialize(self, config: MissConfig) -> None:
     # 账户直播间（多账户版本下账户仅绑定一个直播间）
     lives = self._server.livestreams  # dict[int, MissevanLivestream]
     room_id = next(iter(lives.keys()), 0)
-
-    # 定时消息：注册到账户直播间队列（统一轮转发送）
-    if room_id > 0:
-        mid = self._server.register_timer_message(room_id, "本直播间欢迎语")
-
-        # 取消注册
-        self._server.unregister_timer_message(mid)
 ```
 
-**定时消息轮转**：账户队列每 `timer_interval` 秒发送一条（间隔在账户「定时消息」页实时修改，按账户持久化）。更多操作见 `MissevanServer` 的 `list_timer_messages()` / `update_timer_message()` / `move_timer_message()` / `skip_timer_message_once()` / `send_timer_message_now()`。详见 [11.3 定时消息](#113-定时消息)。
+定时消息请**不要**走 `self._server.register_timer_message()` —— 那是普通消息通道。
+插件注册定时消息一律用基类的 `self.register_timer_message()`，理由与完整对照表见
+[11.3 定时消息](#113-定时消息)。
+
+**定时消息轮转**：每个账户的合并轮转为「插件消息 → 全局消息 → 房间独立消息」，
+每 `timer_interval` 秒发送一条（间隔在账户「定时消息」页实时修改，按账户持久化）。
+面板侧可用的队列操作见 `MissevanServer` 的 `list_timer_messages()` / `update_timer_message()` /
+`move_timer_message()` / `skip_timer_message_once()` / `send_timer_message_now()`。
 
 ### Plugin 生命周期方法
 
@@ -658,6 +702,8 @@ async def initialize(self, config: MissConfig) -> None:
 |------|------|------|
 | `initialize` | `async (config: MissConfig) -> None` | 激活时调用，接收运行时配置 |
 | `terminate` | `async () -> None` | 禁用/卸载前调用，清理资源 |
+| `on_enable` | `async () -> None` | 已初始化过的实例被重新启用时调用 |
+| `on_livestream_bound` | `async (livestream) -> None` | 账户绑定直播间时调用；激活时若已绑定则补发一次 |
 | `register_routes` | `(router: Any) -> None` | Web UI 路由注册 |
 
 ### MissConfig 方法

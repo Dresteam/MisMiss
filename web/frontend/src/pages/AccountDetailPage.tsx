@@ -28,7 +28,6 @@ import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { RenewDialog } from '../components/AccountDialogs';
-import { ReadmeModal } from '../components/ReadmeModal';
 import { PluginDrawer } from '../components/PluginDrawer';
 import { UninstallDialog } from '../components/UninstallDialog';
 import { MarqueeText } from '../components/MarqueeText';
@@ -544,6 +543,8 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
   const [editor, setEditor] = useState<{ messageId?: string; text: string } | null>(null);
   const [editorSaving, setEditorSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TimerMessageItem | null>(null);
+  // 消息来源筛选（展示用，不影响轮转顺序与指针）
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'normal' | 'plugin'>('all');
   // 本地 1s 倒计时:每秒重渲染,减去自上次拉取以来的流逝秒数
   const [, setTick] = useState(0);
   const loadedAtRef = useRef(Date.now());
@@ -583,6 +584,13 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
   const messages = data?.global ?? [];
   const position = data?.rooms?.[0]?.position ?? 0;
   const pointer = messages.length > 0 ? position % messages.length : 0;
+  // 筛选只影响展示：轮转位置一律用后端给的 m.index，
+  // 否则筛选后下标改变会让「▶ 即将执行」和按钮可用性错位
+  const visible = sourceFilter === 'all'
+    ? messages
+    : messages.filter((m) => (m.source ?? 'normal') === sourceFilter);
+  const pluginCount = messages.filter((m) => m.source === 'plugin').length;
+  const normalCount = messages.length - pluginCount;
   // 本地流逝秒数:倒计时每秒递减(30s 静默重同步校正漂移)
   const elapsed = Math.floor((Date.now() - loadedAtRef.current) / 1000);
   const liveCountdown = (s: number) => Math.max(0, s - elapsed);
@@ -594,6 +602,15 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
 
   const saveEditor = async () => {
     if (!editor || !editor.text.trim()) return;
+    if (editor.messageId) {
+      // 客户端兜底：插件托管的消息不可编辑（服务端另有 400 拦截）
+      const target = messages.find((m) => m.message_id === editor.messageId);
+      if (target?.source === 'plugin') {
+        showToast('error', '无法编辑', '插件消息由插件托管');
+        setEditor(null);
+        return;
+      }
+    }
     setEditorSaving(true);
     try {
       if (editor.messageId) {
@@ -670,22 +687,54 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
           {acc.room_name ? `${acc.room_name}（${acc.room_id}）` : `直播间 ${acc.room_id ?? '未绑定'}`} 定时消息
           <span className="text-xs text-gray-400 font-normal">（{messages.length} 条 · 指针 #{messages.length ? pointer + 1 : 0}）</span>
         </h2>
+        {messages.length > 0 && (
+          <div className="flex items-center gap-1 mb-3">
+            {([
+              ['all', `全部 ${messages.length}`],
+              ['normal', `普通 ${normalCount}`],
+              ['plugin', `插件 ${pluginCount}`],
+            ] as const).map(([key, label]) => (
+              <button key={key} onClick={() => setSourceFilter(key)}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
+                  sourceFilter === key
+                    ? 'bg-primary-500 text-white'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {messages.length === 0 ? (
           <p className="text-center text-gray-400 py-6 text-sm">暂无定时消息</p>
+        ) : visible.length === 0 ? (
+          <p className="text-center text-gray-400 py-6 text-sm">
+            没有符合「{sourceFilter === 'plugin' ? '插件' : '普通'}」筛选的消息
+          </p>
         ) : (
           <div className="space-y-3">
-            {messages.map((m, idx) => (
+            {visible.map((m) => {
+              // 插件托管的消息：编辑/删除/移动由服务端拒绝，这里同步置灰
+              const locked = m.source === 'plugin';
+              return (
               <div key={m.message_id}
                 className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:shadow-sm transition-shadow">
-                <span className="text-xs font-bold text-gray-400 w-8 text-center shrink-0">#{idx + 1}</span>
+                <span className="text-xs font-bold text-gray-400 w-8 text-center shrink-0">#{m.index + 1}</span>
                 <div className="min-w-0 flex-1">
                   <div className="overflow-hidden text-sm text-gray-800 dark:text-gray-200">
                     <MarqueeText text={m.message} />
                   </div>
                   <p className="text-[10px] text-gray-400 font-mono mt-0.5">
                     直播间 {acc.room_id ?? '-'} · {m.message_id}
-                    {idx === pointer && (
+                    {m.index === pointer && (
                       <span className="ml-2 text-primary-500 font-semibold">▶ 即将执行</span>
+                    )}
+                    {locked && (
+                      <span
+                        title={`由插件 ${m.plugin_name ?? ''} 托管，不可编辑/删除/移动`}
+                        className="ml-2 px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 font-sans font-semibold">
+                        插件
+                      </span>
                     )}
                   </p>
                 </div>
@@ -696,41 +745,44 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
                 <div className="flex items-center gap-1 shrink-0 w-full lg:w-auto justify-end
                                 border-t border-gray-100 dark:border-gray-700/50 pt-2 mt-1
                                 lg:border-t-0 lg:pt-0 lg:mt-0">
-                  <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors"
-                    disabled={idx === 0 || processing === m.message_id}
+                  <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    disabled={locked || m.index === 0 || processing === m.message_id}
                     onClick={() => act(m.message_id, () => moveAccountTimer(acc.id, m.message_id, -1), '已移动')}>
                     <ChevronUp className="w-4 h-4" />
                   </button>
-                  <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 transition-colors"
-                    disabled={idx === messages.length - 1 || processing === m.message_id}
+                  <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    disabled={locked || m.index === messages.length - 1 || processing === m.message_id}
                     onClick={() => act(m.message_id, () => moveAccountTimer(acc.id, m.message_id, 1), '已移动')}>
                     <ChevronDown className="w-4 h-4" />
                   </button>
                   <button className="relative group p-1.5 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/30 text-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    disabled={idx !== pointer || processing === m.message_id}
+                    disabled={m.index !== pointer || processing === m.message_id}
                     onClick={() => act(m.message_id, () => sendAccountTimerNow(acc.id, m.message_id), '已发送')}>
                     <Send className="w-4 h-4" />
                     <TooltipLabel text="立即发送（仅即将执行的消息）" />
                   </button>
                   <button className="relative group p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    disabled={idx !== pointer || processing === m.message_id}
+                    disabled={m.index !== pointer || processing === m.message_id}
                     onClick={() => act(m.message_id, () => skipAccountTimer(acc.id, m.message_id), '已跳过')}>
                     <SkipForward className="w-4 h-4" />
                     <TooltipLabel text="跳过当前待执行消息（指针后移）" />
                   </button>
-                  <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                  <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    disabled={locked}
                     onClick={() => setEditor({ messageId: m.message_id, text: m.message })}
-                    title="编辑">
+                    title={locked ? '插件消息由插件托管，不可编辑' : '编辑'}>
                     <Pencil className="w-4 h-4" />
                   </button>
-                  <button className="relative group p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                  <button className="relative group p-1.5 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    disabled={locked}
                     onClick={() => setDeleteTarget(m)}>
                     <Trash2 className="w-4 h-4" />
-                    <TooltipLabel text="删除" />
+                    <TooltipLabel text={locked ? '插件消息由插件托管，不可删除' : '删除'} />
                   </button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

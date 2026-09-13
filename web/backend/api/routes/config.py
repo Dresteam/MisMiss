@@ -179,14 +179,20 @@ async def update_ports(
 
 @router.post("/config/pip-install")
 async def pip_install(body: dict):
-    """安装 pip 包。"""
+    """安装 pip 包（管理员）。"""
     pkg = body.get("package", "").strip()
     if not pkg:
         raise HTTPException(status_code=400, detail="请输入包名")
+    # 包名以 "-" 开头会被 pip 当作命令行选项（--target / -r / --index-url 等），
+    # 等于把参数注入交给调用方；此处直接拒绝。
+    if pkg.startswith("-"):
+        raise HTTPException(status_code=400, detail="包名不能以 '-' 开头")
+    if len(pkg) > 200:
+        raise HTTPException(status_code=400, detail="包名过长")
 
     try:
         from pip._internal.cli.main import main as pip_main
-        exit_code = pip_main(["install", "--quiet", pkg])
+        exit_code = pip_main(["install", "--quiet", "--no-input", pkg])
         if exit_code != 0:
             raise HTTPException(status_code=500, detail=f"pip install 失败 (exit {exit_code})")
         return {"success": True, "message": f"{pkg} 已安装"}

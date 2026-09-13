@@ -22,13 +22,6 @@ class StatusResponse(BaseModel):
     message: str = ""
 
 
-class ErrorResponse(BaseModel):
-    """错误响应。"""
-
-    detail: str
-    error_type: str = ""
-
-
 # ================================================================== #
 # Bot
 # ================================================================== #
@@ -194,25 +187,6 @@ class FailedPluginInfo(BaseModel):
 
 
 # ================================================================== #
-# Dashboard
-# ================================================================== #
-
-
-class DashboardResponse(BaseModel):
-    """仪表盘聚合数据。"""
-
-    bot: BotInfoResponse | None = None
-    livestream_count: int = 0
-    livestream_online: int = 0
-    livestream_offline: int = 0
-    plugin_count: int = 0
-    plugin_enabled: int = 0
-    plugin_disabled: int = 0
-    failed_plugin_count: int = 0
-    timer_message_count: int = 0
-
-
-# ================================================================== #
 # Server
 # ================================================================== #
 
@@ -226,20 +200,6 @@ class ServerStatusResponse(BaseModel):
     livestream_count: int = 0
     plugin_count: int = 0
     enabled_plugin_count: int = 0
-
-
-# ================================================================== #
-# WebSocket
-# ================================================================== #
-
-
-class WSLogMessage(BaseModel):
-    """WebSocket 日志消息。"""
-
-    type: str = "log"  # log | status | error
-    level: str = "INFO"
-    message: str
-    timestamp: float = 0.0
 
 
 # ================================================================== #
@@ -323,6 +283,8 @@ class AccountSummary(BaseModel):
     plugin_count: int = 0
     enabled_plugin_count: int = 0
     timer_message_count: int = 0
+    normal_timer_message_count: int = 0
+    plugin_timer_message_count: int = 0
 
 
 class PanelOverview(BaseModel):

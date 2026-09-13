@@ -77,6 +77,7 @@ class Live(LiveWebSocket):
             "room:statistics": self._handle_statistics,
             "message:new": self._handle_message,
             # "message:cross_new": self._handle_message,
+
             "member:join_queue": self._handle_join_queue,
             "member:followed": self._handle_follow,
             "gift:send": self._handle_gift,
@@ -252,7 +253,7 @@ class Live(LiveWebSocket):
 
         titles = data.get("titles", [])
         medal = self._extract_medal(titles)
-        is_admin = self._check_admin(user_id, titles)
+        is_admin = self._check_admin(user_id)
 
         return MissevanLiveUser(
             base_user=base_user,
@@ -280,16 +281,14 @@ class Live(LiveWebSocket):
                 )
         return None
 
-    def _check_admin(self, user_id: int, titles: list[dict[str, Any]]) -> bool:
+    def _check_admin(self, user_id: int) -> bool:
         """判断用户是否为管理员或主播。
 
         检查顺序：
         1. 主播（creator）→ ``True``
         2. Meta API 管理员列表 → ``True``
-        3. 弹幕 title 颜色为 ``#FF8686`` → ``True``
 
         :param user_id: 用户 ID
-        :param titles: WebSocket 传来的 titles JSON 数组
         :return: 是否为管理员或主播
         """
         # 主播
