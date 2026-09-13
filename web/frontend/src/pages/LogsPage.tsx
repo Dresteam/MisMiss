@@ -30,7 +30,7 @@ const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 export function LogsPage() {
   const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
   // 级别筛选下推到后端（源头过滤），级别变化时 hook 自动重连重拉
-  const { entries, connected, loading, total, hasMore, loadMore, refresh } =
+  const { entries, connected, authRequired, loading, total, hasMore, loadMore, refresh } =
     useLogStream([...filterLevels]);
   const [keyword, setKeyword] = useState('');
   const [atBottom, setAtBottom] = useState(true);
@@ -152,7 +152,7 @@ export function LogsPage() {
           <h1 className="text-xl lg:text-2xl font-bold text-gray-900 dark:text-white">服务器日志</h1>
           <p className="text-xs lg:text-sm text-gray-500 dark:text-gray-400 mt-1">
             <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${connected ? 'bg-emerald-500' : 'bg-red-500'}`} />
-            {connected ? '实时' : '离线'} · 已加载 {entries.length} / 共 {total} 条
+            {connected ? '实时' : authRequired ? '未授权（实时推送已停止）' : '离线'} · 已加载 {entries.length} / 共 {total} 条
             {filtered.length !== entries.length && `（筛选后 ${filtered.length} 条）`}
           </p>
         </div>

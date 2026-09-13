@@ -173,17 +173,6 @@ export interface ServerStatus {
 }
 
 // ================================================================== //
-// WebSocket
-// ================================================================== //
-
-export interface WSLogMessage {
-  type: 'log' | 'status' | 'error';
-  level: string;
-  message: string;
-  timestamp: number;
-}
-
-// ================================================================== //
 // 多账户面板
 // ================================================================== //
 
@@ -207,7 +196,12 @@ export interface AccountSummary {
   room_name: string;
   plugin_count: number;
   enabled_plugin_count: number;
+  /** 定时消息总数（普通 + 插件） */
   timer_message_count: number;
+  /** 面板添加的普通定时消息数 */
+  normal_timer_message_count: number;
+  /** 插件注册的定时消息数 */
+  plugin_timer_message_count: number;
 }
 
 export interface PanelOverview {
@@ -292,7 +286,10 @@ export interface LibraryPlugin {
 export interface TimerData {
   interval: number;
   next_tick_in: number;
+  /** 账户单队列展示用：账户直播间的合并轮转列表（插件消息置顶） */
   global: TimerMessageItem[];
+  /** 插件注册的定时消息（`global` 中同样包含，此处为按插件分组的视图） */
+  plugin?: TimerMessageItem[];
   rooms: TimerRoomItem[];
   target_live_id?: number | null;
 }
@@ -303,6 +300,10 @@ export interface TimerMessageItem {
   message: string;
   index: number;
   seconds_until_next: number;
+  /** 注册来源：插件托管的消息不可编辑/删除/移动 */
+  source?: 'plugin' | 'normal';
+  /** `source === 'plugin'` 时，注册该消息的插件名 */
+  plugin_name?: string | null;
 }
 
 export interface TimerRoomItem {

@@ -127,7 +127,12 @@ app.add_middleware(
 # ------------------------------------------------------------------ #
 
 PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/auth/skip-first-login", "/api/health"}
-PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/", "/api/ws", "/api/plugin/install", "/api/config/pip-install")
+# 仅保留确需匿名访问的入口：
+#   /api/auth/   登录与令牌校验本身
+#   /api/proxy/  图片代理——<img> 无法携带 Authorization header,故以「域名白名单 +
+#                内网拦截」收紧可请求目标,而非要求鉴权(见 routes/proxy.py)
+# 注意:WebSocket 握手不经过本中间件,日志流的鉴权在 routes/ws.py 内单独完成。
+PUBLIC_PREFIXES = ("/api/auth/", "/api/proxy/")
 
 
 @app.middleware("http")

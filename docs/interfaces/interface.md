@@ -315,9 +315,24 @@ from interfaces.bot import Bot, BotPermission
 
 **定时消息（合并轮转）：**
 
-- `live_id=0` 注册为全局消息，所有直播间轮播
-- `live_id>0` 注册为该直播间的独立消息
-- 每个直播间按「全局消息在前、独立消息在后」组成合并轮转，每 `timer_interval` 秒发送**一条**，确保各条消息不会同时发送
+- 引擎维护三类队列：插件队列（置顶）、全局队列（`live_id=0`）、直播间队列（`live_id>0`）
+- 每个直播间的合并轮转为「**插件消息 → 全局消息 → 房间消息**」，每 `timer_interval` 秒发送**一条**，确保各条消息不会同时发送
+- 三类消息**共用同一个执行指针**（`_room_positions[live_id]`），插件消息增删时指针自动补偿，始终指向原来那条消息
+- 多账户模型下每个账户只有一个直播间，Server 与 Web 控制台注册的消息都落在该账户的直播间队列上，
+  实际表现为「单账户单队列合并轮转」；全局队列保留供框架内部使用
+
+**两类消息（按注册来源区分）：**
+
+| | 普通消息 | 插件消息 |
+|---|---|---|
+| 注册 | `register_timer_message(live_id, msg)` | `Plugin.register_timer_message(msg)` |
+| 持久化 | `export_timer_state()` 导出 | **不导出** |
+| 编辑/删除/移动 | 允许 | 拒绝（返回 `False`） |
+| 清理 | `unregister_timer_message(s)` | `unregister_plugin_timer_messages(plugin_name)` |
+
+`MissevanBot` 侧的插件消息接口：`register_plugin_timer_message(plugin_name, live_id, message)` /
+`unregister_plugin_timer_messages(plugin_name)` / `is_plugin_timer_message(message_id)`。
+`list_timer_messages()` 返回的每条消息带 `source`（`"plugin"` / `"normal"`）与 `plugin_name`。
 
 ---
 

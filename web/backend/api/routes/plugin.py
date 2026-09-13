@@ -59,15 +59,66 @@ def _read_plugin_name_from_zip(path: str) -> str:
     return ''
 
 
-def _find_plugin_name_in_dir(d: str) -> str | None:
-    """在解压目录中查找 metadata 并返回插件名。"""
+def _safe_member_path(name: str) -> str | None:
+    """校验 zip 成员名,返回可安全落盘的相对路径;非法成员返回 None。
+
+    拒绝绝对路径、``..`` 路径段与 Windows 盘符,防止 Zip Slip。
+    与 ``update.py:_safe_rel`` 同源——该文件属于在线更新链路,
+    此处保留独立实现以免两处互相牵动。
+    """
+    rel = name.replace("\\", "/")
+    if not rel or rel.startswith("/") or rel.startswith("../"):
+        return None
+    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if not parts or any(p == ".." for p in parts):
+        return None
+    # Windows 盘符前缀(C:/ 或 C:foo)——在 Windows 上会被当作绝对路径
+    if len(parts[0]) >= 2 and parts[0][1] == ":":
+        return None
+    return "/".join(parts)
+
+
+def _safe_extract_zip(zip_path: str, dest: str) -> None:
+    """解压 zip 到 dest,逐成员校验路径后写出。
+
+    不使用 ``ZipFile.extractall``——它会直接采用归档内的成员名,
+    含 ``../`` 或绝对路径的成员可写出 dest 之外(Zip Slip)。
+    非法成员静默跳过。
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for info in zf.infolist():
+            rel = _safe_member_path(info.filename)
+            if rel is None:
+                continue
+            target = os.path.join(dest, *rel.split("/"))
+            if info.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+
+
+def _find_metadata_file(d: str) -> str | None:
+    """在解压目录中递归查找 metadata 文件,返回其完整路径。"""
     for root, _dirs, files in os.walk(d):
         for fname in ('metadata.yaml', 'metadata.yml'):
             if fname in files:
-                with open(os.path.join(root, fname), 'r', encoding='utf-8') as f:
-                    meta = yaml.safe_load(f) or {}
-                    return str(meta.get('name')) or None
+                return os.path.join(root, fname)
     return None
+
+
+def _find_plugin_name_in_dir(d: str) -> str | None:
+    """在解压目录中查找 metadata 并返回插件名(缺失或非法返回 None)。"""
+    meta_path = _find_metadata_file(d)
+    if meta_path is None:
+        return None
+    with open(meta_path, 'r', encoding='utf-8') as f:
+        meta = yaml.safe_load(f) or {}
+    name = meta.get('name')
+    if not name:
+        return None
+    return str(name)
 
 
 # ================================================================== #
@@ -76,7 +127,19 @@ def _find_plugin_name_in_dir(d: str) -> str | None:
 
 
 async def _install_stream(file: UploadFile, manager: AccountManager):
-    """SSE 流式安装——逐步骤推送日志到前端。"""
+    """SSE 流式安装——逐步骤推送日志到前端。
+
+    互斥锁在生成器内部获取:若在 ``plugin_install_stream`` 返回
+    ``StreamingResponse`` 之前获取,``async with`` 会在响应体开始消费前
+    就退出,锁形同虚设。
+    """
+    async with _install_lock:
+        async for chunk in _install_stream_locked(file, manager):
+            yield chunk
+
+
+async def _install_stream_locked(file: UploadFile, manager: AccountManager):
+    """``_install_stream`` 的实际实现——调用方须已持有 ``_install_lock``。"""
     async def send(msg: str, done: bool = False):
         data = json.dumps({"message": msg, "done": done}, ensure_ascii=False)
         yield f"data: {data}\n\n"
@@ -102,8 +165,7 @@ async def _install_stream(file: UploadFile, manager: AccountManager):
         async for chunk in send("正在解压并读取元数据 ..."):
             yield chunk
         tmp_dir = tempfile.mkdtemp()
-        with zipfile.ZipFile(tmp_path, 'r') as zf:
-            zf.extractall(tmp_dir)
+        await asyncio.to_thread(_safe_extract_zip, tmp_path, tmp_dir)
         plugin_name = _find_plugin_name_in_dir(tmp_dir)
         if not plugin_name:
             async for chunk in send("错误：无法从 zip 中读取有效的 metadata.yaml", True):
@@ -132,14 +194,15 @@ async def plugin_install_stream(
     file: UploadFile = File(...), manager: AccountManager = _DEP
 ):
     """流式安装插件（SSE），前端实时显示进度日志。"""
+    # 快速失败:让并发请求拿到 409 而不是排队;真正的互斥由
+    # _install_stream 生成器内部持有的锁保证。
     if _install_lock.locked():
         raise HTTPException(status_code=409, detail="另一个插件安装正在进行中，请稍候")
-    async with _install_lock:
-        return StreamingResponse(
-            _install_stream(file, manager),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+    return StreamingResponse(
+        _install_stream(file, manager),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/install")
@@ -159,8 +222,7 @@ async def plugin_install(
             tmp_path = tmp.name
 
         tmp_dir = tempfile.mkdtemp()
-        with zipfile.ZipFile(tmp_path, 'r') as zf:
-            zf.extractall(tmp_dir)
+        await asyncio.to_thread(_safe_extract_zip, tmp_path, tmp_dir)
 
         plugin_name = _find_plugin_name_in_dir(tmp_dir)
         if not plugin_name:
@@ -170,9 +232,13 @@ async def plugin_install(
         existing = pm.get_plugin(plugin_name)
         if existing:
             old_ver = _parse_version(existing.version)
-            new_meta_path = os.path.join(tmp_dir, "metadata.yaml")
-            with open(new_meta_path, "r", encoding="utf-8") as f:
-                meta = yaml.safe_load(f) or {}
+            # 元数据可能位于解压目录的子目录中(_find_plugin_name_in_dir 递归查找),
+            # 不能按固定的根路径读取。
+            meta_path = _find_metadata_file(tmp_dir)
+            meta: dict = {}
+            if meta_path:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = yaml.safe_load(f) or {}
             new_ver = _parse_version(meta.get("version", "0.0.0"))
             if new_ver <= old_ver:
                 raise HTTPException(status_code=409,
@@ -185,8 +251,9 @@ async def plugin_install(
                 "enabled": False,
             }
 
-        metadata = await pm.install_plugin(local_path=tmp_path)
-        await manager.refresh_library()
+        async with _install_lock:
+            metadata = await pm.install_plugin(local_path=tmp_path)
+            await manager.refresh_library()
         return {"plugin": metadata.name, "readme": ""}
     except HTTPException:
         raise
@@ -220,13 +287,14 @@ async def plugin_update(
         if not plugin_name:
             raise HTTPException(status_code=400, detail="无法从 zip 中读取有效的 metadata.yaml")
 
-        # 从库中移除旧条目,确保 install_plugin 完整重新加载新版本
-        if plugin_name in pm._plugins:
-            del pm._plugins[plugin_name]
-        await pm.install_plugin(local_path=tmp_path)
-        await manager.refresh_library()
-        # 各账户中已启用的实例重载为新版本
-        await manager.reload_plugin_in_accounts(plugin_name)
+        async with _install_lock:
+            # 从库中移除旧条目,确保 install_plugin 完整重新加载新版本
+            if plugin_name in pm._plugins:
+                del pm._plugins[plugin_name]
+            await pm.install_plugin(local_path=tmp_path)
+            await manager.refresh_library()
+            # 各账户中已启用的实例重载为新版本
+            await manager.reload_plugin_in_accounts(plugin_name)
         return {"plugin": plugin_name, "changelog": ""}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -313,7 +381,7 @@ async def plugin_retry_failed(dir_name: str, manager: AccountManager = _DEP):
             has_config=meta.config_schema_path is not None,
             has_readme=meta.readme_path is not None,
             has_ui=meta.ui_schema_path is not None,
-            has_changelog=False,
+            has_changelog=meta.changelog_path is not None,
         )
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))

@@ -434,6 +434,8 @@ class AccountManager:
                     1 for p in server._plugin_manager.list_plugins() if p.enabled
                 ),
                 "timer_message_count": server.timer_message_count,
+                "normal_timer_message_count": server.normal_timer_message_count,
+                "plugin_timer_message_count": server.plugin_timer_message_count,
             })
         else:
             snap.update({
@@ -442,6 +444,8 @@ class AccountManager:
                 "room_connected": False, "room_enabled": False, "room_name": "",
                 "plugin_count": 0, "enabled_plugin_count": 0,
                 "timer_message_count": 0,
+                "normal_timer_message_count": 0,
+                "plugin_timer_message_count": 0,
             })
         return snap
 
@@ -916,7 +920,7 @@ class AccountManager:
                 "has_config": meta.config_schema_path is not None,
                 "has_readme": meta.readme_path is not None,
                 "has_ui": meta.ui_schema_path is not None,
-                "has_changelog": bool(meta.module_path),
+                "has_changelog": meta.changelog_path is not None,
                 "used_by_accounts": sorted(used.get(meta.name, [])),
             }
             result.append(item)

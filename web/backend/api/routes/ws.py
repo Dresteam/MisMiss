@@ -150,7 +150,7 @@ def _entry_to_dict(e: LogEntry) -> dict:
 # 全局 RingBuffer 实例
 # ------------------------------------------------------------------ #
 
-_buffer = RingBuffer(capacity=2_000)
+_buffer = RingBuffer(capacity=10_000)
 
 
 def get_buffer() -> RingBuffer:
@@ -337,6 +337,19 @@ async def websocket_endpoint(ws: WebSocket):
     global _client_id_seq
 
     await ws.accept()
+
+    # 鉴权:浏览器 WebSocket API 无法设置自定义 header,故 token 走查询参数。
+    # 日志属于面板功能,仅 admin 可读——与 /api/logs/* 的中间件语义一致
+    # (WebSocket 握手不经过 @app.middleware("http"))。
+    from api.routes.auth import token_info
+
+    info = token_info(ws.query_params.get("token", ""))
+    if info is None or info.get("role") != "admin":
+        # 先 accept 再以自定义码关闭:直接拒绝握手的话浏览器只会看到
+        # 1006(异常关闭),前端无法区分「未登录」与网络故障。
+        await ws.close(code=4401)
+        return
+
     _client_id_seq += 1
     cid = _client_id_seq
     _clients[cid] = ws

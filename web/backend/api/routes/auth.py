@@ -61,13 +61,25 @@ def _save_token(
         }, f)
 
 
+def _is_valid_token(token: str) -> bool:
+    """token 必须是 ``secrets.token_hex(32)`` 生成的 64 位十六进制字符串。
+
+    文件名即 token，调用方传入的字符串会被直接拼进路径。日志 WebSocket
+    的握手把 token 放在查询参数里（浏览器 WebSocket 无法设置 header），
+    属于外部可控输入，必须在此拦掉 ``../`` 之类的路径穿越。
+    """
+    return len(token) == 64 and all(c in "0123456789abcdef" for c in token)
+
+
 def _load_token(token: str) -> dict | None:
     """从文件加载 token 数据，过期自动删除。"""
+    if not _is_valid_token(token):
+        return None
     path = TOKEN_DIR / token
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
         return None
     if time.time() > data.get("expires", 0):
         try:
@@ -76,14 +88,6 @@ def _load_token(token: str) -> dict | None:
             pass
         return None
     return data
-
-
-def _delete_token(token: str) -> None:
-    """删除单个 token 文件。"""
-    try:
-        os.remove(TOKEN_DIR / token)
-    except OSError:
-        pass
 
 
 def _clear_all_tokens() -> None:

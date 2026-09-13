@@ -167,8 +167,12 @@ export function AccountOverviewPage() {
             <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
               <Clock className="w-4 h-4" /> 定时消息
             </div>
-            <p className="mt-2 font-semibold text-lg">{acc.timer_message_count} 条</p>
-            <p className="text-xs text-gray-400 mt-1">按轮转间隔发送</p>
+            <p className="mt-2 font-semibold text-lg">{acc.normal_timer_message_count} 条</p>
+            <p className="text-xs text-gray-400 mt-1">
+              普通消息
+              {acc.plugin_timer_message_count > 0
+                && ` · 另有 ${acc.plugin_timer_message_count} 条插件消息`}
+            </p>
           </div>
         </div>
       </div>
