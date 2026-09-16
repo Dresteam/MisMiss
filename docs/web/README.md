@@ -261,6 +261,18 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | POST | `/api/plugin/failed/{dir}/retry` | 重试加载 |
 | POST | `/api/plugin/failed/{dir}/discard` | 放弃（保留文件） |
 | POST | `/api/plugin/refresh` | 重新扫描插件库 |
+| POST | `/api/plugin/{name}/push` | 把该插件的库版本推送到各账户副本 |
+| POST | `/api/plugin/push-all` | 把库中全部插件推送到各账户副本 |
+| POST | `/api/plugin/{name}/default` | 设为 / 取消默认插件（body: `{"default": true}`） |
+| POST | `/api/plugin/apply-defaults` | 把默认插件补齐到全部现有账户 |
+
+**批量推送的版本守卫**：只处理**已安装该插件**的账户，并跳过「副本版本不低于库版本」的。
+更新会 stop/start 插件实例（断掉插件消息与内部状态），无谓的重载应当避免——因此手动改过
+副本的账户、以及已是最新的账户都不会被触碰。返回 `{updated, skipped, failed, message}`。
+
+**默认插件**：清单存于 `data/panel.json` 的 `default_plugins`，只对**此后创建**的账户生效
+（`create_account` 会在账户起来后自动安装并启用，失败仅告警不阻断创建）；
+存量账户需显式调用 `apply-defaults` 补齐。插件库列表的每项带 `is_default` 标记。
 
 ### 服务器
 

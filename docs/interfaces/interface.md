@@ -128,10 +128,18 @@ Event (ABC, 标记接口)
     └── LivestreamUserEvent (ABC)
         ├── LiveJoinEvent
         ├── LiveFollowEvent
-        ├── LiveMessageEvent   (+ message)
-        ├── LiveGiftEvent      (+ gift, gift_num)
-        └── LiveQuestionEvent  (+ question, question_id)
+        ├── LiveMessageEvent        (+ message)
+        ├── LiveGiftEvent           (+ gift, gift_num)
+        ├── LiveQuestionEvent       (+ question, question_id)
+        └── LiveCrossEvent (ABC)          ← 跨房事件基类（分发分组标记）
+            ├── LiveCrossMessageEvent     (+ message, origin_*)
+            └── LiveCrossGiftEvent        (+ gift, gift_num, target_*)
 ```
+
+> **跨房事件为何是兄弟节点**：事件总线按 MRO 遍历分发。若
+> `LiveCrossMessageEvent` 继承自 `LiveMessageEvent`，监听本房弹幕的插件会
+> 连带收到对方直播间的弹幕，两者就分不开了。因此它们与同类本房事件
+> **平级**，只在监听 `LivestreamUserEvent`（父类）时才会一并收到。
 
 ### 3.1 Event —— 事件标记
 
@@ -170,6 +178,22 @@ from interfaces import Event
 | `LiveMessageEvent` | `LivestreamUserEvent` | 用户发送消息 | `message: str` |
 | `LiveGiftEvent` | `LivestreamUserEvent` | 用户赠送礼物 | `gift: Gift`, `gift_num: int`（委托） |
 | `LiveQuestionEvent` | `LivestreamUserEvent` | 用户发起付费提问（`question:ask`） | `question: Question`, `question_id: str`（委托） |
+| `LiveCrossEvent` | `LivestreamUserEvent` | **跨房事件基类**（连麦 / 大厅）。仅作分发分组标记，无额外抽象成员 | — |
+| `LiveCrossMessageEvent` | `LiveCrossEvent` | **跨房**弹幕：连麦时对方直播间的弹幕（`message:cross_new`） | `message: str`, `origin_room_id: int`, `origin_creator_id: int`, `origin_creator_name: str`, `origin_creator_icon: Optional[str]` |
+| `LiveCrossGiftEvent` | `LiveCrossEvent` | **跨房**礼物：大厅中赠送给非主麦的礼物（`gift:cross_send`） | `gift: Gift`, `gift_num: int`（委托）, `target_room_id: int`, `target_creator_id: int`, `target_creator_name: str`, `target_creator_icon: Optional[str]` |
+
+> `LiveCrossEvent` 只是**分发分组标记**，不声明抽象成员 —— 「对方直播间」四件套在两个
+> 子事件里方向相反、字段名也不同（`origin_*` / `target_*`），在此统一命名只会与子类字段重复。
+> 监听它可一次收下全部跨房事件，且**收不到**本房弹幕与礼物。
+
+**「对方直播间」四件套的字段名按方向区分**，取自包内的 `room` 字段：
+
+| 事件 | 前缀 | 含义 |
+|------|------|------|
+| `LiveCrossMessageEvent` | `origin_` | 弹幕**来自**的直播间（对方是来源） |
+| `LiveCrossGiftEvent` | `target_` | 礼物**送给**的直播间（对方是去向），如 `target_creator_name` 即受赠主播 |
+
+包内未携带或字段非法时按未知处理（id 为 `0`、昵称为空串、头像为 `None`）。
 
 ---
 
@@ -455,5 +479,8 @@ from interfaces import Event, Listener, event_handler, RequestFailedException
 | `LiveStatisticsEvent` | 上述 1 项 + `score`, `online`, `vip` |
 | `LivestreamUserEvent` | 上述 1 项 + `user` |
 | `LiveMessageEvent` | 上述 2 项 + `message` |
-| `LiveGiftEvent` | 上述 2 项 + `gift` |
+| `LiveGiftEvent` | 上述 2 项 + `gift`, `gift_num` |
 | `LiveQuestionEvent` | 上述 2 项 + `question` |
+| `LiveCrossEvent` | 上述 2 项（纯分发分组标记，无额外抽象成员） |
+| `LiveCrossMessageEvent` | 上述 2 项 + `message`, `origin_room_id`, `origin_creator_id`, `origin_creator_name`, `origin_creator_icon` |
+| `LiveCrossGiftEvent` | 上述 2 项 + `gift`, `gift_num`, `target_room_id`, `target_creator_id`, `target_creator_name`, `target_creator_icon` |

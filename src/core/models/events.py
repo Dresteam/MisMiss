@@ -17,6 +17,8 @@ from interfaces.event.livestream.live_message_event import LiveMessageEvent
 from interfaces.event.livestream.live_gift_event import LiveGiftEvent
 from interfaces.event.livestream.live_question_event import LiveQuestionEvent
 from interfaces.event.livestream.live_statistics_event import LiveStatisticsEvent
+from interfaces.event.livestream.live_cross_message_event import LiveCrossMessageEvent
+from interfaces.event.livestream.live_cross_gift_event import LiveCrossGiftEvent
 
 if TYPE_CHECKING:
     from interfaces.bot.bot import Bot
@@ -207,3 +209,97 @@ class StatisticsEvent(LiveStatisticsEvent):
     @property
     def vip(self) -> int:
         return self.event_vip
+
+
+@dataclass
+class CrossMessageEvent(LiveCrossMessageEvent):
+    """跨房弹幕消息事件（连麦时对方直播间的弹幕）。"""
+
+    event_livestream: Livestream
+    event_user: LiveUser
+    event_message: str
+    event_origin_room_id: int = 0
+    event_origin_creator_id: int = 0
+    event_origin_creator_name: str = ""
+    event_origin_creator_icon: str | None = None
+
+    @property
+    def livestream(self) -> Livestream:
+        return self.event_livestream
+
+    @property
+    def bot(self) -> Bot:
+        return self.event_livestream.bot
+
+    @property
+    def user(self) -> LiveUser:
+        return self.event_user
+
+    @property
+    def message(self) -> str:
+        return self.event_message
+
+    @property
+    def origin_room_id(self) -> int:
+        return self.event_origin_room_id
+
+    @property
+    def origin_creator_id(self) -> int:
+        return self.event_origin_creator_id
+
+    @property
+    def origin_creator_name(self) -> str:
+        return self.event_origin_creator_name
+
+    @property
+    def origin_creator_icon(self) -> str | None:
+        return self.event_origin_creator_icon
+
+
+@dataclass
+class CrossGiftEvent(LiveCrossGiftEvent):
+    """跨房礼物事件（大厅中赠送给非主麦的礼物）。"""
+
+    event_livestream: Livestream
+    event_user: LiveUser
+    event_gift: Gift
+    event_target_room_id: int = 0
+    event_target_creator_id: int = 0
+    event_target_creator_name: str = ""
+    event_target_creator_icon: str | None = None
+
+    @property
+    def livestream(self) -> Livestream:
+        return self.event_livestream
+
+    @property
+    def bot(self) -> Bot:
+        return self.event_livestream.bot
+
+    @property
+    def user(self) -> LiveUser:
+        return self.event_user
+
+    @property
+    def gift(self) -> Gift:
+        return self.event_gift
+
+    @property
+    def gift_num(self) -> int:
+        return self.event_gift.num
+
+    @property
+    def target_room_id(self) -> int:
+        return self.event_target_room_id
+
+    @property
+    def target_creator_id(self) -> int:
+        return self.event_target_creator_id
+
+    @property
+    def target_creator_name(self) -> str:
+        return self.event_target_creator_name
+
+    @property
+    def target_creator_icon(self) -> str | None:
+        return self.event_target_creator_icon

@@ -735,11 +735,51 @@ async def initialize(self, config: MissConfig) -> None:
 
 | 事件类 | 触发时机 | 关键属性 |
 |--------|---------|---------|
-| `LiveMessageEvent` | 收到弹幕 | `event.message`, `event.user`, `event.livestream` |
-| `LiveGiftEvent` | 收到礼物 | `event.gift`(`.name`, `.price`, `.num`), `event.user` |
+| `LiveMessageEvent` | 收到**本房**弹幕 | `event.message`, `event.user`, `event.livestream` |
+| `LiveGiftEvent` | 收到**本房**礼物 | `event.gift`(`.name`, `.price`, `.num`), `event.user` |
 | `LiveOpenEvent` | 直播间开播 | `event.livestream` |
 | `LiveCloseEvent` | 直播间下播 | `event.livestream` |
 | `LiveJoinEvent` | 用户进入 | `event.user`, `event.livestream` |
+| `LiveFollowEvent` | 用户关注直播间 | `event.user`, `event.livestream` |
+| `LiveStatisticsEvent` | 直播间实时统计 | `event.score`, `event.online`, `event.vip` |
+| `LiveQuestionEvent` | 用户付费提问 | `event.question`, `event.user` |
+| `LiveCrossMessageEvent` | **连麦**时对方直播间的弹幕 | `event.message`, `event.user`, `event.origin_room_id`, `event.origin_creator_name` |
+| `LiveCrossGiftEvent` | **大厅**中赠送给非主麦的礼物 | `event.gift`, `event.user`, `event.target_creator_name`（受赠主播）, `event.target_creator_id` |
+| `LiveCrossEvent` | 上面两个的**基类**：注册一个 handler 收下全部跨房事件 | 无额外字段，按具体类型分支取 `origin_*` / `target_*` |
+
+**跨房事件是独立事件，不会漏进本房事件。** 连麦时对方直播间的弹幕走
+`LiveCrossMessageEvent`，大厅里送给别的麦的礼物走 `LiveCrossGiftEvent`——
+二者与 `LiveMessageEvent` / `LiveGiftEvent` 是**兄弟节点**（都继承
+`LivestreamUserEvent`）。因此：
+
+- 监听 `LiveMessageEvent` 的插件**收不到**跨房弹幕（指令类插件不会被对方直播间
+  的弹幕误触发）
+- 想做「连麦互动」就要显式监听跨房事件
+- 监听父类 `LivestreamUserEvent` 会同时收到本房与跨房两类
+
+两个跨房事件都带「对方直播间」四件套（`*_room_id` / `*_creator_id` /
+`*_creator_name` / `*_creator_icon`），但**前缀按方向区分**：
+
+| 事件 | 前缀 | 对方是 | 例 |
+|------|------|--------|-----|
+| `LiveCrossMessageEvent` | `origin_` | 弹幕**来自**那里（来源） | `event.origin_creator_name` = 发弹幕者所在房的主播 |
+| `LiveCrossGiftEvent` | `target_` | 礼物**送给**那里（去向） | `event.target_creator_name` = **被赠礼物**的主播 |
+
+平台未携带时按未知处理（id 为 `0`、昵称为空串、头像为 `None`），可用真值判断对方是否可知。
+
+**想一次收下全部跨房事件**（如连麦互动插件），监听分组基类 `LiveCrossEvent` 即可 ——
+它同样**收不到**本房弹幕与礼物。由于字段名按方向区分，在 handler 内按具体类型分支：
+
+```python
+from interfaces.event.livestream import LiveCrossEvent, LiveCrossGiftEvent
+
+@event_handler
+def on_cross(self, event: LiveCrossEvent) -> None:
+    if isinstance(event, LiveCrossGiftEvent):
+        print(f"{event.user.name} 送给 {event.target_creator_name} 一个 {event.gift.name}")
+    else:
+        print(f"[跨房] {event.user.name}: {event.message}")
+```
 
 ### @command 装饰器
 

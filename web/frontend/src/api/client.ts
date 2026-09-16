@@ -17,6 +17,8 @@ import type {
   FailedPluginInfo,
   DashboardData,
   ServerStatus,
+  PluginPushResult,
+  ApplyDefaultsResult,
 } from './types';
 
 // ================================================================== //
@@ -282,6 +284,34 @@ export async function retryFailedPlugin(dirName: string): Promise<PluginSummary>
 
 export async function refreshPlugins(): Promise<StatusResponse> {
   return request<StatusResponse>('/plugin/refresh', { method: 'POST' });
+}
+
+/** 把单个插件的库版本推送到各账户副本（跳过副本不旧于库的）。 */
+export async function pushPluginToAccounts(name: string): Promise<PluginPushResult> {
+  return request<PluginPushResult>(`/plugin/${encodeURIComponent(name)}/push`, {
+    method: 'POST',
+  });
+}
+
+/** 把库中全部插件推送到各账户副本。 */
+export async function pushAllPlugins(): Promise<PluginPushResult> {
+  return request<PluginPushResult>('/plugin/push-all', { method: 'POST' });
+}
+
+/** 设为 / 取消默认插件（新建账户时自动安装并启用）。 */
+export async function setPluginDefault(
+  name: string,
+  isDefault: boolean,
+): Promise<{ success: boolean; default_plugins: string[] }> {
+  return request(`/plugin/${encodeURIComponent(name)}/default`, {
+    method: 'POST',
+    body: JSON.stringify({ default: isDefault }),
+  });
+}
+
+/** 把默认插件补齐到全部现有账户。 */
+export async function applyDefaultPlugins(): Promise<ApplyDefaultsResult> {
+  return request<ApplyDefaultsResult>('/plugin/apply-defaults', { method: 'POST' });
 }
 
 // ================================================================== //

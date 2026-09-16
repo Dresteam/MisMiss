@@ -103,7 +103,9 @@ async def live_add(
 ):
     """绑定/更换直播间(每个账户仅一个;已绑定时自动替换旧房间)。"""
     old = getattr(s.account_record, "room_id", None)
-    if old == req.live_id:
+    # 已绑定同一房间时拒绝重复绑定。但若该房间当前**加载不出来**(不存在/被封禁/
+    # 已注销),则放行——这是「重试加载已绑定房间」的唯一入口,否则账户会卡死。
+    if old == req.live_id and _room(s) is not None:
         raise HTTPException(status_code=400, detail="已绑定该直播间")
     # 先添加新房间(失败则旧房间不受影响),成功后再移除旧的
     try:
@@ -112,7 +114,8 @@ async def live_add(
         raise HTTPException(status_code=400, detail=str(e))
     except CoreApiException as e:
         raise HTTPException(status_code=502, detail=f"API 错误: {e}")
-    if old:
+    # 注意排除「重试加载同一房间」:此时 old == 新房间,删除会把刚加回来的房间又移除
+    if old and int(old) != req.live_id:
         try:
             await s.remove_livestream(int(old))
         except KeyError:

@@ -13,6 +13,9 @@ from .live_message_event import LiveMessageEvent
 from .live_gift_event import LiveGiftEvent
 from .live_question_event import LiveQuestionEvent
 from .live_statistics_event import LiveStatisticsEvent
+from .live_cross_event import LiveCrossEvent
+from .live_cross_message_event import LiveCrossMessageEvent
+from .live_cross_gift_event import LiveCrossGiftEvent
 
 __all__ = [
     "LivestreamEvent",
@@ -25,4 +28,7 @@ __all__ = [
     "LiveGiftEvent",
     "LiveQuestionEvent",
     "LiveStatisticsEvent",
+    "LiveCrossEvent",
+    "LiveCrossMessageEvent",
+    "LiveCrossGiftEvent",
 ]

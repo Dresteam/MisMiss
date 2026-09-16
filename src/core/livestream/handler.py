@@ -20,6 +20,8 @@ from ..models.events import (
     GiftEvent,
     QuestionEvent,
     StatisticsEvent,
+    CrossMessageEvent,
+    CrossGiftEvent,
 )
 from ..models.gift import LiveGift
 from ..models.question import LiveQuestion
@@ -76,7 +78,10 @@ class Live(LiveWebSocket):
             "room:close": self._handle_room_close,
             "room:statistics": self._handle_statistics,
             "message:new": self._handle_message,
-            # "message:cross_new": self._handle_message,
+            # 跨房事件:连麦时对方直播间的弹幕 / 大厅中赠送给非主麦的礼物。
+            # 分发到独立事件,不落入本房消息与礼物事件(否则插件无法区分)
+            "message:cross_new": self._handle_cross_message,
+            "gift:cross_send": self._handle_cross_gift,
 
             "member:join_queue": self._handle_join_queue,
             "member:followed": self._handle_follow,
@@ -197,6 +202,79 @@ class Live(LiveWebSocket):
             event_user=live_user,
             event_gift=gift,
         ))
+
+    # ------------------------------------------------------------------ #
+    # 跨房事件（连麦 / 大厅）
+    # ------------------------------------------------------------------ #
+
+    def _handle_cross_message(self, data: dict[str, Any]) -> None:
+        """处理 ``message:cross_new`` —— 连麦时对方直播间的弹幕。
+
+        单独成事件而非复用 ``message:new``：本房弹幕与跨房弹幕的归属不同，
+        混在一起会让本房的指令类插件（签到、点播等）被对方直播间的弹幕触发。
+        """
+        user = data.get("user", {})
+        live_user = self._build_live_user(user)
+        self._post_event(CrossMessageEvent(
+            event_livestream=self._livestream,
+            event_user=live_user,
+            event_message=data.get("message", ""),
+            **self._extract_cross_peer(data, "origin"),
+        ))
+
+    def _handle_cross_gift(self, data: dict[str, Any]) -> None:
+        """处理 ``gift:cross_send`` —— 大厅中赠送给非主麦的礼物。
+
+        ``gift`` 字段结构与 ``gift:send`` 一致；跨房包不携带 ``lucky``，
+        故幸运礼物字段留空。
+        """
+        user = data.get("user", {})
+        live_user = self._build_live_user(user)
+        gift_data = data.get("gift", {})
+        gift = LiveGift(
+            gift_livestream=self._livestream,
+            gift_user=live_user,
+            gift_id=gift_data.get("gift_id", 0),
+            gift_name=gift_data.get("name", ""),
+            gift_price=gift_data.get("price", 0),
+            gift_num=gift_data.get("num", 0),
+            gift_lucky=None,
+        )
+        self._post_event(CrossGiftEvent(
+            event_livestream=self._livestream,
+            event_user=live_user,
+            event_gift=gift,
+            **self._extract_cross_peer(data, "target"),
+        ))
+
+    @staticmethod
+    def _extract_cross_peer(data: dict[str, Any], prefix: str) -> dict[str, Any]:
+        """从跨房包中提取「对方直播间」信息，返回可直接展开进事件的字段。
+
+        平台把对方直播间与该房主播放在 ``room`` 字段里。包内未携带或字段
+        非法时按「未知」处理（id 为 ``0``、昵称为空串、头像为 ``None``），
+        便于插件用真值判断对方是否可知。
+
+        :param data: 跨房包
+        :param prefix: 字段前缀——弹幕传 ``origin``（对方是**来源**），
+                       礼物传 ``target``（对方是**去向**）
+        """
+        room = data.get("room")
+        if not isinstance(room, dict):
+            room = {}
+
+        def _int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        return {
+            f"event_{prefix}_room_id": _int(room.get("room_id", 0)),
+            f"event_{prefix}_creator_id": _int(room.get("creator_id", 0)),
+            f"event_{prefix}_creator_name": str(room.get("creator_username") or ""),
+            f"event_{prefix}_creator_icon": room.get("creator_iconurl") or None,
+        }
 
     def _handle_question(self, data: dict[str, Any]) -> None:
         """处理 ``question:ask`` —— 用户发起付费提问。"""

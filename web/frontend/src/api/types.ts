@@ -278,9 +278,29 @@ export interface LibraryPlugin {
   has_readme: boolean;
   has_changelog: boolean;
   has_ui: boolean;
+  /** 是否为默认插件：新建账户时自动安装并启用 */
+  is_default: boolean;
   used_by_accounts: number[];
   /** 账户库列表附加:是否已安装到本账户 */
   installed?: boolean;
+}
+
+/** 批量推送结果（插件库 → 各账户副本） */
+export interface PluginPushResult {
+  /** 实际更新的条目，形如 `插件名@账户名` */
+  updated: string[];
+  /** 因副本不旧于库版本而跳过的条目 */
+  skipped: string[];
+  /** 更新失败的条目 */
+  failed: string[];
+  message: string;
+}
+
+/** 默认插件补齐结果 */
+export interface ApplyDefaultsResult {
+  applied: Record<string, string[]>;
+  failed: string[];
+  message: string;
 }
 
 export interface TimerData {

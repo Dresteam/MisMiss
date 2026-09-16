@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History } from 'lucide-react';
+import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History, Star, Send, Sparkles } from 'lucide-react';
 import {
   fetchLibraryPlugins, fetchFailedPlugins, refreshPlugins, uninstallPlugin,
-  retryFailedPlugin, fetchAccounts,
+  retryFailedPlugin, fetchAccounts, pushPluginToAccounts, pushAllPlugins,
+  setPluginDefault, applyDefaultPlugins,
 } from '../api/client';
 import type { LibraryPlugin, FailedPluginInfo, AccountSummary } from '../api/types';
 import { Button } from '../components/Button';
@@ -74,6 +75,19 @@ export function PluginLibraryPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  /** 执行一个带 loading 标记与结果提示的操作，完成后刷新列表。 */
+  const act = async (key: string, fn: () => Promise<string>) => {
+    setProcessing(key);
+    try {
+      showToast('success', await fn(), '');
+      load();
+    } catch (e: any) {
+      showToast('error', '操作失败', e.message);
+    } finally {
+      setProcessing('');
+    }
+  };
+
   const openDrawer = (name: string, tab?: string) => {
     setDrawerTarget({ name, tab });
   };
@@ -89,7 +103,13 @@ export function PluginLibraryPage() {
         body: fd,
       });
       const body = await res.json().catch(() => ({}));
-      if (res.status === 409) {
+      // 判定依据是响应体而非状态码:
+      //   200 + action=update → 上传的是更高版本,后端尚未安装,等用户确认后走 /install/update
+      //   409 + detail        → 版本不高于现有版本,属于拒绝,须按错误提示
+      if (res.ok && body.action === 'update') {
+        if (!body.name || !body.old_version || !body.new_version) {
+          throw new Error('更新信息不完整,请重试');
+        }
         setUpdateTarget({
           name: body.name,
           oldVersion: body.old_version,
@@ -160,10 +180,20 @@ export function PluginLibraryPage() {
             面板级统一安装管理,各账户按需启用 · {plugins.length} 个插件
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />}
             onClick={async () => { await refreshPlugins(); load(); showToast('success', '已刷新', ''); }}>
             刷新
+          </Button>
+          <Button variant="secondary" icon={<Send className="w-4 h-4" />}
+            loading={processing === '__push_all__'} disabled={!!processing}
+            onClick={() => act('__push_all__', async () => (await pushAllPlugins()).message)}>
+            推送全部到账户
+          </Button>
+          <Button variant="secondary" icon={<Sparkles className="w-4 h-4" />}
+            loading={processing === '__apply_defaults__'} disabled={!!processing}
+            onClick={() => act('__apply_defaults__', async () => (await applyDefaultPlugins()).message)}>
+            应用默认插件
           </Button>
           <Button variant="primary" icon={<Upload className="w-4 h-4" />}
             onClick={() => fileRef.current?.click()}>
@@ -227,6 +257,13 @@ export function PluginLibraryPage() {
                       <span className="text-xs font-mono text-gray-400 dark:text-gray-500">v{p.version}</span>
                       <span className="text-gray-300 dark:text-gray-600">·</span>
                       <span className="text-xs text-gray-400 dark:text-gray-500">{p.author}</span>
+                      {p.is_default && (
+                        <span title="新建账户时自动安装并启用"
+                          className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30
+                                     text-amber-600 dark:text-amber-400 text-[10px] font-medium">
+                          默认
+                        </span>
+                      )}
                     </div>
                   </div>
                   <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 shrink-0">
@@ -258,6 +295,20 @@ export function PluginLibraryPage() {
                   )}
                   <IconBtn icon={<Users className="w-3.5 h-3.5" />} label="使用账户"
                     onClick={() => openDrawer(p.name, 'accounts')} />
+                  <IconBtn
+                    icon={<Star className={`w-3.5 h-3.5 ${p.is_default ? 'fill-amber-400 text-amber-400' : ''}`} />}
+                    label={p.is_default ? '取消默认插件' : '设为默认插件（新建账户自动安装并启用）'}
+                    loading={processing === `default:${p.name}`} disabled={!!processing}
+                    onClick={() => act(`default:${p.name}`, async () => {
+                      await setPluginDefault(p.name, !p.is_default);
+                      const label = p.display_name || p.name;
+                      return p.is_default ? `已取消默认：${label}` : `已设为默认：${label}`;
+                    })} />
+                  <IconBtn icon={<Send className="w-3.5 h-3.5" />}
+                    label="推送库版本到各账户副本"
+                    loading={processing === `push:${p.name}`} disabled={!!processing}
+                    onClick={() => act(`push:${p.name}`,
+                      async () => (await pushPluginToAccounts(p.name)).message)} />
                   <IconBtn icon={<Trash2 className="w-3.5 h-3.5" />} label="卸载"
                     loading={processing === p.name} disabled={processing === p.name}
                     onClick={() => setUninstallTarget(p)} />

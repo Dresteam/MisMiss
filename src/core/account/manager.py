@@ -137,6 +137,8 @@ class AccountManager:
         self._next_account_id: int = 1
         self._public_bot: dict[str, Any] = {"cookie": "", "permissions": 1, "updated_at": 0}
         self._licenses: dict[str, dict] = {}
+        # 默认插件:新建账户时自动安装并启用(见 _install_default_plugins)
+        self._default_plugins: list[str] = []
         self._license_store = LicenseStore(self._licenses)
         self._app = None
         self._library_pm = None  # 库级 PluginManager(仅 install/uninstall/refresh)
@@ -152,6 +154,7 @@ class AccountManager:
             "public_bot": dict(self._public_bot),
             "accounts": {},
             "licenses": self._licenses,
+            "default_plugins": list(self._default_plugins),
         }
 
     def _save_panel(self) -> None:
@@ -162,6 +165,7 @@ class AccountManager:
             "public_bot": self._public_bot,
             "accounts": {str(k): v.to_dict() for k, v in self._records.items()},
             "licenses": self._licenses,
+            "default_plugins": list(self._default_plugins),
         }
         tmp_path = self._panel_path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -182,6 +186,9 @@ class AccountManager:
                 self._public_bot = data.get("public_bot") or self._public_bot
                 self._licenses = data.get("licenses") or {}
                 self._license_store = LicenseStore(self._licenses)
+                self._default_plugins = [
+                    str(n) for n in (data.get("default_plugins") or []) if n
+                ]
                 self._records = {
                     int(k): AccountRecord.from_dict(v)
                     for k, v in (data.get("accounts") or {}).items()
@@ -563,8 +570,14 @@ class AccountManager:
             except CoreCookieException as e:
                 _log.error("账户 {} Bot 创建失败: {}", name, e)
                 raise ValueError(f"Cookie 无效: {e}")
+        # 默认插件：安装并启用（失败仅告警，不影响账户创建）
+        default_applied = await self._install_default_plugins(aid)
+
         self._save_panel()
-        _log.info("账户已创建: id={} name={} mode={}", aid, name, bot_mode)
+        _log.info(
+            "账户已创建: id={} name={} mode={} 默认插件={}",
+            aid, name, bot_mode, default_applied or "无",
+        )
         return rec
 
     async def delete_account(self, account_id: int, purge_data: bool = False) -> None:
@@ -921,6 +934,7 @@ class AccountManager:
                 "has_readme": meta.readme_path is not None,
                 "has_ui": meta.ui_schema_path is not None,
                 "has_changelog": meta.changelog_path is not None,
+                "is_default": meta.name in self._default_plugins,
                 "used_by_accounts": sorted(used.get(meta.name, [])),
             }
             result.append(item)
@@ -997,6 +1011,140 @@ class AccountManager:
             await server.enable_plugin(plugin_name)
         server._save_state()
         _log.info("账户 {} 已更新插件 {} 到库版本", account_id, plugin_name)
+
+    # ------------------------------------------------------------------ #
+    # 插件：批量推送到账户
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _version_tuple(version: str) -> tuple[int, ...]:
+        """把 ``"1.2.3"`` 转成可比较的元组；非法版本按 ``(0,)`` 处理。"""
+        try:
+            return tuple(int(x) for x in str(version).split("."))
+        except (TypeError, ValueError):
+            return (0,)
+
+    async def push_plugin_to_accounts(self, plugin_name: str | None = None) -> dict[str, Any]:
+        """把插件库版本推送到各账户副本。
+
+        只处理**已安装该插件**的账户，并跳过「副本版本不低于库版本」的——
+        更新会 stop/start 插件实例（断掉插件消息与内部状态），无谓的重载应当避免。
+        因此手动改过副本的账户、以及已是最新的账户都不会被触碰。
+
+        :param plugin_name: 插件名；``None`` 表示库中全部插件
+        :return: ``{"updated": [...], "skipped": [...], "failed": [...]}``
+        """
+        from core.exceptions import CorePluginNotFoundException
+
+        lib_pm = self.get_library_pm()
+        if plugin_name is not None:
+            lib_meta = lib_pm.get_plugin(plugin_name)
+            if lib_meta is None:
+                raise CorePluginNotFoundException(plugin_name)
+            targets = [(plugin_name, lib_meta.version)]
+        else:
+            targets = [(m.name, m.version) for m in lib_pm.list_plugins()]
+
+        updated: list[str] = []
+        skipped: list[str] = []
+        failed: list[str] = []
+
+        for rec in self.list_records():
+            server = self._servers.get(rec.id)
+            if server is None:
+                continue
+            pm = server._plugin_manager
+            for name, lib_version in targets:
+                meta = pm.get_plugin(name)
+                if meta is None:
+                    continue  # 该账户未安装此插件
+                if self._version_tuple(meta.version) >= self._version_tuple(lib_version):
+                    skipped.append(f"{name}@{rec.name}")
+                    continue
+                try:
+                    await self.update_plugin_in_account(rec.id, name)
+                    updated.append(f"{name}@{rec.name}")
+                except Exception as e:
+                    _log.warning("账户 {} 推送插件 {} 失败: {}", rec.id, name, e)
+                    failed.append(f"{name}@{rec.name}")
+
+        _log.info(
+            "插件推送完成: 更新 {} / 跳过 {} / 失败 {}",
+            len(updated), len(skipped), len(failed),
+        )
+        return {"updated": updated, "skipped": skipped, "failed": failed}
+
+    # ------------------------------------------------------------------ #
+    # 默认插件
+    # ------------------------------------------------------------------ #
+
+    def list_default_plugins(self) -> list[str]:
+        """当前默认插件清单（新建账户会自动安装并启用）。"""
+        return list(self._default_plugins)
+
+    def set_plugin_default(self, plugin_name: str, is_default: bool) -> list[str]:
+        """把插件加入 / 移出默认清单，返回更新后的清单。
+
+        只影响**此后创建**的账户；存量账户需显式调用
+        :meth:`apply_default_plugins` 补齐。
+
+        :param plugin_name: 插件名
+        :param is_default: ``True`` 加入，``False`` 移出
+        :return: 更新后的默认插件清单
+        """
+        name = str(plugin_name)
+        if is_default:
+            if name not in self._default_plugins:
+                self._default_plugins.append(name)
+        elif name in self._default_plugins:
+            self._default_plugins.remove(name)
+        self._save_panel()
+        _log.info("默认插件清单已更新: {}", self._default_plugins)
+        return list(self._default_plugins)
+
+    async def _install_default_plugins(self, account_id: int) -> list[str]:
+        """为账户安装并启用全部默认插件。
+
+        **失败只告警不抛出**——默认插件装不上（如库中已删除、依赖安装失败）
+        不应让账户创建整体失败。返回实际生效的插件名。
+        """
+        server = self._servers.get(account_id)
+        if server is None or not self._default_plugins:
+            return []
+        applied: list[str] = []
+        for name in list(self._default_plugins):
+            try:
+                if server._plugin_manager.get_plugin(name) is None:
+                    await self.install_plugin_to_account(account_id, name)
+                await server.enable_plugin(name)
+                applied.append(name)
+            except Exception as e:
+                _log.warning("账户 {} 应用默认插件 {} 失败: {}", account_id, name, e)
+        if applied:
+            _log.info("账户 {} 已启用默认插件: {}", account_id, applied)
+        return applied
+
+    async def apply_default_plugins(self) -> dict[str, Any]:
+        """把默认插件补齐到全部现有账户（已装则跳过，未启用则启用）。
+
+        :return: ``{"applied": {账户名: [插件名]}, "failed": [...]}``
+        """
+        applied: dict[str, list[str]] = {}
+        failed: list[str] = []
+        for rec in self.list_records():
+            if self._servers.get(rec.id) is None:
+                continue
+            names = await self._install_default_plugins(rec.id)
+            if names:
+                applied[rec.name] = names
+        for name in self._default_plugins:
+            if self.get_library_pm().get_plugin(name) is None:
+                failed.append(name)
+        _log.info(
+            "默认插件已应用到 {} 个账户；清单中不存在于库的: {}",
+            len(applied), failed,
+        )
+        return {"applied": applied, "failed": failed}
 
     async def uninstall_plugin_from_account(
         self, account_id: int, plugin_name: str,

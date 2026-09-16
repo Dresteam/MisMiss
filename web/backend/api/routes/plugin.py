@@ -50,13 +50,16 @@ def _parse_version(v: str) -> tuple:
         return (0,)
 
 
-def _read_plugin_name_from_zip(path: str) -> str:
-    """从 zip 中读取插件名。"""
+def _read_plugin_meta_from_zip(path: str) -> dict:
+    """从 zip 中读取插件元数据（取第一个 metadata.yaml / yml 成员）。
+
+    插件元数据可能位于归档的子目录中，故按成员名后缀匹配而非固定路径。
+    """
     with zipfile.ZipFile(path, 'r') as zf:
         for name in zf.namelist():
             if name.endswith('metadata.yaml') or name.endswith('metadata.yml'):
-                return str((yaml.safe_load(zf.read(name)) or {}).get('name', ''))
-    return ''
+                return yaml.safe_load(zf.read(name)) or {}
+    return {}
 
 
 def _safe_member_path(name: str) -> str | None:
@@ -283,11 +286,23 @@ async def plugin_update(
             tmp_path = tmp.name
 
         pm = manager.get_library_pm()
-        plugin_name = _read_plugin_name_from_zip(tmp_path)
+        meta = _read_plugin_meta_from_zip(tmp_path)
+        plugin_name = str(meta.get('name', ''))
         if not plugin_name:
             raise HTTPException(status_code=400, detail="无法从 zip 中读取有效的 metadata.yaml")
 
         async with _install_lock:
+            # 与 /install 保持同一套版本规则:不允许用不高于现有版本的包覆盖,
+            # 否则本端点会成为绕过 /install 版本校验的降级通道
+            existing = pm.get_plugin(plugin_name)
+            if existing is not None:
+                new_ver = _parse_version(meta.get("version", "0.0.0"))
+                if new_ver <= _parse_version(existing.version):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"插件 '{plugin_name}' v{existing.version} 已安装，"
+                               f"上传版本不高于现有版本，无法覆盖",
+                    )
             # 从库中移除旧条目,确保 install_plugin 完整重新加载新版本
             if plugin_name in pm._plugins:
                 del pm._plugins[plugin_name]
@@ -296,6 +311,8 @@ async def plugin_update(
             # 各账户中已启用的实例重载为新版本
             await manager.reload_plugin_in_accounts(plugin_name)
         return {"plugin": plugin_name, "changelog": ""}
+    except HTTPException:
+        raise  # 版本冲突等已带明确状态码，勿被兜底吞成 500
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -407,3 +424,69 @@ async def plugin_refresh(manager: AccountManager = _DEP):
         success=True,
         message=f"插件库已刷新，当前 {len(manager.list_library_plugins())} 个插件",
     )
+
+
+# ================================================================== #
+# 路由 —— 批量推送到账户
+# ================================================================== #
+
+
+def _push_summary(result: dict) -> str:
+    """把推送结果拼成一句可直接展示的话。"""
+    msg = f"已更新 {len(result['updated'])} 项，跳过 {len(result['skipped'])} 项"
+    if result["failed"]:
+        msg += f"，失败 {len(result['failed'])} 项"
+    return msg
+
+
+@router.post("/{plugin_name}/push")
+async def plugin_push_to_accounts(plugin_name: str, manager: AccountManager = _DEP):
+    """把该插件的库版本推送到各账户副本。
+
+    只处理**已安装该插件**的账户，并跳过副本版本不低于库版本的
+    （更新会 stop/start 插件实例，断掉插件消息与内部状态，无谓重载应当避免）。
+    因此手动改过副本的账户、以及已是最新的账户都不会被触碰。
+    """
+    try:
+        result = await manager.push_plugin_to_accounts(plugin_name)
+    except CorePluginNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {**result, "message": _push_summary(result)}
+
+
+@router.post("/push-all")
+async def plugin_push_all(manager: AccountManager = _DEP):
+    """把插件库中全部插件推送到各账户副本（版本守卫同单个推送）。"""
+    result = await manager.push_plugin_to_accounts(None)
+    return {**result, "message": _push_summary(result)}
+
+
+# ================================================================== #
+# 路由 —— 默认插件
+# ================================================================== #
+
+
+@router.post("/{plugin_name}/default")
+async def plugin_set_default(
+    plugin_name: str, body: dict, manager: AccountManager = _DEP
+):
+    """把插件设为 / 取消「默认插件」。
+
+    默认插件在**新建账户**时自动安装并启用；存量账户需调用
+    ``POST /api/plugin/apply-defaults`` 显式补齐。
+    """
+    if manager.get_library_pm().get_plugin(plugin_name) is None:
+        raise HTTPException(status_code=404, detail=f"插件 '{plugin_name}' 不在插件库中")
+    defaults = manager.set_plugin_default(plugin_name, bool(body.get("default", True)))
+    return {"success": True, "default_plugins": defaults}
+
+
+@router.post("/apply-defaults")
+async def plugin_apply_defaults(manager: AccountManager = _DEP):
+    """把默认插件补齐到全部现有账户（已装则跳过，未启用则启用）。"""
+    result = await manager.apply_default_plugins()
+    accounts = len(result["applied"])
+    msg = f"已为 {accounts} 个账户补齐默认插件" if accounts else "所有账户均无需补齐"
+    if result["failed"]:
+        msg += f"；清单中不存在于库: {', '.join(result['failed'])}"
+    return {**result, "message": msg}

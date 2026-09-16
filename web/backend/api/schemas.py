@@ -124,6 +124,7 @@ class PluginSummary(BaseModel):
     has_readme: bool = False
     has_changelog: bool = False
     has_ui: bool = False
+    is_default: bool = False
 
 
 class PluginEventHandler(BaseModel):

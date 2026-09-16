@@ -104,7 +104,7 @@ core/  ──  核心实现层 (Missevan 适配)
   network/             events/               models/
   ──────────           ──────────────        ────────
   HTTPClient           EventBus              用户·礼物·勋章·提问
-  LiveWebSocket        (MRO 分发)            9 种事件数据类
+  LiveWebSocket        (MRO 分发)            11 种事件数据类
   9 个 API 端点
 
   plugin/                               server.py
@@ -128,10 +128,24 @@ Event (ABC, 标记)
            ├── LiveFollowEvent   ← 关注直播间
            ├── LiveMessageEvent  ← 弹幕消息  (+ message)
            ├── LiveGiftEvent     ← 赠送礼物  (+ gift)
-           └── LiveQuestionEvent ← 提问      (+ question)
+           ├── LiveQuestionEvent ← 提问      (+ question)
+           └── LiveCrossEvent    ← 跨房事件基类（连麦 / 大厅，分发分组标记）
+                ├── LiveCrossMessageEvent ← 跨房弹幕（对方直播间, + origin_*）
+                └── LiveCrossGiftEvent    ← 跨房礼物（送给非主麦, + target_*）
 ```
 
 事件分发按 **MRO** 遍历：监听 `LivestreamEvent` 可以收到所有直播间子事件；监听 `LiveMessageEvent` 则仅收到弹幕。
+
+跨房事件（连麦 / 大厅）刻意与 `LiveMessageEvent` / `LiveGiftEvent` 构成**兄弟节点而非父子**，
+因此监听本房弹幕或礼物的插件不会收到对方直播间的事件；想处理跨房事件需显式监听这两个新事件。
+
+两个事件都带「对方直播间」信息，但**方向相反、故字段名不同**：
+
+- `LiveCrossMessageEvent.origin_*` —— 弹幕**来自**的直播间（对方是来源）
+- `LiveCrossGiftEvent.target_*` —— 礼物**送给**的直播间（对方是去向，如 `target_creator_name` 即受赠主播）
+
+要「一个 handler 收下全部跨房事件」（如连麦互动插件），监听分组基类
+`LiveCrossEvent` 即可 —— 它同样收不到本房事件；字段名按方向区分，在 handler 内按具体类型分支。
 
 ## 📦 安装
 
@@ -271,6 +285,14 @@ data/accounts/{id}/installed_plugins/{name}/   ← 账户副本（独立运行�
 - 账户「插件」页负责**管理自己的副本**（从库安装、启用/禁用、配置、权限、更新）
 - 副本会随库的更新而落后，卡片上会显示「可更新」徽标，一键即可从库覆盖更新
   （保留启用状态与既有配置，新版本 schema 新增的字段自动补默认值）
+
+库更新后要把改动带到各账户，面板提供两个批量入口：
+
+- **推送到账户** — 按插件（卡片上的图标）或一次性推送全部插件。只处理**已安装**该插件的账户，
+  并**跳过副本版本不低于库版本**的：更新会 stop/start 插件实例（断掉插件消息与内部状态），
+  无谓的重载应当避免，所以手动改过副本的账户与已最新的账户都不会被触碰
+- **默认插件** — 在插件卡片上点亮星标即设为默认。**新建账户**会自动安装并启用默认插件
+  （失败仅告警，不阻断账户创建）；存量账户通过「应用默认插件」按钮显式补齐
 
 ### 目录结构
 
@@ -503,6 +525,8 @@ def on_gift(self, event: LiveGiftEvent) -> None:
 | `LiveMessageEvent` | 收到弹幕消息 | `message: str` |
 | `LiveGiftEvent` | 收到礼物 | `gift: Gift` |
 | `LiveQuestionEvent` | 收到提问 | `question: Question` |
+| `LiveCrossMessageEvent` | 连麦时收到**对方直播间**的弹幕 | `message: str`, `origin_room_id`, `origin_creator_name` … |
+| `LiveCrossGiftEvent` | 大厅中赠送给**非主麦**的礼物 | `gift: Gift`, `target_room_id`, `target_creator_name`（受赠主播）… |
 
 ### 🔐 权限控制
 

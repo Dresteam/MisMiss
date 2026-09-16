@@ -4,6 +4,7 @@ import {
   ArrowLeft, Bot as BotIcon, Radio, Puzzle, Clock, Send, RefreshCw,
   Plus, Trash2, Pencil, ChevronUp, ChevronDown, SkipForward, Loader2, Eye, EyeOff,
   Power, XCircle, CalendarClock, KeyRound, ExternalLink, Hourglass, Download,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   fetchAccountSummary, fetchAccountBot, createAccountBot, refreshAccountBot,
@@ -141,11 +142,18 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
 
   const btn = (key: string, disabled = false) => processing === key || disabled;
 
+  /** 重试加载已绑定但加载不出来的直播间（同 ID 重新提交，服务端已放开该校验）。 */
+  const retryBoundRoom = () => {
+    const rid = acc.room_id;
+    if (rid == null) return;
+    return act('retry', () => addAccountLive(acc.id, rid), '直播间信息已重新加载');
+  };
+
   return (
     <div className="space-y-4">
       {loading && !room ? (
         <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-primary-500" /></div>
-      ) : room === null ? (
+      ) : room === null && acc.room_id == null ? (
         <div className="card">
           <div className="card-body">
             <div className="flex gap-2">
@@ -156,6 +164,57 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
                 绑定
               </Button>
             </div>
+          </div>
+        </div>
+      ) : room === null ? (
+        /* 已绑定直播间但加载不出来（不存在 / 已被封禁 / 已注销）——
+           不能当作「未绑定」直接给输入框，否则用户看不出绑定还在、只会以为没绑 */
+        <div className="card">
+          <div className="card-body space-y-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+              <div className="text-sm">
+                <p className="text-gray-700 dark:text-gray-200">
+                  绑定的直播间 <span className="font-mono font-semibold">{acc.room_id}</span> 信息获取失败，未能加载。
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
+                  常见原因：房间已不存在、被平台封禁，或主播已注销。
+                  若确认该房间可正常访问，可尝试刷新；否则请重新绑定。
+                </p>
+              </div>
+            </div>
+            {switching ? (
+              <div>
+                <div className="flex gap-2">
+                  <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
+                    className="input flex-1" placeholder="输入新的直播间 ID..." inputMode="numeric" autoFocus />
+                  <Button loading={processing === 'switch'} disabled={btn('switch')}
+                    onClick={() => act('switch', () => addAccountLive(acc.id, Number(liveIdInput)).then(() => {
+                      setSwitching(false);
+                      setLiveIdInput('');
+                    }), '直播间已更换')}>
+                    确认更换
+                  </Button>
+                  <Button variant="ghost" disabled={btn('switch')}
+                    onClick={() => { setSwitching(false); setLiveIdInput(''); }}>
+                    取消
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">更换后新直播间需手动启用</p>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <Button variant="secondary" icon={<RefreshCw />}
+                  loading={processing === 'retry'} disabled={btn('retry')}
+                  onClick={retryBoundRoom}>
+                  重试加载
+                </Button>
+                <Button variant="ghost" disabled={btn('retry')}
+                  onClick={() => { setSwitching(true); setLiveIdInput(''); }}>
+                  重新绑定
+                </Button>
+              </div>
+            )}
           </div>
         </div>
       ) : (
