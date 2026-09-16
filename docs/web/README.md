@@ -232,10 +232,11 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 |------|------|------|
 | GET | `/api/accounts/{id}/plugins/library` | 插件库列表（标注是否已安装） |
 | POST | `/api/accounts/{id}/plugins/install` | 从插件库安装副本（默认禁用） |
+| POST | `/api/accounts/{id}/plugins/update-all` | **一键更新**：把本账户中副本版本低于库版本的插件全部更新（保留启用状态与配置） |
 | POST | `/api/accounts/{id}/plugins/{name}/update` | 从插件库覆盖更新副本（保留启用状态与配置） |
 | GET | `/api/accounts/{id}/plugins/` | 已安装插件列表 |
 | GET | `/api/accounts/{id}/plugins/{name}` | 插件详情（含配置 schema 与 UI schema） |
-| DELETE | `/api/accounts/{id}/plugins/{name}?delete_config=&delete_data=` | 卸载（可选删除配置/数据） |
+| DELETE | `/api/accounts/{id}/plugins/{name}?delete_config=&delete_data=&delete_persistent=` | 卸载（三个数据选项互相独立，默认全 false） |
 | POST | `/api/accounts/{id}/plugins/{name}/enable` | 启用 |
 | POST | `/api/accounts/{id}/plugins/{name}/disable` | 禁用 |
 | POST | `/api/accounts/{id}/plugins/{name}/reload` | 重载 |
@@ -269,6 +270,16 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 **批量推送的版本守卫**：只处理**已安装该插件**的账户，并跳过「副本版本不低于库版本」的。
 更新会 stop/start 插件实例（断掉插件消息与内部状态），无谓的重载应当避免——因此手动改过
 副本的账户、以及已是最新的账户都不会被触碰。返回 `{updated, skipped, failed, message}`。
+
+**账户卸载的三个数据选项**（互相独立，**默认全部不勾选**，且每次打开弹窗都会重置）：
+
+| 参数 | 删除什么 |
+|------|---------|
+| `delete_config` | 配置与权限文件（`config/{name}_config.json`、`permissions/{name}_permissions.json`） |
+| `delete_data` | 插件经 `self.data` 创建的 **JSON** 数据（`{name}/` 下的 `*.json`） |
+| `delete_persistent` | 数据目录中的**其他**文件——插件自带或自行创建的非 `.json` 文件（缓存/数据库/日志等） |
+
+后两者按**文件扩展名**区分，都不选时数据目录原样保留，重新安装即可续用；删空的子目录会被回收。
 
 **默认插件**：清单存于 `data/panel.json` 的 `default_plugins`，只对**此后创建**的账户生效
 （`create_account` 会在账户起来后自动安装并启用，失败仅告警不阻断创建）；

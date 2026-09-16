@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History, Star, Send, Sparkles } from 'lucide-react';
+import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History, Star, Send, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   fetchLibraryPlugins, fetchFailedPlugins, refreshPlugins, uninstallPlugin,
   retryFailedPlugin, fetchAccounts, pushPluginToAccounts, pushAllPlugins,
   setPluginDefault, applyDefaultPlugins,
 } from '../api/client';
-import type { LibraryPlugin, FailedPluginInfo, AccountSummary } from '../api/types';
+import type { LibraryPlugin, FailedPluginInfo, AccountSummary, BulkGroup } from '../api/types';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { UpdateDialog } from '../components/UpdateDialog';
@@ -87,6 +87,87 @@ export function PluginLibraryPage() {
       setProcessing('');
     }
   };
+
+  /** 待二次确认的批量操作——这类操作会波及多个账户，误触代价大 */
+  const [bulkConfirm, setBulkConfirm] = useState<{
+    key: string;
+    title: string;
+    message: string;
+    confirmLabel: string;
+    groups: BulkGroup[];
+    run: () => Promise<string>;
+  } | null>(null);
+  const [bulkListOpen, setBulkListOpen] = useState(false);
+
+  /**
+   * 批量入口的统一流程：先取预览（dry_run）算出「将要动谁」，连同副作用说明
+   * 一起放进确认弹窗展示明细；确实无事可做时直接提示，不弹一个空的确认框。
+   */
+  const askBulk = async (opts: {
+    key: string;
+    title: string;
+    confirmLabel: string;
+    caveat: string;
+    emptyMessage: string;
+    preview: () => Promise<{ groups: BulkGroup[]; message: string }>;
+    run: () => Promise<string>;
+  }) => {
+    setProcessing(opts.key);
+    try {
+      const p = await opts.preview();
+      if (p.groups.reduce((n, g) => n + g.items.length, 0) === 0) {
+        showToast('success', opts.emptyMessage, '');
+        return;
+      }
+      setBulkListOpen(false);
+      setBulkConfirm({
+        key: opts.key,
+        title: opts.title,
+        message: `${p.message}。${opts.caveat}`,
+        confirmLabel: opts.confirmLabel,
+        groups: p.groups,
+        run: opts.run,
+      });
+    } catch (e: any) {
+      showToast('error', '无法获取预览', e.message);
+    } finally {
+      setProcessing('');
+    }
+  };
+
+  const runBulk = async () => {
+    const job = bulkConfirm;
+    if (!job) return;
+    await act(job.key, job.run);
+    setBulkConfirm(null);
+  };
+
+  /** 确认弹窗里的「将要动谁」明细，默认折叠 */
+  const bulkDetail = bulkConfirm && bulkConfirm.groups.length > 0 ? (
+    <div className="mt-3">
+      <button type="button" onClick={() => setBulkListOpen((v) => !v)}
+        className="flex items-center gap-1 text-xs font-medium text-primary-600 dark:text-primary-400 hover:underline">
+        {bulkListOpen
+          ? <ChevronUp className="w-3.5 h-3.5" />
+          : <ChevronDown className="w-3.5 h-3.5" />}
+        {bulkListOpen ? '收起' : '展开'}明细（
+        {bulkConfirm.groups.reduce((n, g) => n + g.items.length, 0)} 项）
+      </button>
+      {bulkListOpen && (
+        <div className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-gray-200
+                        dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700/60">
+          {bulkConfirm.groups.map((g) => (
+            <div key={g.label} className="px-3 py-2">
+              <p className="text-xs font-medium text-gray-700 dark:text-gray-200">{g.label}</p>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 break-all">
+                {g.items.join('、')}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   const openDrawer = (name: string, tab?: string) => {
     setDrawerTarget({ name, tab });
@@ -187,12 +268,28 @@ export function PluginLibraryPage() {
           </Button>
           <Button variant="secondary" icon={<Send className="w-4 h-4" />}
             loading={processing === '__push_all__'} disabled={!!processing}
-            onClick={() => act('__push_all__', async () => (await pushAllPlugins()).message)}>
+            onClick={() => askBulk({
+              key: '__push_all__',
+              title: '推送到全部账户',
+              confirmLabel: '确认推送',
+              caveat: '更新会重启对应插件实例，其插件消息与内部状态会中断（配置与启用状态保留）',
+              emptyMessage: '所有账户的插件均已是库版本，无需更新',
+              preview: () => pushAllPlugins(true),
+              run: async () => (await pushAllPlugins(false)).message,
+            })}>
             推送全部到账户
           </Button>
           <Button variant="secondary" icon={<Sparkles className="w-4 h-4" />}
             loading={processing === '__apply_defaults__'} disabled={!!processing}
-            onClick={() => act('__apply_defaults__', async () => (await applyDefaultPlugins()).message)}>
+            onClick={() => askBulk({
+              key: '__apply_defaults__',
+              title: '应用默认插件到现有账户',
+              confirmLabel: '确认应用',
+              caveat: '未安装的装上并启用、已装未启用的启用、已启用的不动',
+              emptyMessage: '所有账户均无需补齐默认插件',
+              preview: () => applyDefaultPlugins(true),
+              run: async () => (await applyDefaultPlugins(false)).message,
+            })}>
             应用默认插件
           </Button>
           <Button variant="primary" icon={<Upload className="w-4 h-4" />}
@@ -307,8 +404,15 @@ export function PluginLibraryPage() {
                   <IconBtn icon={<Send className="w-3.5 h-3.5" />}
                     label="推送库版本到各账户副本"
                     loading={processing === `push:${p.name}`} disabled={!!processing}
-                    onClick={() => act(`push:${p.name}`,
-                      async () => (await pushPluginToAccounts(p.name)).message)} />
+                    onClick={() => askBulk({
+                      key: `push:${p.name}`,
+                      title: `推送「${p.display_name || p.name}」到全部账户`,
+                      confirmLabel: '确认推送',
+                      caveat: '更新会重启对应插件实例，其插件消息与内部状态会中断（配置与启用状态保留）',
+                      emptyMessage: `各账户的「${p.display_name || p.name}」均已是库版本，无需更新`,
+                      preview: () => pushPluginToAccounts(p.name, true),
+                      run: async () => (await pushPluginToAccounts(p.name, false)).message,
+                    })} />
                   <IconBtn icon={<Trash2 className="w-3.5 h-3.5" />} label="卸载"
                     loading={processing === p.name} disabled={processing === p.name}
                     onClick={() => setUninstallTarget(p)} />
@@ -363,6 +467,21 @@ export function PluginLibraryPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 批量操作二次确认——这类操作会波及多个账户，误触代价大 */}
+      {bulkConfirm && (
+        <ConfirmDialog
+          open
+          title={bulkConfirm.title}
+          message={bulkConfirm.message}
+          confirmLabel={bulkConfirm.confirmLabel}
+          variant="warning"
+          loading={processing === bulkConfirm.key}
+          onConfirm={runBulk}
+          onCancel={() => setBulkConfirm(null)}>
+          {bulkDetail}
+        </ConfirmDialog>
       )}
 
       {/* 插件详情抽屉(面板库模式:仅 文档/更新日志/使用账户) */}

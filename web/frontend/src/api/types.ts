@@ -122,6 +122,8 @@ export interface ConfigFieldSchema {
   description?: string;
   items?: Record<string, ConfigFieldSchema>;
   options?: { label: string; value: string | number }[];
+  /** 配置分组名（如「常用」/「高级」）。schema 里只要有一个字段带 group，配置页就按组渲染 */
+  group?: string;
 }
 
 export interface PluginPermissionInfo {
@@ -285,22 +287,48 @@ export interface LibraryPlugin {
   installed?: boolean;
 }
 
+/** 批量操作的影响明细（确认弹窗展示用） */
+export interface BulkGroup {
+  /** 分组名：推送按插件分组、补齐默认按账户分组 */
+  label: string;
+  /** 组内条目：推送为账户名、补齐默认为插件名 */
+  items: string[];
+}
+
 /** 批量推送结果（插件库 → 各账户副本） */
 export interface PluginPushResult {
-  /** 实际更新的条目，形如 `插件名@账户名` */
+  /** 更新（dry_run 时为「将更新」）的条目，形如 `插件名@账户名` */
   updated: string[];
   /** 因副本不旧于库版本而跳过的条目 */
   skipped: string[];
-  /** 更新失败的条目 */
+  /** 更新失败的条目（dry_run 时恒为空） */
   failed: string[];
+  /** 按插件分组的明细 */
+  groups: BulkGroup[];
   message: string;
+  dry_run?: boolean;
+}
+
+/** 账户端一键更新结果（StatusResponse 的超集） */
+export interface AccountUpdateAllResult {
+  success: boolean;
+  message: string;
+  /** 按插件分组的明细，条目为版本跨度（如 `v1.0.4 → v1.0.5`） */
+  groups: BulkGroup[];
+  updated: string[];
+  skipped: string[];
+  failed: string[];
+  dry_run?: boolean;
 }
 
 /** 默认插件补齐结果 */
 export interface ApplyDefaultsResult {
   applied: Record<string, string[]>;
   failed: string[];
+  /** 按账户分组的明细 */
+  groups: BulkGroup[];
   message: string;
+  dry_run?: boolean;
 }
 
 export interface TimerData {

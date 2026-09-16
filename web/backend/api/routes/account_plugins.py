@@ -140,6 +140,37 @@ async def plugin_install_to_account(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/update-all")
+async def plugin_update_all(
+    account_id: int,
+    dry_run: bool = False,
+    s: MissevanServer = Depends(require_active_account),
+):
+    """一键更新：把本账户中「副本版本低于插件库版本」的插件全部更新到库版本。
+
+    与面板级「推送到账户」同一套版本守卫——已是最新的、以及未安装的都不会被触碰
+    （更新会 stop/start 插件实例，断掉插件消息与内部状态，无谓重载应当避免）。
+    保留各插件的启用状态与既有配置。
+
+    :param dry_run: 只计算不执行，供二次确认弹窗预览「将要更新哪些插件」
+    :return: 含 ``groups``（按插件给出 ``v旧 → v新`` 版本跨度）与 ``message``；
+             结构是 :class:`StatusResponse` 的超集
+    """
+    from api.deps import get_account_manager
+    result = await get_account_manager().update_plugins_in_account(
+        account_id, dry_run=dry_run
+    )
+    updated = result["updated"]
+    if not updated:
+        msg = "所有插件均为最新，无需更新"
+    else:
+        verb = "将更新" if dry_run else "已更新"
+        msg = f"{verb} {len(updated)} 个插件：{'、'.join(updated)}"
+        if result["failed"]:
+            msg += f"；{len(result['failed'])} 个失败：{'、'.join(result['failed'])}"
+    return {**result, "success": not result["failed"], "message": msg}
+
+
 @router.post("/{plugin_name}/update", response_model=StatusResponse)
 async def plugin_update_from_library(
     plugin_name: str, account_id: int, s: MissevanServer = Depends(require_active_account)
@@ -177,13 +208,20 @@ async def plugin_uninstall_from_account(
     plugin_name: str,
     delete_config: bool = False,
     delete_data: bool = False,
+    delete_persistent: bool = False,
     s: MissevanServer = Depends(require_active_account),
 ):
-    """账户卸载插件:停止实例、删除源码副本(可选清除配置/数据)。"""
+    """账户卸载插件:停止实例、删除源码副本(可选清除配置/数据)。
+
+    :param delete_config: 删除配置与权限文件
+    :param delete_data: 删除插件经 ``self.data`` 创建的 **JSON** 数据
+    :param delete_persistent: 删除数据目录中的**其他**文件（插件自带/自行创建的非 JSON）
+    """
     from api.deps import get_account_manager
     try:
         await get_account_manager().uninstall_plugin_from_account(
-            account_id, plugin_name, delete_config=delete_config, delete_data=delete_data
+            account_id, plugin_name, delete_config=delete_config,
+            delete_data=delete_data, delete_persistent=delete_persistent,
         )
         return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已从账户卸载")
     except CorePluginNotFoundException as e:

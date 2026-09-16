@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { Button, type ButtonVariant } from './Button';
 
@@ -12,6 +13,8 @@ export interface ConfirmDialogProps {
   loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** 追加内容（如「将要影响谁」的可展开明细），渲染在提示文案下方 */
+  children?: ReactNode;
 }
 
 /**
@@ -27,6 +30,7 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({
   open, title, message, confirmLabel = '确定', cancelLabel = '取消',
   variant = 'default', danger = false, loading = false, onConfirm, onCancel,
+  children,
 }: ConfirmDialogProps) {
   const btnVariant = (
     danger ? 'danger' :
@@ -47,6 +51,7 @@ export function ConfirmDialog({
         </div>
         <div className="p-5">
           <p className="text-sm text-gray-600 dark:text-gray-400">{message}</p>
+          {children}
         </div>
         <div className="flex justify-end gap-2 px-5 pb-4">
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>{cancelLabel}</Button>

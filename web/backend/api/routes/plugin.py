@@ -431,34 +431,52 @@ async def plugin_refresh(manager: AccountManager = _DEP):
 # ================================================================== #
 
 
-def _push_summary(result: dict) -> str:
+def _push_groups(result: dict) -> list[dict]:
+    """把 ``插件名@账户名`` 条目按插件分组，供确认弹窗展示明细。"""
+    groups: dict[str, list[str]] = {}
+    for entry in result["updated"]:
+        # 插件名只含 [A-Za-z0-9_]，故按**首个** @ 切分一定正确（账户名可能含 @）
+        plugin, _, account = entry.partition("@")
+        groups.setdefault(plugin, []).append(account)
+    return [{"label": plugin, "items": accts} for plugin, accts in groups.items()]
+
+
+def _push_summary(result: dict, dry_run: bool) -> str:
     """把推送结果拼成一句可直接展示的话。"""
-    msg = f"已更新 {len(result['updated'])} 项，跳过 {len(result['skipped'])} 项"
+    verb = "将更新" if dry_run else "已更新"
+    msg = f"{verb} {len(result['updated'])} 项，跳过 {len(result['skipped'])} 项"
     if result["failed"]:
         msg += f"，失败 {len(result['failed'])} 项"
     return msg
 
 
 @router.post("/{plugin_name}/push")
-async def plugin_push_to_accounts(plugin_name: str, manager: AccountManager = _DEP):
+async def plugin_push_to_accounts(
+    plugin_name: str, dry_run: bool = False, manager: AccountManager = _DEP
+):
     """把该插件的库版本推送到各账户副本。
 
     只处理**已安装该插件**的账户，并跳过副本版本不低于库版本的
     （更新会 stop/start 插件实例，断掉插件消息与内部状态，无谓重载应当避免）。
     因此手动改过副本的账户、以及已是最新的账户都不会被触碰。
+
+    :param dry_run: 只计算不执行，供二次确认弹窗预览「将要动谁」
     """
     try:
-        result = await manager.push_plugin_to_accounts(plugin_name)
+        result = await manager.push_plugin_to_accounts(plugin_name, dry_run=dry_run)
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return {**result, "message": _push_summary(result)}
+    return {**result, "groups": _push_groups(result), "message": _push_summary(result, dry_run)}
 
 
 @router.post("/push-all")
-async def plugin_push_all(manager: AccountManager = _DEP):
-    """把插件库中全部插件推送到各账户副本（版本守卫同单个推送）。"""
-    result = await manager.push_plugin_to_accounts(None)
-    return {**result, "message": _push_summary(result)}
+async def plugin_push_all(dry_run: bool = False, manager: AccountManager = _DEP):
+    """把插件库中全部插件推送到各账户副本（版本守卫同单个推送）。
+
+    :param dry_run: 只计算不执行，供二次确认弹窗预览「将要动谁」
+    """
+    result = await manager.push_plugin_to_accounts(None, dry_run=dry_run)
+    return {**result, "groups": _push_groups(result), "message": _push_summary(result, dry_run)}
 
 
 # ================================================================== #
@@ -482,11 +500,23 @@ async def plugin_set_default(
 
 
 @router.post("/apply-defaults")
-async def plugin_apply_defaults(manager: AccountManager = _DEP):
-    """把默认插件补齐到全部现有账户（已装则跳过，未启用则启用）。"""
-    result = await manager.apply_default_plugins()
+async def plugin_apply_defaults(dry_run: bool = False, manager: AccountManager = _DEP):
+    """把默认插件补齐到全部现有账户（已装则跳过，未启用则启用）。
+
+    :param dry_run: 只计算不执行，供二次确认弹窗预览「将要动谁」
+    """
+    result = await manager.apply_default_plugins(dry_run=dry_run)
+    groups = [
+        {"label": acct, "items": names}
+        for acct, names in result["applied"].items()
+    ]
     accounts = len(result["applied"])
-    msg = f"已为 {accounts} 个账户补齐默认插件" if accounts else "所有账户均无需补齐"
+    count = sum(len(v) for v in result["applied"].values())
+    if count:
+        msg = (f"{'将为' if dry_run else '已为'} {accounts} 个账户"
+               f"补齐 {count} 项默认插件")
+    else:
+        msg = "所有账户均无需补齐"
     if result["failed"]:
         msg += f"；清单中不存在于库: {', '.join(result['failed'])}"
-    return {**result, "message": msg}
+    return {**result, "groups": groups, "message": msg}

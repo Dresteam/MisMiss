@@ -1024,16 +1024,8 @@ class AccountManager:
         except (TypeError, ValueError):
             return (0,)
 
-    async def push_plugin_to_accounts(self, plugin_name: str | None = None) -> dict[str, Any]:
-        """把插件库版本推送到各账户副本。
-
-        只处理**已安装该插件**的账户，并跳过「副本版本不低于库版本」的——
-        更新会 stop/start 插件实例（断掉插件消息与内部状态），无谓的重载应当避免。
-        因此手动改过副本的账户、以及已是最新的账户都不会被触碰。
-
-        :param plugin_name: 插件名；``None`` 表示库中全部插件
-        :return: ``{"updated": [...], "skipped": [...], "failed": [...]}``
-        """
+    def _library_targets(self, plugin_name: str | None) -> list[tuple[str, str]]:
+        """取 ``[(插件名, 库版本), ...]``；指定单个插件时校验其存在于库中。"""
         from core.exceptions import CorePluginNotFoundException
 
         lib_pm = self.get_library_pm()
@@ -1041,38 +1033,122 @@ class AccountManager:
             lib_meta = lib_pm.get_plugin(plugin_name)
             if lib_meta is None:
                 raise CorePluginNotFoundException(plugin_name)
-            targets = [(plugin_name, lib_meta.version)]
-        else:
-            targets = [(m.name, m.version) for m in lib_pm.list_plugins()]
+            return [(plugin_name, lib_meta.version)]
+        return [(m.name, m.version) for m in lib_pm.list_plugins()]
+
+    async def _update_outdated_in_account(
+        self, account_id: int, targets: list[tuple[str, str]], dry_run: bool = False
+    ) -> dict[str, Any]:
+        """对单个账户做版本守卫更新，返回**插件名**清单。
+
+        只处理已安装的，并跳过「副本版本不低于库版本」的——更新会 stop/start
+        插件实例（断掉插件消息与内部状态），无谓的重载应当避免。
+
+        :param dry_run: 只计算不执行（供二次确认前预览明细），``updated`` 表示
+                        「将会更新」而非「已更新」
+        :return: ``{"updated", "skipped", "failed", "transitions"}``；
+                 ``transitions`` 为 ``{插件名: 原版本}``，供展示版本跨度
+        """
+        out: dict[str, Any] = {
+            "updated": [], "skipped": [], "failed": [], "transitions": {},
+        }
+        server = self._servers.get(account_id)
+        if server is None:
+            return out
+        pm = server._plugin_manager
+        for name, lib_version in targets:
+            meta = pm.get_plugin(name)
+            if meta is None:
+                continue  # 该账户未安装此插件
+            if self._version_tuple(meta.version) >= self._version_tuple(lib_version):
+                out["skipped"].append(name)
+                continue
+            out["transitions"][name] = meta.version  # 更新会换掉 meta，先记下原版本
+            if dry_run:
+                out["updated"].append(name)
+                continue
+            try:
+                await self.update_plugin_in_account(account_id, name)
+                out["updated"].append(name)
+            except Exception as e:
+                _log.warning("账户 {} 更新插件 {} 失败: {}", account_id, name, e)
+                out["failed"].append(name)
+                out["transitions"].pop(name, None)
+        return out
+
+    async def update_plugins_in_account(
+        self, account_id: int, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """把账户中「副本版本低于库版本」的插件一键更新到库版本。
+
+        与 :meth:`push_plugin_to_accounts` 同一套版本守卫，只是范围限定在单个账户——
+        已是最新的、以及未安装的都不会被触碰。
+
+        :param account_id: 账户 ID
+        :param dry_run: 只计算不执行（供二次确认前预览明细）
+        :return: ``{"updated", "skipped", "failed", "groups", "dry_run"}``；
+                 ``groups`` 按插件给出**版本跨度**（如 ``v1.0.4 → v1.0.5``），
+                 与面板推送的分组结构一致，前端可用同一套渲染
+        :raises CoreAccountNotFoundException: 账户不存在
+        """
+        self.get_record(account_id)
+        targets = self._library_targets(None)
+        lib_versions = dict(targets)
+        result = await self._update_outdated_in_account(
+            account_id, targets, dry_run=dry_run
+        )
+        result["groups"] = [
+            {
+                "label": name,
+                "items": [
+                    f"v{result['transitions'].get(name, '?')}"
+                    f" → v{lib_versions.get(name, '?')}"
+                ],
+            }
+            for name in result["updated"]
+        ]
+        result["dry_run"] = dry_run
+        _log.info(
+            "账户 {} 一键更新{}: 更新 {} / 跳过 {} / 失败 {}",
+            account_id, "预览" if dry_run else "",
+            len(result["updated"]), len(result["skipped"]), len(result["failed"]),
+        )
+        return result
+
+    async def push_plugin_to_accounts(
+        self, plugin_name: str | None = None, dry_run: bool = False
+    ) -> dict[str, Any]:
+        """把插件库版本推送到各账户副本（面板级）。
+
+        只处理**已安装该插件**的账户，并跳过「副本版本不低于库版本」的——
+        因此手动改过副本的账户、以及已是最新的账户都不会被触碰。
+
+        :param plugin_name: 插件名；``None`` 表示库中全部插件
+        :param dry_run: 只计算不执行（供二次确认前预览明细）
+        :return: ``{"updated": [...], "skipped": [...], "failed": [...]}``，
+                 条目形如 ``插件名@账户名``
+        :raises CorePluginNotFoundException: 指定的插件不在库中
+        """
+        targets = self._library_targets(plugin_name)
 
         updated: list[str] = []
         skipped: list[str] = []
         failed: list[str] = []
-
         for rec in self.list_records():
-            server = self._servers.get(rec.id)
-            if server is None:
-                continue
-            pm = server._plugin_manager
-            for name, lib_version in targets:
-                meta = pm.get_plugin(name)
-                if meta is None:
-                    continue  # 该账户未安装此插件
-                if self._version_tuple(meta.version) >= self._version_tuple(lib_version):
-                    skipped.append(f"{name}@{rec.name}")
-                    continue
-                try:
-                    await self.update_plugin_in_account(rec.id, name)
-                    updated.append(f"{name}@{rec.name}")
-                except Exception as e:
-                    _log.warning("账户 {} 推送插件 {} 失败: {}", rec.id, name, e)
-                    failed.append(f"{name}@{rec.name}")
+            res = await self._update_outdated_in_account(rec.id, targets, dry_run=dry_run)
+            updated += [f"{n}@{rec.name}" for n in res["updated"]]
+            skipped += [f"{n}@{rec.name}" for n in res["skipped"]]
+            failed += [f"{n}@{rec.name}" for n in res["failed"]]
 
         _log.info(
-            "插件推送完成: 更新 {} / 跳过 {} / 失败 {}",
+            "插件推送{}: 更新 {} / 跳过 {} / 失败 {}",
+            "预览" if dry_run else "完成",
             len(updated), len(skipped), len(failed),
         )
-        return {"updated": updated, "skipped": skipped, "failed": failed}
+        return {
+            "updated": updated, "skipped": skipped, "failed": failed,
+            "dry_run": dry_run,
+        }
 
     # ------------------------------------------------------------------ #
     # 默认插件
@@ -1102,19 +1178,32 @@ class AccountManager:
         _log.info("默认插件清单已更新: {}", self._default_plugins)
         return list(self._default_plugins)
 
-    async def _install_default_plugins(self, account_id: int) -> list[str]:
+    async def _install_default_plugins(
+        self, account_id: int, dry_run: bool = False
+    ) -> list[str]:
         """为账户安装并启用全部默认插件。
 
-        **失败只告警不抛出**——默认插件装不上（如库中已删除、依赖安装失败）
-        不应让账户创建整体失败。返回实际生效的插件名。
+        已装且已启用的默认插件直接跳过（无需处理）。**失败只告警不抛出**——
+        默认插件装不上（如库中已删除、依赖安装失败）不应让账户创建整体失败。
+        返回实际生效（``dry_run`` 时为「将生效」）的插件名。
         """
         server = self._servers.get(account_id)
         if server is None or not self._default_plugins:
             return []
+        pm = server._plugin_manager
+
+        # 先算出待处理集：已装且已启用的无需动
+        pending = [
+            name for name in list(self._default_plugins)
+            if not (lambda m: m is not None and m.enabled)(pm.get_plugin(name))
+        ]
+        if dry_run or not pending:
+            return pending
+
         applied: list[str] = []
-        for name in list(self._default_plugins):
+        for name in pending:
             try:
-                if server._plugin_manager.get_plugin(name) is None:
+                if pm.get_plugin(name) is None:
                     await self.install_plugin_to_account(account_id, name)
                 await server.enable_plugin(name)
                 applied.append(name)
@@ -1124,33 +1213,45 @@ class AccountManager:
             _log.info("账户 {} 已启用默认插件: {}", account_id, applied)
         return applied
 
-    async def apply_default_plugins(self) -> dict[str, Any]:
-        """把默认插件补齐到全部现有账户（已装则跳过，未启用则启用）。
+    async def apply_default_plugins(self, dry_run: bool = False) -> dict[str, Any]:
+        """把默认插件补齐到全部现有账户（未安装的装上并启用、已装未启用的启用）。
 
-        :return: ``{"applied": {账户名: [插件名]}, "failed": [...]}``
+        :param dry_run: 只计算不执行（供二次确认前预览明细），``applied`` 表示
+                        「将会补齐」而非「已补齐」
+        :return: ``{"applied": {账户名: [插件名]}, "failed": [...], "dry_run": bool}``
         """
         applied: dict[str, list[str]] = {}
         failed: list[str] = []
         for rec in self.list_records():
             if self._servers.get(rec.id) is None:
                 continue
-            names = await self._install_default_plugins(rec.id)
+            names = await self._install_default_plugins(rec.id, dry_run=dry_run)
             if names:
                 applied[rec.name] = names
+        # 清单里存在但库中已删除的插件——补不上，明确报出来
         for name in self._default_plugins:
             if self.get_library_pm().get_plugin(name) is None:
                 failed.append(name)
         _log.info(
-            "默认插件已应用到 {} 个账户；清单中不存在于库的: {}",
-            len(applied), failed,
+            "默认插件{}: {} 个账户；清单中不存在于库的: {}",
+            "预览" if dry_run else "已应用", len(applied), failed,
         )
-        return {"applied": applied, "failed": failed}
+        return {"applied": applied, "failed": failed, "dry_run": dry_run}
 
     async def uninstall_plugin_from_account(
         self, account_id: int, plugin_name: str,
         delete_config: bool = False, delete_data: bool = False,
+        delete_persistent: bool = False,
     ) -> None:
-        """账户卸载插件:停止实例、删除源码副本,可选清除配置/数据。"""
+        """账户卸载插件:停止实例、删除源码副本,可选清除配置/数据。
+
+        数据按「谁创建的」分成两类，分别对应插件数据目录 ``plugins/{name}/`` 下的文件：
+
+        - ``delete_data``：插件经 ``self.data`` 创建/读取的 **JSON** 数据
+        - ``delete_persistent``：目录中的**其他**文件（插件自带或自行创建的非 JSON 文件）
+
+        两者独立，都不选时数据目录原样保留（重新安装即可续用）。
+        """
         server = self.get_server(account_id)
         pm = server._plugin_manager
         meta = pm.get_plugin(plugin_name)
@@ -1161,17 +1262,52 @@ class AccountManager:
                 _log.warning("账户 {} 停用插件 {} 失败: {}", account_id, plugin_name, e)
         base = self._server_dirs(account_id)
         shutil.rmtree(os.path.join(base, "installed_plugins", plugin_name), ignore_errors=True)
+        # 配置与权限是**文件**（{name}_config.json / {name}_permissions.json），
+        # 不是以插件名命名的目录——必须走各自管理器的删除方法，否则删不掉
         if delete_config:
-            shutil.rmtree(os.path.join(base, "config", plugin_name), ignore_errors=True)
-            shutil.rmtree(os.path.join(base, "permissions", plugin_name), ignore_errors=True)
-        if delete_data:
-            shutil.rmtree(os.path.join(base, "plugins", plugin_name), ignore_errors=True)
+            pm._config_mgr.delete_config_file(plugin_name)
+            pm._permission_mgr.delete_permissions(plugin_name)
+        if delete_data or delete_persistent:
+            self._prune_plugin_data_dir(
+                os.path.join(base, "plugins", plugin_name),
+                delete_json=delete_data,
+                delete_other=delete_persistent,
+            )
         # load_all 只做增量合并,不会移除目录已消失的插件 → 显式清除条目
         pm._plugins.pop(plugin_name, None)
         pm._failed_plugins.pop(plugin_name, None)
         await server.refresh_plugins()
         server._save_state()
         _log.info("账户 {} 已卸载插件 {}", account_id, plugin_name)
+
+    @staticmethod
+    def _prune_plugin_data_dir(
+        data_dir: str, *, delete_json: bool, delete_other: bool
+    ) -> None:
+        """按类别清理插件数据目录里的文件，随后回收变空的目录。
+
+        **按文件扩展名区分**：``*.json`` 视为插件经 ``self.data`` 创建的数据，
+        其余文件视为插件自带或自行创建的持久化文件。两类可独立选择。
+
+        :param data_dir: 插件数据目录（``data/accounts/{id}/plugins/{name}/``）
+        :param delete_json: 删除 ``*.json``
+        :param delete_other: 删除非 ``*.json`` 的文件
+        """
+        if not os.path.isdir(data_dir):
+            return
+        # topdown=False → 先处理子项，空目录才能自底向上回收
+        for root, _dirs, files in os.walk(data_dir, topdown=False):
+            for fname in files:
+                is_json = fname.lower().endswith(".json")
+                if (delete_json and is_json) or (delete_other and not is_json):
+                    try:
+                        os.remove(os.path.join(root, fname))
+                    except OSError as e:
+                        _log.warning("删除插件数据文件失败 {}: {}", fname, e)
+            if root != data_dir and not os.listdir(root):
+                shutil.rmtree(root, ignore_errors=True)
+        if not os.listdir(data_dir):
+            shutil.rmtree(data_dir, ignore_errors=True)
 
     def list_available_plugins(self, account_id: int) -> list[dict[str, Any]]:
         """账户可安装的库插件列表(含是否已安装)。"""

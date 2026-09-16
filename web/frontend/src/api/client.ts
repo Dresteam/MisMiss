@@ -19,6 +19,7 @@ import type {
   ServerStatus,
   PluginPushResult,
   ApplyDefaultsResult,
+  AccountUpdateAllResult,
 } from './types';
 
 // ================================================================== //
@@ -287,15 +288,19 @@ export async function refreshPlugins(): Promise<StatusResponse> {
 }
 
 /** 把单个插件的库版本推送到各账户副本（跳过副本不旧于库的）。 */
-export async function pushPluginToAccounts(name: string): Promise<PluginPushResult> {
-  return request<PluginPushResult>(`/plugin/${encodeURIComponent(name)}/push`, {
-    method: 'POST',
-  });
+export async function pushPluginToAccounts(
+  name: string,
+  dryRun = false,
+): Promise<PluginPushResult> {
+  return request<PluginPushResult>(
+    `/plugin/${encodeURIComponent(name)}/push?dry_run=${dryRun}`,
+    { method: 'POST' },
+  );
 }
 
 /** 把库中全部插件推送到各账户副本。 */
-export async function pushAllPlugins(): Promise<PluginPushResult> {
-  return request<PluginPushResult>('/plugin/push-all', { method: 'POST' });
+export async function pushAllPlugins(dryRun = false): Promise<PluginPushResult> {
+  return request<PluginPushResult>(`/plugin/push-all?dry_run=${dryRun}`, { method: 'POST' });
 }
 
 /** 设为 / 取消默认插件（新建账户时自动安装并启用）。 */
@@ -309,9 +314,11 @@ export async function setPluginDefault(
   });
 }
 
-/** 把默认插件补齐到全部现有账户。 */
-export async function applyDefaultPlugins(): Promise<ApplyDefaultsResult> {
-  return request<ApplyDefaultsResult>('/plugin/apply-defaults', { method: 'POST' });
+/** 把默认插件补齐到全部现有账户（dryRun 时只预览将要补齐谁）。 */
+export async function applyDefaultPlugins(dryRun = false): Promise<ApplyDefaultsResult> {
+  return request<ApplyDefaultsResult>(`/plugin/apply-defaults?dry_run=${dryRun}`, {
+    method: 'POST',
+  });
 }
 
 // ================================================================== //
@@ -698,15 +705,28 @@ export async function updateAccountPlugin(id: number, name: string): Promise<Sta
   });
 }
 
+/** 一键更新本账户中所有「副本版本低于库版本」的插件（dryRun 时只预览）。 */
+export async function updateAllAccountPlugins(
+  id: number,
+  dryRun = false,
+): Promise<AccountUpdateAllResult> {
+  return request<AccountUpdateAllResult>(
+    `/accounts/${id}/plugins/update-all?dry_run=${dryRun}`,
+    { method: 'POST' },
+  );
+}
+
 export async function uninstallAccountPluginFromAccount(
   id: number,
   name: string,
   deleteConfig = false,
   deleteData = false,
+  deletePersistent = false,
 ): Promise<StatusResponse> {
   const params = new URLSearchParams({
     delete_config: String(deleteConfig),
     delete_data: String(deleteData),
+    delete_persistent: String(deletePersistent),
   });
   return request<StatusResponse>(
     `/accounts/${id}/plugins/${encodeURIComponent(name)}?${params}`,

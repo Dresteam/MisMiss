@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Save, RotateCcw, Plus, X } from 'lucide-react';
+import { Save, RotateCcw, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
 import type { ConfigFieldSchema } from '../api/types';
 import { Button } from './Button';
 
@@ -9,6 +9,11 @@ interface Props {
   onSave: (config: Record<string, unknown>) => Promise<void>;
   loading?: boolean;
 }
+
+/** 默认展开的分组——重点配置应直接可见 */
+const PRIMARY_GROUP = '常用';
+/** 未标注 group 的字段归到这里，排在最后 */
+const FALLBACK_GROUP = '其他';
 
 export function DynamicConfigForm({ schema, values, onSave, loading }: Props) {
   const [formValues, setFormValues] = useState<Record<string, unknown>>(() => {
@@ -21,6 +26,10 @@ export function DynamicConfigForm({ schema, values, onSave, loading }: Props) {
   });
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  /** 分组展开状态；未记录过的分组按默认值决定（常用/其他展开，其余折叠） */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const isOpen = (name: string) =>
+    openGroups[name] ?? (name === PRIMARY_GROUP || name === FALLBACK_GROUP);
 
   const handleChange = (key: string, value: unknown) => {
     setFormValues((prev) => ({ ...prev, [key]: value }));
@@ -291,6 +300,27 @@ export function DynamicConfigForm({ schema, values, onSave, loading }: Props) {
 
   const fields = Object.entries(schema);
 
+  // 只要 schema 里有一个字段标了 group 就按组渲染，否则维持原来的平铺——
+  // 未标注分组的插件（含全部老插件）因此零变化
+  const useGroups = fields.some(([, f]) => !!f.group);
+  const groupList: { name: string; items: [string, ConfigFieldSchema][] }[] = [];
+  if (useGroups) {
+    const index = new Map<string, number>();
+    for (const [key, field] of fields) {
+      const name = field.group || FALLBACK_GROUP;
+      if (!index.has(name)) {
+        index.set(name, groupList.length);
+        groupList.push({ name, items: [] });
+      }
+      groupList[index.get(name)!].items.push([key, field]);
+    }
+    // 未标注分组的字段挪到最后一组，免得夹在「常用」与「高级」之间
+    const at = groupList.findIndex((g) => g.name === FALLBACK_GROUP);
+    if (at >= 0 && at !== groupList.length - 1) {
+      groupList.push(groupList.splice(at, 1)[0]);
+    }
+  }
+
   if (fields.length === 0) {
     return (
       <div className="text-center py-8 text-surface-400 text-sm">
@@ -302,8 +332,37 @@ export function DynamicConfigForm({ schema, values, onSave, loading }: Props) {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* 配置项滚动区 */}
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-5 pr-1">
-        {fields.map(([key, field]) => renderField(key, field))}
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">
+        {useGroups
+          ? groupList.map((g) => {
+              const open = isOpen(g.name);
+              return (
+                <div key={g.name}
+                  className="rounded-lg border border-surface-200 dark:border-surface-700 overflow-hidden">
+                  <button type="button"
+                    onClick={() => setOpenGroups((prev) => ({ ...prev, [g.name]: !open }))}
+                    className="w-full flex items-center justify-between px-3 py-2 text-left
+                               bg-surface-50/60 dark:bg-surface-800/40
+                               hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors">
+                    <span className="text-sm font-medium text-surface-700 dark:text-surface-200">
+                      {g.name}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-xs text-surface-400">
+                      {g.items.length} 项
+                      {open
+                        ? <ChevronUp className="w-3.5 h-3.5" />
+                        : <ChevronDown className="w-3.5 h-3.5" />}
+                    </span>
+                  </button>
+                  {open && (
+                    <div className="px-3 py-4 space-y-5">
+                      {g.items.map(([key, field]) => renderField(key, field))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          : fields.map(([key, field]) => renderField(key, field))}
       </div>
 
       {/* 按钮区 —— 固定底部、不悬浮、不遮挡（占独立空间） */}

@@ -18,11 +18,11 @@ import {
   disableAccountPlugin, reloadAccountPlugin, renewAccount, redeemAccount,
   fetchAccountPluginReadme, fetchAccountPluginConfig, updateAccountPluginConfig,
   getAccountBotCookie, uninstallAccountPluginFromAccount, fetchAccountLibrary,
-  installAccountPlugin, updateAccountPlugin,
+  installAccountPlugin, updateAccountPlugin, updateAllAccountPlugins,
 } from '../api/client';
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
-  TimerData, TimerMessageItem,
+  TimerData, TimerMessageItem, BulkGroup,
 } from '../api/types';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
@@ -949,6 +949,13 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
   const [processing, setProcessing] = useState('');
   const [drawerTarget, setDrawerTarget] = useState<{ name: string; tab?: string } | null>(null);
   const [uninstallTarget, setUninstallTarget] = useState<PluginSummary | null>(null);
+  // 一键更新的二次确认：先取预览，拿到「将更新哪些插件 + 版本跨度」再弹框
+  // 注意：必须与其他 hook 一起声明在下面的提前 return **之前**，否则 hook 数量不稳定
+  const [updateAllConfirm, setUpdateAllConfirm] = useState<{
+    message: string;
+    groups: BulkGroup[];
+  } | null>(null);
+  const [updateAllListOpen, setUpdateAllListOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -1006,6 +1013,35 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
   const visible = plugins.filter((p) =>
     filter === 'all' ? true : filter === 'enabled' ? p.enabled : !p.enabled
   );
+  /** 已安装版本低于插件库版本的插件——一键更新的目标 */
+  const updatable = plugins.filter((p) => updateVersion(p) !== null);
+
+  const askUpdateAll = async () => {
+    setProcessing('update-all');
+    try {
+      const p = await updateAllAccountPlugins(acc.id, true);
+      if (p.groups.length === 0) {
+        showToast('success', '所有插件均为最新，无需更新', '');
+        return;
+      }
+      setUpdateAllListOpen(false);
+      setUpdateAllConfirm({ message: p.message, groups: p.groups });
+    } catch (e: any) {
+      showToast('error', '无法获取预览', e.message);
+    } finally { setProcessing(''); }
+  };
+
+  const doUpdateAll = async () => {
+    setProcessing('update-all');
+    try {
+      const r = await updateAllAccountPlugins(acc.id, false);
+      showToast('success', r.message || '插件已更新', '');
+      setUpdateAllConfirm(null);
+      load();
+    } catch (e: any) {
+      showToast('error', '更新失败', e.message);
+    } finally { setProcessing(''); }
+  };
 
   return (
     <div className="space-y-4">
@@ -1015,16 +1051,25 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
           <h2 className="text-lg font-bold text-gray-900 dark:text-white">已安装插件</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {plugins.length} 个插件 · {enabledCount} 个已启用
+            {updatable.length > 0 && ` · ${updatable.length} 个可更新`}
           </p>
         </div>
-        {onOpenLibrary ? (
-          <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />} className="shrink-0"
-            onClick={onOpenLibrary}>插件库</Button>
-        ) : (
-          <Link to="/account/library" className="shrink-0">
-            <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />}>插件库</Button>
-          </Link>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          <Button size="sm" variant="secondary" icon={<RefreshCw className="w-4 h-4" />}
+            disabled={updatable.length === 0 || !!processing}
+            loading={processing === 'update-all'}
+            onClick={askUpdateAll}>
+            一键更新{updatable.length > 0 ? ` (${updatable.length})` : ''}
+          </Button>
+          {onOpenLibrary ? (
+            <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />}
+              onClick={onOpenLibrary}>插件库</Button>
+          ) : (
+            <Link to="/account/library">
+              <Button size="sm" variant="secondary" icon={<Plus className="w-4 h-4" />}>插件库</Button>
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* 筛选 */}
@@ -1158,16 +1203,18 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
         />
       )}
 
-      {/* 卸载确认(v1.0.1 风格:可选删除配置/持久化数据) */}
+      {/* 卸载确认：三个数据选项默认不勾选（组件内每次打开都会重置） */}
       <UninstallDialog
         open={uninstallTarget !== null}
         pluginName={(uninstallTarget?.display_name || uninstallTarget?.name) ?? ''}
         loading={processing === `del-${uninstallTarget?.name}`}
-        onConfirm={async (deleteConfig, deleteData) => {
+        onConfirm={async (deleteConfig, deleteData, deletePersistent) => {
           if (!uninstallTarget) return;
           setProcessing(`del-${uninstallTarget.name}`);
           try {
-            await uninstallAccountPluginFromAccount(acc.id, uninstallTarget.name, deleteConfig, deleteData);
+            await uninstallAccountPluginFromAccount(
+              acc.id, uninstallTarget.name, deleteConfig, deleteData, deletePersistent,
+            );
             showToast('success', '已卸载');
             setUninstallTarget(null);
             load();
@@ -1177,6 +1224,46 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
         }}
         onCancel={() => setUninstallTarget(null)}
       />
+
+      {/* 一键更新二次确认——会重启插件实例，误触代价大 */}
+      {updateAllConfirm && (
+        <ConfirmDialog
+          open
+          title="一键更新插件"
+          message={`${updateAllConfirm.message}。更新会重启对应插件实例，`
+            + '其插件消息与内部状态会中断（配置与启用状态保留）'}
+          confirmLabel="确认更新"
+          variant="warning"
+          loading={processing === 'update-all'}
+          onConfirm={doUpdateAll}
+          onCancel={() => setUpdateAllConfirm(null)}>
+          <div className="mt-3">
+            <button type="button" onClick={() => setUpdateAllListOpen((v) => !v)}
+              className="flex items-center gap-1 text-xs font-medium text-primary-600
+                         dark:text-primary-400 hover:underline">
+              {updateAllListOpen
+                ? <ChevronUp className="w-3.5 h-3.5" />
+                : <ChevronDown className="w-3.5 h-3.5" />}
+              {updateAllListOpen ? '收起' : '展开'}明细（{updateAllConfirm.groups.length} 个插件）
+            </button>
+            {updateAllListOpen && (
+              <div className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-gray-200
+                              dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700/60">
+                {updateAllConfirm.groups.map((g) => (
+                  <div key={g.label} className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="text-xs font-medium text-gray-700 dark:text-gray-200 truncate">
+                      {g.label}
+                    </span>
+                    <span className="text-[11px] font-mono text-gray-500 dark:text-gray-400 shrink-0">
+                      {g.items.join('')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

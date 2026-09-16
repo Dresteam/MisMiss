@@ -109,32 +109,54 @@ plugins/my_plugin/
     "greeting_enabled": {
         "type": "boolean",
         "default": true,
-        "description": "是否输出初始化问候"
+        "description": "是否输出初始化问候",
+        "group": "常用"
     },
     "max_length": {
         "type": "int",
         "default": 500,
-        "description": "最大长度"
+        "description": "最大长度",
+        "group": "常用"
     },
     "threshold": {
         "type": "float",
         "default": 100.0,
-        "description": "阈值"
-    },
-    "allowed_rooms": {
-        "type": "array",
-        "default": [],
-        "description": "启用的直播间 ID（空=全部）"
+        "description": "阈值",
+        "group": "高级"
     },
     "template_text": {
         "type": "string",
         "default": "你好 {user}",
-        "description": "模板文本"
+        "description": "模板文本",
+        "group": "文案"
     }
 }
 ```
 
 支持的类型：`string`, `int`, `integer`, `float`, `number`, `bool`, `boolean`, `array`, `list`, `template_list`, `object`。
+
+#### 配置分组（可选）
+
+给字段加 `group` 即按组展示配置页，便于用户找到常用项：
+
+| 分组 | 放什么 |
+|------|--------|
+| `常用` | 功能开关、指令名——用户最常改的项。**默认展开** |
+| `文案` | 消息与提示模板——想改话术时来这里 |
+| `高级` | 装饰线、边框、emoji、格式模板、接口地址等细节 |
+
+规则：
+
+- **一个都不写 = 不分组**，配置页维持平铺（老插件无需任何改动）
+- 只要有一个字段写了 `group`，整个配置页就按组渲染；组的顺序 = 字段在 schema 中出现的顺序
+- 未写 `group` 的字段归入「其他」，排在最后且**默认展开**（避免把没标注的项藏起来）
+- 除「常用」与「其他」外，各组**默认折叠**，标题右侧显示项数
+- `group` 只是展示元数据：不会进入配置值，`generate_default_config` 与既有配置读写均不受影响
+
+分组名可自定义（不限上述三个），但建议沿用这套词汇以保持一致。
+
+> 配置项多的插件（如 `gift_thanks` 43 项、`number_bomb` 37 项、`song_request` 32 项）强烈建议分组；
+> 只有几项的插件分组反而啰嗦，可不写。
 
 ### 4.2 读取配置
 
