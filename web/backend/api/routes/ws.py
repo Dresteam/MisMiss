@@ -14,6 +14,7 @@ import logging
 import re
 import threading
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -280,9 +281,17 @@ try:
         record = message.record
         # extra 由 core.logging._caller_context() 绑定：class_name / path
         extra = record["extra"]
+        text = str(record["message"])
+        # logger.exception() 抓到的堆栈只进日志文件与 stderr，而面板读的是本缓冲区，
+        # 不并进来就只剩一行摘要——失败原因在界面上完全看不到
+        exc = record["exception"]
+        if exc is not None:
+            text += "\n" + "".join(
+                traceback.format_exception(exc.type, exc.value, exc.traceback)
+            ).rstrip()
         _enqueue(_buffer.append(
             record["level"].name,
-            str(record["message"]),
+            text,
             source=str(extra.get("class_name", "") or ""),
             path=str(extra.get("path", "") or ""),
         ))

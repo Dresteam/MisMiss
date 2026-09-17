@@ -891,7 +891,12 @@ class PluginManager:
             await instance.initialize(config=miss_config)
         except Exception as e:
             # exception() 会自动附带完整 traceback，报错进入日志文件与实时日志流
-            _log.exception("插件 [{}] 初始化失败: {}", metadata.name, e)
+            # str(e) 可能为空（如 `raise Exception()`），退回异常类型名，
+            # 否则日志会以「初始化失败:」结尾，看不出失败原因
+            _log.exception(
+                "插件 [{}] 初始化失败: {}",
+                metadata.name, str(e) or type(e).__name__,
+            )
             metadata.enabled = False
             metadata.initialized = False
             metadata.last_error = str(e)
@@ -1138,7 +1143,12 @@ class PluginManager:
             await instance.initialize(config=miss_config)
         except Exception as e:
             # exception() 会自动附带完整 traceback，报错进入日志文件与实时日志流
-            _log.exception("插件 [{}] 初始化失败: {}", metadata.name, e)
+            # str(e) 可能为空（如 `raise Exception()`），退回异常类型名，
+            # 否则日志会以「初始化失败:」结尾，看不出失败原因
+            _log.exception(
+                "插件 [{}] 初始化失败: {}",
+                metadata.name, str(e) or type(e).__name__,
+            )
             metadata.enabled = False
             metadata.initialized = False
             metadata.last_error = str(e)
