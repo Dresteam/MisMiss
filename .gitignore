@@ -33,6 +33,10 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# 例外：本项目的 spec 是手写的构建输入（scripts/build.ps1 直接引用），必须入库。
+# PyInstaller 生成的临时 spec 由脚本用 --specpath 落到 build/，已被上面的
+# build/ 规则覆盖，不会因为这条例外而误入库。
+!mismiss.spec
 
 # Installer logs
 pip-log.txt
