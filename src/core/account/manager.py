@@ -73,6 +73,8 @@ class AccountRecord:
     password_hash: str = ""
     # 最后一次确认已读更新日志的版本；"" = 尚未确认过（升级到本版本后会弹一次）
     seen_changelog_version: str = ""
+    # 从插件库安装插件后是否自动启用（账户级偏好，默认关闭）
+    auto_enable_on_install: bool = False
 
     @property
     def is_permanent(self) -> bool:
@@ -112,6 +114,7 @@ class AccountRecord:
             "username": self.username,
             "password_hash": self.password_hash,
             "seen_changelog_version": self.seen_changelog_version,
+            "auto_enable_on_install": self.auto_enable_on_install,
         }
 
     @classmethod
@@ -130,6 +133,7 @@ class AccountRecord:
             username=str(d.get("username", "")),
             password_hash=str(d.get("password_hash", "")),
             seen_changelog_version=str(d.get("seen_changelog_version", "")),
+            auto_enable_on_install=bool(d.get("auto_enable_on_install", False)),
         )
 
 
@@ -410,6 +414,20 @@ class AccountManager:
         _log.info("账户 {} 已确认更新日志 v{}", rec.id, version)
         return rec
 
+    def set_auto_enable_on_install(self, account_id: int, enabled: bool) -> AccountRecord:
+        """设置「从插件库安装插件后自动启用」偏好（账户自助，默认关闭）。
+
+        :param enabled: 是否自动启用
+        """
+        rec = self.get_record(account_id)
+        if rec.auto_enable_on_install == bool(enabled):
+            return rec
+        rec.auto_enable_on_install = bool(enabled)
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        _log.info("账户 {} 安装插件自动启用 = {}", rec.id, rec.auto_enable_on_install)
+        return rec
+
     def get_record(self, account_id: int) -> AccountRecord:
         rec = self._records.get(int(account_id))
         if rec is None:
@@ -454,6 +472,7 @@ class AccountManager:
             "days_left": rec.days_left,
             "paused_reason": rec.paused_reason,
             "resume_error": rec.resume_error,
+            "auto_enable_on_install": rec.auto_enable_on_install,
         }
         if server is not None:
             bot = server.bot
@@ -988,14 +1007,17 @@ class AccountManager:
             result.append(item)
         return result
 
-    async def install_plugin_to_account(self, account_id: int, plugin_name: str) -> None:
+    async def install_plugin_to_account(self, account_id: int, plugin_name: str) -> str:
         """账户从插件库安装插件:拷贝源码副本到账户目录并刷新实例。
 
+        账户开启「安装插件自动启用」偏好时会随即启用；启用失败**不影响安装结果**
+        （插件保留为已安装+停用，失败原因写入 last_error 并进日志），仅在返回值中说明。
+
+        :return: 描述实际结果的消息（供界面直接展示）
         :raises CorePluginNotFoundException: 插件库中不存在
         :raises ValueError: 账户已安装该插件
         """
         from core.exceptions import CorePluginNotFoundException
-        lib_pm = self.get_library_pm()
         src = os.path.join("plugins", plugin_name)
         if not os.path.isdir(src):
             raise CorePluginNotFoundException(plugin_name)
@@ -1014,6 +1036,18 @@ class AccountManager:
         if meta is not None:
             pm._ensure_plugin_loaded(meta)
         _log.info("账户 {} 已安装插件 {}", account_id, plugin_name)
+
+        if not self.get_record(account_id).auto_enable_on_install:
+            return f"插件 '{plugin_name}' 已安装（默认停用）"
+
+        try:
+            await server.enable_plugin(plugin_name)
+        except Exception as e:  # noqa: BLE001 — 启用失败不阻断安装
+            # 安装已完成，不因启用失败而回滚——插件保留为已安装+停用，
+            # 卡片上会显示「初始化失败」徽标，完整堆栈见插件日志
+            _log.warning("账户 {} 安装后自动启用 {} 失败: {}", account_id, plugin_name, e)
+            return f"插件 '{plugin_name}' 已安装，但自动启用失败：{e}"
+        return f"插件 '{plugin_name}' 已安装并启用"
 
     async def update_plugin_in_account(self, account_id: int, plugin_name: str) -> None:
         """从插件库更新账户插件副本:覆盖源码并重载实例(保留启用状态)。

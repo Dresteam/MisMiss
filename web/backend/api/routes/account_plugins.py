@@ -127,14 +127,19 @@ async def plugin_library(account_id: int, s: MissevanServer = Depends(require_ac
 async def plugin_install_to_account(
     account_id: int, body: dict, s: MissevanServer = Depends(require_active_account)
 ):
-    """从插件库安装插件到账户(拷贝源码副本独立运行,安装后默认停用)。"""
+    """从插件库安装插件到账户(拷贝源码副本独立运行)。
+
+    账户开启「安装插件自动启用」偏好时会随即启用；启用失败不影响安装结果。
+    """
     plugin_name = str(body.get("name", "")).strip()
     if not plugin_name:
         raise HTTPException(status_code=400, detail="必须指定插件名")
     from api.deps import get_account_manager
     try:
-        await get_account_manager().install_plugin_to_account(account_id, plugin_name)
-        return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已安装到账户(默认停用)")
+        message = await get_account_manager().install_plugin_to_account(
+            account_id, plugin_name
+        )
+        return StatusResponse(success=True, message=message)
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:

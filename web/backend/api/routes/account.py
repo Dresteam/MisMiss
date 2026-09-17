@@ -10,6 +10,7 @@ from api.deps import get_account_manager, require_account
 from api.routes.auth import _clear_account_tokens
 from api.schemas import (
     AccountPasswordChangeRequest,
+    AccountPreferencesRequest,
     AccountSummary,
     RedeemRequest,
     StatusResponse,
@@ -63,3 +64,21 @@ async def account_change_password(
     # 清除该账户的全部登录 token,强制重新登录
     _clear_account_tokens(account_id)
     return StatusResponse(success=True, message="密码已修改,请重新登录")
+
+
+@router.post("/preferences", response_model=AccountSummary)
+async def account_update_preferences(
+    account_id: int,
+    req: AccountPreferencesRequest,
+    s: MissevanServer = Depends(require_account),
+):
+    """更新账户级偏好(账户持有者自助)。
+
+    目前只有「安装插件自动启用」一项；偏好按账户独立存储于 panel.json。
+    """
+    manager = get_account_manager()
+    try:
+        rec = manager.set_auto_enable_on_install(account_id, req.auto_enable_on_install)
+    except CoreAccountNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return AccountSummary(**manager._account_snapshot(rec))

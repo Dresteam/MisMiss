@@ -263,6 +263,14 @@ class RedeemRequest(BaseModel):
     code: str = Field(..., min_length=1)
 
 
+class AccountPreferencesRequest(BaseModel):
+    """账户级偏好更新请求。"""
+
+    auto_enable_on_install: bool = Field(
+        ..., description="从插件库安装插件后是否自动启用"
+    )
+
+
 class AccountSummary(BaseModel):
     """账户摘要(面板列表用)。"""
 
@@ -286,6 +294,8 @@ class AccountSummary(BaseModel):
     plugin_count: int = 0
     # 操作结果提示(如「永久账户无需续期」),仅写操作返回,供前端弹 toast
     notice: str | None = None
+    # 账户级偏好：从插件库安装插件后是否自动启用（默认关闭）
+    auto_enable_on_install: bool = False
     enabled_plugin_count: int = 0
     timer_message_count: int = 0
     normal_timer_message_count: int = 0

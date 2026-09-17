@@ -19,6 +19,7 @@ import {
   fetchAccountPluginReadme, fetchAccountPluginConfig, updateAccountPluginConfig,
   getAccountBotCookie, uninstallAccountPluginFromAccount, fetchAccountLibrary,
   installAccountPlugin, updateAccountPlugin, updateAllAccountPlugins,
+  updateAccountPreferences,
 } from '../api/client';
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
@@ -1363,6 +1364,9 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
   const [detailTarget, setDetailTarget] = useState<{ name: string; tab?: string } | null>(null);
+  // 账户级偏好：安装后是否自动启用（默认关闭）
+  const [autoEnable, setAutoEnable] = useState(acc.auto_enable_on_install);
+  const [savingPref, setSavingPref] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -1372,6 +1376,21 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
   }, [acc.id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 父组件刷新账户摘要后同步（如切回本 Tab、面板重新拉取）
+  useEffect(() => { setAutoEnable(acc.auto_enable_on_install); }, [acc.auto_enable_on_install]);
+
+  const toggleAutoEnable = async (next: boolean) => {
+    setSavingPref(true);
+    setAutoEnable(next); // 乐观更新，失败回滚
+    try {
+      await updateAccountPreferences(acc.id, next);
+      showToast('success', next ? '安装插件后将自动启用' : '安装插件后将保持停用', '');
+    } catch (e: any) {
+      setAutoEnable(!next);
+      showToast('error', '设置失败', e.message);
+    } finally { setSavingPref(false); }
+  };
 
   if (loading) {
     return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-primary-500" /></div>;
@@ -1387,10 +1406,20 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
             安装 = 拷贝源码副本到本账户独立运行 · {library.length} 个插件
           </p>
         </div>
-        <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />} className="shrink-0"
-          onClick={() => { setLoading(true); load(); }}>
-          刷新
-        </Button>
+        <div className="flex items-center gap-3 shrink-0">
+          <label
+            title="开启后，从插件库安装插件会立即启用它；默认关闭（安装后保持停用）"
+            className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">
+            <input type="checkbox" checked={autoEnable} disabled={savingPref}
+              onChange={(e) => toggleAutoEnable(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 disabled:opacity-50" />
+            安装后自动启用
+          </label>
+          <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />}
+            onClick={() => { setLoading(true); load(); }}>
+            刷新
+          </Button>
+        </div>
       </div>
 
       {library.length === 0 ? (

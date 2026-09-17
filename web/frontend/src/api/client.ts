@@ -696,6 +696,16 @@ export async function installAccountPlugin(id: number, name: string): Promise<St
   });
 }
 
+/** 更新账户级偏好（目前只有「安装插件自动启用」）。 */
+export async function updateAccountPreferences(
+  id: number, autoEnableOnInstall: boolean,
+): Promise<AccountSummary> {
+  return request<AccountSummary>(`/accounts/${id}/preferences`, {
+    method: 'POST',
+    body: JSON.stringify({ auto_enable_on_install: autoEnableOnInstall }),
+  });
+}
+
 /** 从插件库更新账户插件副本(保留启用状态与既有配置,新字段自动补默认值)。 */
 export async function updateAccountPlugin(id: number, name: string): Promise<StatusResponse> {
   return request<StatusResponse>(`/accounts/${id}/plugins/${encodeURIComponent(name)}/update`, {

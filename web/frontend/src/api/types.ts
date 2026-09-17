@@ -212,6 +212,8 @@ export interface AccountSummary {
   plugin_timer_message_count: number;
   /** 操作结果提示（如「永久账户无需续期」），仅写操作返回 */
   notice?: string | null;
+  /** 账户级偏好：从插件库安装插件后是否自动启用（默认关闭） */
+  auto_enable_on_install: boolean;
 }
 
 export interface PanelOverview {
