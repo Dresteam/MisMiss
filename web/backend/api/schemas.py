@@ -249,10 +249,16 @@ class AccountPasswordChangeRequest(BaseModel):
 
 
 class RenewRequest(BaseModel):
-    """续期请求:days 与 expires_at 二选一。"""
+    """续期请求:permanent / expires_at / days 三选一。
+
+    - ``permanent=true`` —— 设为永不过期
+    - ``expires_at`` —— 直接设置到期时间(覆盖,可用于把永久改为限期)
+    - ``days`` —— 在当前到期时间上叠加(永久账户保持永久,不做变更)
+    """
 
     days: int | None = Field(default=None, gt=0)
     expires_at: str | None = Field(default=None, description="直接设置到期时间")
+    permanent: bool = Field(default=False, description="设为永不过期")
 
 
 class RedeemRequest(BaseModel):
@@ -282,6 +288,8 @@ class AccountSummary(BaseModel):
     room_enabled: bool = False
     room_name: str = ""
     plugin_count: int = 0
+    # 操作结果提示(如「永久账户无需续期」),仅写操作返回,供前端弹 toast
+    notice: str | None = None
     enabled_plugin_count: int = 0
     timer_message_count: int = 0
     normal_timer_message_count: int = 0

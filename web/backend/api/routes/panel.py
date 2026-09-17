@@ -48,8 +48,12 @@ def _permission_names(value: int) -> list[str]:
     return [p.name for p in BotPermission if flag & p]
 
 
-def _summary(manager: AccountManager, account_id: int) -> AccountSummary:
-    return AccountSummary(**manager._account_snapshot(manager.get_record(account_id)))
+def _summary(
+    manager: AccountManager, account_id: int, notice: str | None = None
+) -> AccountSummary:
+    return AccountSummary(
+        **manager._account_snapshot(manager.get_record(account_id)), notice=notice
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -183,19 +187,29 @@ async def accounts_delete(
 async def accounts_renew(
     account_id: int, req: RenewRequest, manager: AccountManager = _DEP
 ):
-    """续期:days(叠加天数)或 expires_at(直接设置)。"""
+    """续期:permanent(设为永久)/ expires_at(直接设置)/ days(叠加天数)。"""
+    notice: str | None = None
     try:
-        if req.expires_at is not None:
+        if req.permanent:
+            rec = await manager._apply_renewal(account_id, None)
+        elif req.expires_at is not None:
             rec = await manager._apply_renewal(account_id, req.expires_at)
         elif req.days is not None:
-            rec = await manager.renew_days(account_id, req.days)
+            # 永久账户叠加天数无意义——保持永久并提示,避免管理员误以为已加天数
+            if manager.get_record(account_id).is_permanent:
+                rec = manager.get_record(account_id)
+                notice = "该账户为永久有效，无需续期"
+            else:
+                rec = await manager.renew_days(account_id, req.days)
         else:
-            raise HTTPException(status_code=400, detail="必须提供 days 或 expires_at")
+            raise HTTPException(
+                status_code=400, detail="必须提供 permanent / expires_at / days 之一"
+            )
     except CoreAccountNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return _summary(manager, rec.id)
+    return _summary(manager, rec.id, notice=notice)
 
 
 @router.post("/accounts/{account_id}/redeem", response_model=AccountSummary)

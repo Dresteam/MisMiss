@@ -22,7 +22,7 @@ import {
 } from '../api/client';
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
-  TimerData, TimerMessageItem, BulkGroup,
+  TimerData, TimerMessageItem, BulkGroup, RenewRequest,
 } from '../api/types';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
@@ -47,7 +47,7 @@ const PERM_LABELS: Record<string, string> = {
 // 概览 Tab
 // ================================================================== //
 
-export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; onRenew: (mode: 'days' | 'code') => void; panelMode?: boolean }) {
+export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; onRenew: (mode: 'days' | 'code' | 'set' | 'permanent') => void; panelMode?: boolean }) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <div className="card">
@@ -91,9 +91,17 @@ export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; 
             <p className="text-xs text-red-600 dark:text-red-400">{acc.resume_error}</p>
           )}
           {panelMode !== false && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button size="sm" icon={<CalendarClock className="w-4 h-4" />} onClick={() => onRenew('days')}>续期</Button>
               <Button size="sm" variant="secondary" icon={<KeyRound className="w-4 h-4" />} onClick={() => onRenew('code')}>兑换授权码</Button>
+              {acc.expires_at ? (
+                <>
+                  <Button size="sm" variant="ghost" onClick={() => onRenew('set')}>设置剩余天数</Button>
+                  <Button size="sm" variant="ghost" onClick={() => onRenew('permanent')}>设为永久</Button>
+                </>
+              ) : (
+                <Button size="sm" variant="ghost" onClick={() => onRenew('set')}>改为限时</Button>
+              )}
             </div>
           )}
         </div>
@@ -1484,7 +1492,7 @@ export function AccountDetailPage() {
   });
   const [loading, setLoading] = useState(true);
   const [renewOpen, setRenewOpen] = useState(false);
-  const [renewMode, setRenewMode] = useState<'days' | 'code' | 'set'>('days');
+  const [renewMode, setRenewMode] = useState<'days' | 'code' | 'set' | 'permanent'>('days');
   const [renewing, setRenewing] = useState(false);
 
   const load = useCallback(async () => {
@@ -1528,11 +1536,16 @@ export function AccountDetailPage() {
     );
   }
 
-  const handleRenew = async (aid: number, data: { days?: number }) => {
+  const handleRenew = async (aid: number, data: RenewRequest) => {
     setRenewing(true);
     try {
-      await renewAccount(aid, data);
-      showToast('success', '续期成功', '');
+      const res = await renewAccount(aid, data);
+      if (res.notice) {
+        // 后端判定该操作无意义（如永久账户叠加续期）——如实告知而非谎报成功
+        showToast('info', '未做变更', res.notice);
+      } else {
+        showToast('success', '续期成功', '');
+      }
       setRenewOpen(false);
       load();
     } catch (e: any) {

@@ -204,6 +204,8 @@ export interface AccountSummary {
   normal_timer_message_count: number;
   /** 插件注册的定时消息数 */
   plugin_timer_message_count: number;
+  /** 操作结果提示（如「永久账户无需续期」），仅写操作返回 */
+  notice?: string | null;
 }
 
 export interface PanelOverview {
@@ -238,6 +240,8 @@ export interface AccountUpdateRequest {
 export interface RenewRequest {
   days?: number;
   expires_at?: string | null;
+  /** 设为永不过期 */
+  permanent?: boolean;
 }
 
 export interface PublicBotInfo {

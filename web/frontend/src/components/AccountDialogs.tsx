@@ -134,8 +134,8 @@ interface RenewDialogProps {
   open: boolean;
   accountId: number;
   accountName: string;
-  /** days=续期叠加天数 set=直接设置剩余天数(覆盖) code=兑换授权码 */
-  mode: 'days' | 'set' | 'code';
+  /** days=续期叠加天数 set=直接设置剩余天数(覆盖) code=兑换授权码 permanent=设为永久 */
+  mode: 'days' | 'set' | 'code' | 'permanent';
   loading?: boolean;
   onRenew: (id: number, data: RenewRequest) => void;
   onRedeem: (id: number, code: string) => void;
@@ -146,6 +146,7 @@ const MODE_TITLE: Record<string, string> = {
   days: '续期',
   set: '设置剩余天数',
   code: '兑换授权码',
+  permanent: '设为永久',
 };
 
 export function RenewDialog({ open, accountId, accountName, mode, loading, onRenew, onRedeem, onCancel }: RenewDialogProps) {
@@ -156,7 +157,9 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
   if (!open) return null;
 
   const submit = () => {
-    if (mode === 'days' || mode === 'set') {
+    if (mode === 'permanent') {
+      onRenew(accountId, { permanent: true });
+    } else if (mode === 'days' || mode === 'set') {
       const d = Number(days);
       if (!Number.isInteger(d) || d <= 0) { setError('请输入正整数天数'); return; }
       if (mode === 'days') {
@@ -190,6 +193,11 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
               <input value={code} onChange={(e) => setCode(e.target.value)}
                 className="input w-full font-mono" placeholder="MM-XXXX-XXXX-XXXX" />
             </div>
+          ) : mode === 'permanent' ? (
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              将 <span className="font-medium">{accountName}</span> 设为<span className="font-medium">永不过期</span>。
+              该账户不会再因到期被停用。
+            </p>
           ) : (
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
@@ -199,7 +207,7 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
                 className="input w-full" inputMode="numeric" placeholder="30" />
               <p className="text-xs text-gray-400 mt-1">
                 {mode === 'days'
-                  ? '在当前到期时间基础上叠加 N 天'
+                  ? '在当前到期时间基础上叠加 N 天(永久账户保持不变)'
                   : '直接设置为 N 天后到期(忽略当前到期时间,可用于永久账户改为限时)'}
               </p>
             </div>
@@ -209,7 +217,7 @@ export function RenewDialog({ open, accountId, accountName, mode, loading, onRen
         <div className="flex justify-end gap-2 px-5 pb-4">
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>取消</Button>
           <Button variant="primary" size="sm" onClick={submit} loading={loading}>
-            {mode === 'days' ? '续期' : mode === 'set' ? '设置' : '兑换'}
+            {mode === 'days' ? '续期' : mode === 'set' ? '设置' : mode === 'permanent' ? '设为永久' : '兑换'}
           </Button>
         </div>
       </div>

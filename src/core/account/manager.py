@@ -29,6 +29,7 @@ from core.exceptions import (
     CoreAccountNotFoundException,
     CoreApiException,
     CoreCookieException,
+    CoreLicenseException,
 )
 from core.logging import get_logger
 from core.server import MissevanServer
@@ -72,6 +73,15 @@ class AccountRecord:
     password_hash: str = ""
     # 最后一次确认已读更新日志的版本；"" = 尚未确认过（升级到本版本后会弹一次）
     seen_changelog_version: str = ""
+
+    @property
+    def is_permanent(self) -> bool:
+        """是否永久有效(``expires_at`` 为 ``None``)。
+
+        注意与「已过期」的区别:``_parse_expires`` 对两者都返回 ``None``,
+        因此判断时不能只依赖解析结果。
+        """
+        return self.expires_at is None
 
     @property
     def expired(self) -> bool:
@@ -784,19 +794,33 @@ class AccountManager:
         return rec
 
     async def renew_days(self, account_id: int, days: int) -> AccountRecord:
-        """管理员续期 N 天(从 max(now, 当前到期时间) 起算)。"""
+        """管理员续期 N 天(从 max(now, 当前到期时间) 起算)。
+
+        永久账户叠加天数没有意义——「永久 + N 天」仍是永久,故原样返回。
+        需把永久改成限期请用「设置剩余天数」(``_apply_renewal`` 传具体时间)。
+        """
         if days <= 0:
             raise ValueError("续期天数必须大于 0")
-        base = _parse_expires(self.get_record(account_id).expires_at)
+        rec = self.get_record(account_id)
+        if rec.is_permanent:
+            return rec
+        base = _parse_expires(rec.expires_at)
         if base is None or base < datetime.now(timezone.utc):
+            # 已过期(或到期时间不可解析)时从当前时间起算
             base = datetime.now(timezone.utc)
         new_expires = (base + timedelta(days=days)).isoformat()
         return await self._apply_renewal(account_id, new_expires)
 
     async def redeem(self, account_id: int, code: str) -> AccountRecord:
-        """兑换授权码:叠加天数并标记已使用。"""
-        days = self._license_store.redeem(code, account_id)
+        """兑换授权码:叠加天数并标记已使用。
+
+        永久账户无需兑换,直接拒绝——**且在消耗授权码之前拒绝**,
+        避免用户白白损失一个码。
+        """
         rec = self.get_record(account_id)
+        if rec.is_permanent:
+            raise CoreLicenseException("该账户为永久有效,无需兑换授权码")
+        days = self._license_store.redeem(code, account_id)
         base = _parse_expires(rec.expires_at)
         if base is None or base < datetime.now(timezone.utc):
             base = datetime.now(timezone.utc)
