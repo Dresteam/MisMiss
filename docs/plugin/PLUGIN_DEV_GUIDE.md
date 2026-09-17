@@ -7,7 +7,7 @@
 3. [元数据](#3-元数据)
 4. [配置系统](#4-配置系统)
 5. [数据管理](#5-数据管理)
-6. [事件处理](#6-事件处理)
+6. [事件处理](#6-事件处理) — 含[优先级 / 取消传播 / 修改参数](#64-优先级取消传播与修改参数v130)
 7. [指令注解](#7-指令注解)
 8. [Web UI](#8-web-ui)
 9. [权限系统](#9-权限系统)
@@ -281,9 +281,93 @@ class MyPlugin(Plugin):
 
 handler 可以是同步或异步函数。异步 handler 的结果会被自动 `create_task` 调度。
 
+**这条差异对「取消传播」至关重要**，见 6.4：异步 handler 是并发启动的，
+不能在执行期间阻断其他 handler。
+
 ### 6.3 插件上下文
 
 `EventBus` 在调用 handler 前自动设置 `current_plugin` 上下文变量，Bot 方法通过该变量校验插件级权限。
+
+### 6.4 优先级、取消传播与修改参数（v1.3.0+）
+
+对齐 Minecraft Java 插件的事件监听模型，`@event_handler` 支持三项能力。
+
+#### 优先级
+
+`@event_handler(priority=N)` —— **值越大越先收到事件**，默认 `0`。
+
+```python
+class MyPlugin(Plugin):
+    @event_handler(priority=1000)   # 最先执行
+    def rewrite(self, event: LivestreamUserEvent) -> None:
+        ...
+
+    @event_handler                  # 默认 0
+    async def on_message(self, event: LiveMessageEvent) -> None:
+        ...
+```
+
+分发顺序 = **优先级降序**；优先级相同时按 `(MRO 顺序, 注册顺序)` 排列——
+因此不写 `priority` 时，行为与引入该特性之前**完全一致**（子类 handler 先于
+基类 handler，同层按插件注册顺序）。优先级可以跨 MRO 层级覆盖：
+监听基类但优先级更高的 handler，会先于监听子类的低优先级 handler 执行。
+
+#### 取消传播
+
+**用户内容类事件**可取消（弹幕 / 礼物 / 进入 / 关注 / 提问 / 跨房弹幕 / 跨房礼物），
+开播 / 下播 / 统计不可取消——它们是已发生的事实。取消后事件总线**不再把它传给
+后续（更低优先级）的 handler**：
+
+```python
+@event_handler(priority=100)
+def on_message(self, event: LiveMessageEvent) -> None:
+    if event.message == "[屏蔽词]":
+        event.cancel()      # 后续 handler 收不到这条弹幕
+```
+
+> ⚠️ **取消只对同步 handler 有效。**
+> 异步 handler 由事件总线 `create_task` 并发调度，其执行时全部 handler
+> 早已派发完毕，此时再调用 `cancel()` 无法阻断传播。
+> 需要取消语义的 handler 必须写成**同步函数**；若还需异步工作（如发送消息），
+> 在同步 handler 内用 `asyncio.get_running_loop().create_task(...)` 发起：
+>
+> ```python
+> @event_handler(priority=100)
+> def on_message(self, event: LiveMessageEvent) -> None:
+>     if event.message == "[屏蔽词]":
+>         event.cancel()
+>         asyncio.get_running_loop().create_task(self._notify(event.livestream))
+> ```
+
+事件是否可取消由接口层决定：可取消的事件都实现了
+`interfaces.event.Cancellable`，可用 `isinstance(event, Cancellable)` 判断。
+
+#### 修改参数
+
+凡是直接映射到事件字段的属性都可**直接赋值**，改动对后续（更低优先级）
+的 handler 可见。派生属性（`bot` / `gift_num` / `question_id`）只读。
+
+```python
+@event_handler(priority=500)
+def sanitize(self, event: LiveMessageEvent) -> None:
+    event.message = event.message.replace("广告", "***")   # 后续 handler 看到改写后的内容
+```
+
+#### 改写用户显示名
+
+`event.user.display_name` 可覆盖 `event.user.name` 的返回值。由于事件里的
+用户对象**每次事件都新建**，该覆盖是**单事件作用域**的，不会泄漏到别的事件
+或其他直播间：
+
+```python
+@event_handler(priority=1000)
+def apply_nickname(self, event: LivestreamUserEvent) -> None:
+    nick = self._nicks.get(event.user.id)
+    if nick:
+        event.user.display_name = nick      # 后续所有插件看到的 event.user.name 都是昵称
+```
+
+`plugins/nickname` 是这套能力的完整示范（专属昵称插件）。
 
 ---
 
@@ -679,6 +763,11 @@ async def on_livestream_bound(self, livestream) -> None:
   同一账户内重载插件会重新执行模块代码，模块级状态同样会丢；
 - **副本即运行代码**：账户从插件库「安装」后，实际运行的是 `data/accounts/{id}/installed_plugins/<name>/`
   下的**副本**。改库不会影响已安装账户，需在账户插件页点「更新」才会覆盖副本；
+- **不要在配置里声明 `enabled` 之类的自控开关**：插件的启用/停用由服务器侧统一管理
+  （账户插件页的启用/停用按钮，会真实地注册/注销事件监听）。再在 `_conf_schema.json`
+  里放一个 `enabled` 只会制造两个互相矛盾的开关——用户把它设为 `false` 后，
+  插件在服务器看来仍是「已启用、已注册事件」，排查时极易误判。
+  同理，不要在 `initialize` 里用配置值决定「要不要注册事件处理器」；
 - 必须单 worker 部署（`MISMISS_WORKERS=1`），连接/定时器/插件实例均为单实例资源；
 - 建议账户规模 ≤ 30~50（每账户 ≈ 1 个 WebSocket 连接 + 1 个定时循环 + N 个插件实例）。
 
@@ -755,16 +844,20 @@ async def initialize(self, config: MissConfig) -> None:
 
 ### EventBus 事件类型
 
-| 事件类 | 触发时机 | 关键属性 |
-|--------|---------|---------|
-| `LiveMessageEvent` | 收到**本房**弹幕 | `event.message`, `event.user`, `event.livestream` |
-| `LiveGiftEvent` | 收到**本房**礼物 | `event.gift`(`.name`, `.price`, `.num`), `event.user` |
-| `LiveOpenEvent` | 直播间开播 | `event.livestream` |
-| `LiveCloseEvent` | 直播间下播 | `event.livestream` |
-| `LiveJoinEvent` | 用户进入 | `event.user`, `event.livestream` |
-| `LiveFollowEvent` | 用户关注直播间 | `event.user`, `event.livestream` |
-| `LiveStatisticsEvent` | 直播间实时统计 | `event.score`, `event.online`, `event.vip` |
-| `LiveQuestionEvent` | 用户付费提问 | `event.question`, `event.user` |
+「可取消」列表示该事件是否实现了
+[`Cancellable`](../interfaces/interface.md)——只有可取消事件才能用
+`event.cancel()` 阻断传播（见 6.4）。
+
+| 事件类 | 触发时机 | 可取消 | 关键属性 |
+|--------|---------|:------:|---------|
+| `LiveMessageEvent` | 收到**本房**弹幕 | ✅ | `event.message`, `event.user`, `event.livestream` |
+| `LiveGiftEvent` | 收到**本房**礼物 | ✅ | `event.gift`(`.name`, `.price`, `.num`), `event.user` |
+| `LiveOpenEvent` | 直播间开播 | ❌ | `event.livestream` |
+| `LiveCloseEvent` | 直播间下播 | ❌ | `event.livestream` |
+| `LiveJoinEvent` | 用户进入 | ✅ | `event.user`, `event.livestream` |
+| `LiveFollowEvent` | 用户关注直播间 | ✅ | `event.user`, `event.livestream` |
+| `LiveStatisticsEvent` | 直播间实时统计 | ❌ | `event.score`, `event.online`, `event.vip` |
+| `LiveQuestionEvent` | 用户付费提问 | ✅ | `event.question`, `event.user` |
 | `LiveCrossMessageEvent` | **连麦**时对方直播间的弹幕 | `event.message`, `event.user`, `event.origin_room_id`, `event.origin_creator_name` |
 | `LiveCrossGiftEvent` | **大厅**中赠送给非主麦的礼物 | `event.gift`, `event.user`, `event.target_creator_name`（受赠主播）, `event.target_creator_id` |
 | `LiveCrossEvent` | 上面两个的**基类**：注册一个 handler 收下全部跨房事件 | 无额外字段，按具体类型分支取 `origin_*` / `target_*` |

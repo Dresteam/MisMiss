@@ -12,6 +12,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from interfaces.event.cancellable import Cancellable
 from interfaces.event.event_manager import EventManager
 from interfaces.plugin.plugin import Plugin, current_plugin
 
@@ -27,6 +28,10 @@ class EventBus(EventManager):
     按其第一个参数类型建立事件 → 处理器的映射。
     触发事件时按类型匹配分发。
 
+    分发顺序由 ``@event_handler(priority=...)`` 决定——值越大越先执行；
+    同优先级保持 ``(MRO 顺序, 注册顺序)``，即不写 priority 时的行为与
+    引入优先级之前完全一致。
+
     用法::
 
         bus = EventBus()
@@ -35,8 +40,8 @@ class EventBus(EventManager):
     """
 
     def __init__(self) -> None:
-        # event_type -> list[(listener, method)]
-        self._handlers: dict[type, list[tuple[Listener, Callable[..., object]]]] = (
+        # event_type -> list[(listener, method, priority)]
+        self._handlers: dict[type, list[tuple[Listener, Callable[..., object], int]]] = (
             defaultdict(list)
         )
         self._listeners: list[Listener] = []
@@ -80,7 +85,8 @@ class EventBus(EventManager):
                 break
 
             if event_type is not None:
-                self._handlers[event_type].append((listener, method))
+                priority = int(getattr(method, "__event_handler_priority__", 0))
+                self._handlers[event_type].append((listener, method, priority))
 
     def unregister_event(self, listener: Listener) -> None:
         """删除一个已注册的监听器。
@@ -92,7 +98,9 @@ class EventBus(EventManager):
 
         for handlers in self._handlers.values():
             handlers[:] = [
-                (l, m) for l, m in handlers if l is not listener  # noqa: E741
+                (owner, method, priority)
+                for owner, method, priority in handlers
+                if owner is not listener
             ]
 
     def call_event(self, event: Event, clazz: type | None = None) -> None:
@@ -102,31 +110,50 @@ class EventBus(EventManager):
         若 handler 属于某个 ``Plugin``，自动设置 :data:`current_plugin`
         上下文变量，以便 Bot 方法校验插件级权限。
 
+        **分发顺序**：跨整个 MRO 按 ``@event_handler(priority=...)``
+        降序调用。收集顺序本身是 (MRO 顺序, 注册顺序)，配合稳定排序，
+        同优先级下与不写 priority 时的传统顺序一致。
+
+        **取消传播**：事件若实现了 :class:`Cancellable`，某个 handler 调用
+        ``event.cancel()`` 后，后续 handler 不再被调用。
+
         **同步与异步**：handler 可以是同步或异步函数。
         若为异步（``async def``），自动通过 ``create_task`` 调度到事件循环，
         ``current_plugin`` 上下文会随 Task 传播。
+        注意异步 handler 是**并发**启动的，其内部调用 ``cancel()`` 时全部
+        handler 早已派发完毕，**无法阻断传播**——需要取消语义请写成同步 handler。
 
         :param event: 事件实例
         :param clazz: 指定分发的事件类型；若为 ``None`` 则按 ``type(event)`` 分发
         """
         target_type = clazz if clazz is not None else type(event)
+        cancellable = isinstance(event, Cancellable)
 
-        # 遍历 MRO（包含所有父类型），匹配注册的处理函数
+        # 1. 跨 MRO 收集候选——顺序即 (MRO 顺序, 注册顺序)
+        candidates: list[tuple[Listener, Callable[..., object], int]] = []
         for base_type in target_type.__mro__:
-            if base_type in self._handlers:
-                for _listener, handler in self._handlers[base_type]:
-                    # 若监听器是 Plugin 实例，设置插件上下文
-                    token = None
-                    if isinstance(_listener, Plugin):
-                        token = current_plugin.set(_listener)
-                    try:
-                        result = handler(event)
-                        # 若 handler 是异步函数，调度到事件循环
-                        if asyncio.iscoroutine(result):
-                            asyncio.get_running_loop().create_task(result)
-                    finally:
-                        if token is not None:
-                            current_plugin.reset(token)
+            # 用 .get 而非 []，避免 defaultdict 为未命中的类型建键
+            candidates.extend(self._handlers.get(base_type) or ())
+
+        # 2. 稳定排序：优先级降序。同优先级保持上面的收集顺序
+        candidates.sort(key=lambda item: -item[2])
+
+        # 3. 依次调用
+        for _listener, handler, _priority in candidates:
+            if cancellable and event.cancelled:
+                break
+            # 若监听器是 Plugin 实例，设置插件上下文
+            token = None
+            if isinstance(_listener, Plugin):
+                token = current_plugin.set(_listener)
+            try:
+                result = handler(event)
+                # 若 handler 是异步函数，调度到事件循环
+                if asyncio.iscoroutine(result):
+                    asyncio.get_running_loop().create_task(result)
+            finally:
+                if token is not None:
+                    current_plugin.reset(token)
 
     # ------------------------------------------------------------------ #
     # 查询
@@ -150,7 +177,7 @@ class EventBus(EventManager):
         """
         result: dict[str, type] = {}
         for event_type, handlers in self._handlers.items():
-            for _listener, method in handlers:
+            for _listener, method, _priority in handlers:
                 if _listener is listener:
                     result[method.__name__] = event_type
         return result

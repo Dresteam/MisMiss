@@ -13,19 +13,23 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from ..cancellable import Cancellable
 from .live_cross_event import LiveCrossEvent
 
 if TYPE_CHECKING:
     from ...entity.gift import Gift
 
 
-class LiveCrossGiftEvent(LiveCrossEvent, ABC):
+class LiveCrossGiftEvent(Cancellable, LiveCrossEvent, ABC):
     """跨房礼物事件（大厅中赠送给非主麦的礼物）。
 
     与 :class:`LiveGiftEvent` 是**兄弟节点**而非父子关系，因此：
 
     - 监听 ``LiveGiftEvent`` 的插件**不会**收到本事件
     - 监听父类 :class:`LivestreamUserEvent` 的插件两者都会收到
+
+    **可取消**：监听器调用 :meth:`~interfaces.event.Cancellable.cancel` 后，
+    后续（更低优先级）的监听器收不到该事件。
 
     用法::
 

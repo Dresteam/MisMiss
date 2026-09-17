@@ -2,6 +2,11 @@
 
 定义从 Missevan WebSocket 事件中解析出的具体事件数据类。
 每个类实现对应的 :mod:`interfaces.event.livestream` 接口。
+
+**属性可写性**：凡直接映射到某个 ``event_*`` 字段的属性都提供 setter，
+监听器可据此改写事件参数（如 ``event.message = "改写后的内容"``），
+改动对后续（更低优先级）的监听器可见。
+派生属性（``bot`` / ``gift_num`` / ``question_id``）不提供 setter。
 """
 
 from __future__ import annotations
@@ -38,6 +43,10 @@ class OpenEvent(LiveOpenEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -52,6 +61,10 @@ class CloseEvent(LiveCloseEvent):
     @property
     def livestream(self) -> Livestream:
         return self.event_livestream
+
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
 
     @property
     def bot(self) -> Bot:
@@ -70,6 +83,10 @@ class MessageEvent(LiveMessageEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -78,9 +95,17 @@ class MessageEvent(LiveMessageEvent):
     def user(self) -> LiveUser:
         return self.event_user
 
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
+
     @property
     def message(self) -> str:
         return self.event_message
+
+    @message.setter
+    def message(self, value: str) -> None:
+        self.event_message = value
 
 
 @dataclass
@@ -94,6 +119,10 @@ class JoinEvent(LiveJoinEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -101,6 +130,10 @@ class JoinEvent(LiveJoinEvent):
     @property
     def user(self) -> LiveUser:
         return self.event_user
+
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
 
 
 @dataclass
@@ -114,6 +147,10 @@ class FollowEvent(LiveFollowEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -121,6 +158,10 @@ class FollowEvent(LiveFollowEvent):
     @property
     def user(self) -> LiveUser:
         return self.event_user
+
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
 
 
 @dataclass
@@ -135,6 +176,10 @@ class GiftEvent(LiveGiftEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -143,9 +188,17 @@ class GiftEvent(LiveGiftEvent):
     def user(self) -> LiveUser:
         return self.event_user
 
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
+
     @property
     def gift(self) -> Gift:
         return self.event_gift
+
+    @gift.setter
+    def gift(self, value: Gift) -> None:
+        self.event_gift = value
 
     @property
     def gift_num(self) -> int:
@@ -164,6 +217,10 @@ class QuestionEvent(LiveQuestionEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -172,9 +229,17 @@ class QuestionEvent(LiveQuestionEvent):
     def user(self) -> LiveUser:
         return self.event_user
 
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
+
     @property
     def question(self) -> Question:
         return self.event_question
+
+    @question.setter
+    def question(self, value: Question) -> None:
+        self.event_question = value
 
     @property
     def question_id(self) -> str:
@@ -194,6 +259,10 @@ class StatisticsEvent(LiveStatisticsEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -202,13 +271,25 @@ class StatisticsEvent(LiveStatisticsEvent):
     def score(self) -> int:
         return self.event_score
 
+    @score.setter
+    def score(self, value: int) -> None:
+        self.event_score = value
+
     @property
     def online(self) -> int:
         return self.event_online
 
+    @online.setter
+    def online(self, value: int) -> None:
+        self.event_online = value
+
     @property
     def vip(self) -> int:
         return self.event_vip
+
+    @vip.setter
+    def vip(self, value: int) -> None:
+        self.event_vip = value
 
 
 @dataclass
@@ -227,6 +308,10 @@ class CrossMessageEvent(LiveCrossMessageEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -235,25 +320,49 @@ class CrossMessageEvent(LiveCrossMessageEvent):
     def user(self) -> LiveUser:
         return self.event_user
 
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
+
     @property
     def message(self) -> str:
         return self.event_message
+
+    @message.setter
+    def message(self, value: str) -> None:
+        self.event_message = value
 
     @property
     def origin_room_id(self) -> int:
         return self.event_origin_room_id
 
+    @origin_room_id.setter
+    def origin_room_id(self, value: int) -> None:
+        self.event_origin_room_id = value
+
     @property
     def origin_creator_id(self) -> int:
         return self.event_origin_creator_id
+
+    @origin_creator_id.setter
+    def origin_creator_id(self, value: int) -> None:
+        self.event_origin_creator_id = value
 
     @property
     def origin_creator_name(self) -> str:
         return self.event_origin_creator_name
 
+    @origin_creator_name.setter
+    def origin_creator_name(self, value: str) -> None:
+        self.event_origin_creator_name = value
+
     @property
     def origin_creator_icon(self) -> str | None:
         return self.event_origin_creator_icon
+
+    @origin_creator_icon.setter
+    def origin_creator_icon(self, value: str | None) -> None:
+        self.event_origin_creator_icon = value
 
 
 @dataclass
@@ -272,6 +381,10 @@ class CrossGiftEvent(LiveCrossGiftEvent):
     def livestream(self) -> Livestream:
         return self.event_livestream
 
+    @livestream.setter
+    def livestream(self, value: Livestream) -> None:
+        self.event_livestream = value
+
     @property
     def bot(self) -> Bot:
         return self.event_livestream.bot
@@ -280,9 +393,17 @@ class CrossGiftEvent(LiveCrossGiftEvent):
     def user(self) -> LiveUser:
         return self.event_user
 
+    @user.setter
+    def user(self, value: LiveUser) -> None:
+        self.event_user = value
+
     @property
     def gift(self) -> Gift:
         return self.event_gift
+
+    @gift.setter
+    def gift(self, value: Gift) -> None:
+        self.event_gift = value
 
     @property
     def gift_num(self) -> int:
@@ -292,14 +413,30 @@ class CrossGiftEvent(LiveCrossGiftEvent):
     def target_room_id(self) -> int:
         return self.event_target_room_id
 
+    @target_room_id.setter
+    def target_room_id(self, value: int) -> None:
+        self.event_target_room_id = value
+
     @property
     def target_creator_id(self) -> int:
         return self.event_target_creator_id
+
+    @target_creator_id.setter
+    def target_creator_id(self, value: int) -> None:
+        self.event_target_creator_id = value
 
     @property
     def target_creator_name(self) -> str:
         return self.event_target_creator_name
 
+    @target_creator_name.setter
+    def target_creator_name(self, value: str) -> None:
+        self.event_target_creator_name = value
+
     @property
     def target_creator_icon(self) -> str | None:
         return self.event_target_creator_icon
+
+    @target_creator_icon.setter
+    def target_creator_icon(self, value: str | None) -> None:
+        self.event_target_creator_icon = value

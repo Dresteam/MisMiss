@@ -6,12 +6,14 @@
 from .event import Event
 from .listener import Listener
 from .event_manager import EventManager
+from .cancellable import Cancellable
 from .event_handler import event_handler, event_handler as EventHandler
 
 __all__ = [
     "Event",
     "Listener",
     "EventManager",
+    "Cancellable",
     "event_handler",
     "EventHandler",
 ]

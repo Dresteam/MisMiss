@@ -34,6 +34,7 @@ v1.1.0 起，MisMiss 从「单服务器仪表盘」升级为**多账户面板**�
 - 🧩 **清晰的分层架构** — 接口层（`interfaces`）定义契约，核心层（`core`）负责实现
 - 🎨 **插件自带 UI** — 插件放置 `_ui_schema.json` 即可获得声明式 Web 页面（表格/列表/卡片/统计/播放列表/表单/组合布局），无需写前端代码
 - ⚡ **事件驱动模型** — 基于 MRO 的事件分发，支持按事件类型继承树精确路由；每账户独立事件总线与命令路由
+- 🎚️ **可编排的事件监听** — `@event_handler(priority=N)` 按优先级依次分发（默认顺序与旧版完全一致）；用户内容类事件可 `cancel()` 阻止传播、可直接改写事件参数；`event.user.display_name` 可覆盖用户显示名。对齐 Minecraft Java 插件的事件监听模型
 - 🔒 **三层权限控制** — `BotPermission` Flag 位权限（Bot 为天花板）→ 插件权限字典 → 执行时经 `contextvars` 实时拦截；敏感操作（如获取 Cookie）受 name-mangling 保护
 - 💬 **优先级消息队列** — 消息按优先级排序发送，后台异步消费，自动限流
 - ⏰ **定时消息** — 插件消息 / 普通消息分类管理：插件消息不落盘、面板不可改删、轮转置顶，与普通消息共用执行指针；插件可声明「仅开播时发送」，面板可按来源筛选；每账户独立间隔，支持跳过/立即发送，改 Cookie 后普通队列不丢
@@ -75,7 +76,7 @@ AccountManager  ──  面板级编排（data/panel.json）
 plugins/  ──  官方插件库（独立 git 仓库）
 ═══════════════════════════════════════════════════════
   checkin/  gift_thanks/  number_bomb/  qiuqian/  song_request/
-  timer_messages/  welcome/  zodiac/  keyword_reply/  song_list/  ...
+  timer_messages/  welcome/  zodiac/  keyword_reply/  song_list/  nickname/  ...
 
 interfaces/  ──  抽象接口层 (MIST 标准)
 ───────────────────────────────────────────────────────
@@ -121,21 +122,26 @@ core/  ──  核心实现层 (Missevan 适配)
 ```
 Event (ABC, 标记)
  └── LivestreamEvent (ABC)      ← 直播间事件基类
-      ├── LiveOpenEvent          ← 开播
-      ├── LiveCloseEvent         ← 下播
-      ├── LiveStatisticsEvent    ← 直播间实时统计（热度/在线/VIP）
+      ├── LiveOpenEvent          ← 开播            (不可取消)
+      ├── LiveCloseEvent         ← 下播            (不可取消)
+      ├── LiveStatisticsEvent    ← 直播间实时统计   (不可取消)
       └── LivestreamUserEvent    ← 用户事件基类
-           ├── LiveJoinEvent     ← 用户进入
-           ├── LiveFollowEvent   ← 关注直播间
-           ├── LiveMessageEvent  ← 弹幕消息  (+ message)
-           ├── LiveGiftEvent     ← 赠送礼物  (+ gift)
-           ├── LiveQuestionEvent ← 提问      (+ question)
+           ├── LiveJoinEvent     ← 用户进入        (+ Cancellable)
+           ├── LiveFollowEvent   ← 关注直播间      (+ Cancellable)
+           ├── LiveMessageEvent  ← 弹幕消息  (+ message, Cancellable)
+           ├── LiveGiftEvent     ← 赠送礼物  (+ gift, Cancellable)
+           ├── LiveQuestionEvent ← 提问      (+ question, Cancellable)
            └── LiveCrossEvent    ← 跨房事件基类（连麦 / 大厅，分发分组标记）
-                ├── LiveCrossMessageEvent ← 跨房弹幕（对方直播间, + origin_*）
-                └── LiveCrossGiftEvent    ← 跨房礼物（送给非主麦, + target_*）
+                ├── LiveCrossMessageEvent ← 跨房弹幕（对方直播间, + origin_*, Cancellable）
+                └── LiveCrossGiftEvent    ← 跨房礼物（送给非主麦, + target_*, Cancellable）
 ```
 
 事件分发按 **MRO** 遍历：监听 `LivestreamEvent` 可以收到所有直播间子事件；监听 `LiveMessageEvent` 则仅收到弹幕。
+
+实际调用顺序由 `@event_handler(priority=N)` 决定（值越大越先执行，同优先级按
+MRO + 注册顺序）——不写 priority 时行为与本文档描述的传统顺序一致。
+标了 `Cancellable` 的事件可被监听器 `event.cancel()` 阻断传播；
+开播/下播/统计属于已发生的事实，不可取消。
 
 跨房事件（连麦 / 大厅）刻意与 `LiveMessageEvent` / `LiveGiftEvent` 构成**兄弟节点而非父子**，
 因此监听本房弹幕或礼物的插件不会收到对方直播间的事件；想处理跨房事件需显式监听这两个新事件。
@@ -641,7 +647,7 @@ MissMiss/
 ├── plugins/                      # 🔌 官方插件库（独立 git 仓库）
 │   ├── checkin/  gift_thanks/  follow_thanks/  welcome/  zodiac/
 │   ├── number_bomb/  song_request/  song_list/  keyword_reply/
-│   ├── qiuqian/  question_thanks/  timer_messages/  ...
+│   ├── qiuqian/  question_thanks/  timer_messages/  nickname/  ...
 │
 ├── src/
 │   ├── cli.py                    # 🖥️ 命令行前端

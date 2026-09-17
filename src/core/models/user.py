@@ -63,7 +63,8 @@ class MissevanLiveUser(LiveUser):
 
     @property
     def name(self) -> str:
-        return self.base_user.name
+        """显示名。设置过 :attr:`display_name` 时优先返回它。"""
+        return self.display_name or self.base_user.name
 
     @property
     def id(self) -> int:

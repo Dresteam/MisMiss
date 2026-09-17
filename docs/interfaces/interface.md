@@ -211,6 +211,13 @@ from interfaces import EventManager
 | `unregister_event` | `listener: Listener` | `None` | 删除一个已注册的监听器 |
 | `call_event` | `event: Event`, `clazz: type \| None = None` | `None` | 触发事件。`clazz=None` 时直接触发；指定 `clazz` 时用于向上递归 |
 
+调度顺序与传播控制（实现层细节，见 `core/events/bus.py`）：
+
+- 跨事件类型的整个 MRO 按 `priority` **降序**调用；同优先级按
+  `(MRO 顺序, 注册顺序)`，即不写 priority 时与引入该特性前一致
+- 事件若为 `Cancellable` 且已被 `cancel()`，停止向下传播
+- 异步监听方法经 `create_task` 并发调度，**无法**阻断传播
+
 ### 4.2 Listener —— 监听器标记
 
 ```python
@@ -241,13 +248,41 @@ class MyListener(Listener):
     def on_message(self, event: LiveMessageEvent) -> None:
         print(f"[{event.livestream.room_name}] {event.user.name}: {event.message}")
 
-    @event_handler
+    @event_handler(priority=100)          # 值越大越先收到事件, 默认 0
     def on_gift(self, event: LiveGiftEvent) -> None:
         print(f"[{event.livestream.room_name}] {event.user.name} 赠送了 "
               f"{event.gift_num} 个 {event.gift.name}")
 ```
 
-被装饰的方法会被添加 `__event_handler__ = True` 属性，供事件调度器在运行时识别。
+被装饰的方法会被添加 `__event_handler__ = True` 与
+`__event_handler_priority__ = <int>` 属性，供事件调度器在运行时识别。
+
+| 参数 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `priority` | `int` | `0` | 分发优先级，**值越大越先执行**。同优先级按 `(MRO 顺序, 注册顺序)` 排列 |
+
+裸用 `@event_handler` 与带参 `@event_handler(priority=N)` 均受支持。
+
+### 4.4 `Cancellable` —— 可取消事件标记
+
+```python
+from interfaces import Cancellable
+```
+
+标记接口。实现了它的事件可被监听器取消——取消后事件调度器**不再把它传给
+后续（更低优先级）的监听器**。
+
+| 成员 | 说明 |
+|------|------|
+| `cancelled: bool` | 事件是否已被取消（只读属性） |
+| `cancel()` | 取消事件，阻止继续传播 |
+| `uncancel()` | 撤销取消，恢复传播 |
+
+**用户内容类事件可取消**（弹幕 / 礼物 / 进入 / 关注 / 提问 / 跨房弹幕 /
+跨房礼物），**开播 / 下播 / 统计不可取消**——它们是已发生的事实。
+
+> **限制**：取消只对**同步**监听方法有效。异步方法由调度器 `create_task`
+> 并发启动，其执行期间全部 handler 早已派发完毕，此时 `cancel()` 无法阻断传播。
 
 ---
 

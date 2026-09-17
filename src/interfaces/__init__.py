@@ -3,7 +3,7 @@
 本包定义了框架的全部抽象接口，包括：
 
 - 实体层: :class:`User`, :class:`LiveUser`, :class:`Creator`, :class:`Gift`, :class:`Medal`, :class:`Question`
-- 事件层: :class:`Event`, :class:`Listener`, :class:`EventManager`, :func:`event_handler`
+- 事件层: :class:`Event`, :class:`Listener`, :class:`EventManager`, :class:`Cancellable`, :func:`event_handler`
 - 直播间层: :class:`Livestream`, :class:`LivestreamManager`
 - 服务器层: :class:`Server`
 - 机器人层: :class:`Bot`
@@ -23,6 +23,7 @@
 from .event.event import Event
 from .event.listener import Listener
 from .event.event_manager import EventManager
+from .event.cancellable import Cancellable
 from .event.event_handler import event_handler, event_handler as EventHandler
 from .exceptions import RequestFailedException
 from .plugin.plugin import Plugin
@@ -33,6 +34,7 @@ __all__ = [
     "Event",
     "Listener",
     "EventManager",
+    "Cancellable",
     "event_handler",
     "EventHandler",
     "RequestFailedException",

@@ -11,16 +11,20 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ..cancellable import Cancellable
 from .live_cross_event import LiveCrossEvent
 
 
-class LiveCrossMessageEvent(LiveCrossEvent, ABC):
+class LiveCrossMessageEvent(Cancellable, LiveCrossEvent, ABC):
     """跨房弹幕消息事件（连麦时对方直播间的弹幕）。
 
     与 :class:`LiveMessageEvent` 是**兄弟节点**而非父子关系，因此：
 
     - 监听 ``LiveMessageEvent`` 的插件**不会**收到本事件
     - 监听父类 :class:`LivestreamUserEvent` 的插件两者都会收到
+
+    **可取消**：监听器调用 :meth:`~interfaces.event.Cancellable.cancel` 后，
+    后续（更低优先级）的监听器收不到该事件。
 
     用法::
 
