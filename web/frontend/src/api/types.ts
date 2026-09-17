@@ -76,6 +76,16 @@ export interface LiveListResponse {
 // Plugin
 // ================================================================== //
 
+/** 一条服务器日志。 */
+export interface LogEntry {
+  seq_id: number;
+  timestamp: number;
+  level: string;
+  message: string;
+  /** 来源类名（如 NicknamePlugin / PluginManager）；旧数据可能为空 */
+  source?: string;
+}
+
 export interface PluginSummary {
   name: string;
   plugin_id: string;
@@ -89,6 +99,8 @@ export interface PluginSummary {
   has_readme: boolean;
   has_changelog: boolean;
   has_ui: boolean;
+  /** 最近一次初始化失败的原因；成功后清空 */
+  last_error?: string | null;
 }
 
 export interface PluginEventHandler {
@@ -137,12 +149,6 @@ export interface PluginPermissionInfo {
 export interface PluginConfigResponse {
   schema: Record<string, ConfigFieldSchema> | null;
   values: Record<string, unknown> | null;
-}
-
-export interface FailedPluginInfo {
-  dir_name: string;
-  error: string;
-  traceback?: string;
 }
 
 // ================================================================== //
@@ -289,6 +295,8 @@ export interface LibraryPlugin {
   used_by_accounts: number[];
   /** 账户库列表附加:是否已安装到本账户 */
   installed?: boolean;
+  /** 最近一次初始化失败的原因；成功后清空 */
+  last_error?: string | null;
 }
 
 /** 批量操作的影响明细（确认弹窗展示用） */

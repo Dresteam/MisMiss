@@ -107,6 +107,7 @@ def _plugin_to_detail(s: MissevanServer, meta) -> PluginDetailResponse:
         config_schema=config_schema,
         config_values=config_values,
         ui_schema=ui_schema,
+        last_error=meta.last_error,
     )
 
 

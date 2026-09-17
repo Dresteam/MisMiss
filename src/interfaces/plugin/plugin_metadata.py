@@ -102,6 +102,13 @@ class PluginMetadata:
     data_dir: str | None = None
     """插件专属数据目录（``data/{plugin_name}/``），插件加载时自动创建。"""
 
+    last_error: str | None = field(default=None, compare=False)
+    """最近一次初始化失败的原因；成功后清空为 ``None``。
+
+    用于在插件卡片上标记「初始化失败」，详细报错见日志（``_log.exception``
+    会输出完整 traceback）。
+    """
+
     initialized: bool = field(default=False, compare=False, repr=False)
     """是否已完成异步初始化（:meth:`Plugin.initialize` 已调用且成功）。
 

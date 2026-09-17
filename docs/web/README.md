@@ -262,10 +262,6 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | DELETE | `/api/plugin/{name}?delete_config=&delete_data=&disable_in_accounts=` | 从库中卸载 |
 | GET | `/api/plugin/{name}/readme` | README |
 | GET | `/api/plugin/{name}/changelog` | CHANGELOG |
-| GET | `/api/plugin/failed/list` | 加载失败的插件 |
-| GET | `/api/plugin/failed/{dir}` | 失败插件的完整 traceback |
-| POST | `/api/plugin/failed/{dir}/retry` | 重试加载 |
-| POST | `/api/plugin/failed/{dir}/discard` | 放弃（保留文件） |
 | POST | `/api/plugin/refresh` | 重新扫描插件库 |
 | POST | `/api/plugin/{name}/push` | 把该插件的库版本推送到各账户副本 |
 | POST | `/api/plugin/push-all` | 把库中全部插件推送到各账户副本 |
@@ -312,7 +308,7 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/logs/history?since=&limit=&levels=` | 历史日志分页查询 |
+| GET | `/api/logs/history?since=&limit=&levels=&scope=` | 历史日志分页查询（`scope=plugin` 仅返回插件相关日志） |
 | GET | `/api/logs/gap?from_seq=&to_seq=` | 断线补发（数据被淘汰时返回 `status: expired`） |
 | GET | `/api/logs/stats` | 环形缓冲区统计（容量 10000 条） |
 

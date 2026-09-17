@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History, Star, Send, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
+import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History, Star, Send, Sparkles, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import {
-  fetchLibraryPlugins, fetchFailedPlugins, refreshPlugins, uninstallPlugin,
-  retryFailedPlugin, fetchAccounts, pushPluginToAccounts, pushAllPlugins,
+  fetchLibraryPlugins, refreshPlugins, uninstallPlugin,
+  fetchAccounts, pushPluginToAccounts, pushAllPlugins,
   setPluginDefault, applyDefaultPlugins,
 } from '../api/client';
-import type { LibraryPlugin, FailedPluginInfo, AccountSummary, BulkGroup } from '../api/types';
+import type { LibraryPlugin, AccountSummary, BulkGroup } from '../api/types';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { UpdateDialog } from '../components/UpdateDialog';
 import { PluginDrawer } from '../components/PluginDrawer';
+import { PluginLogDialog } from '../components/PluginLogDialog';
 import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
 
@@ -49,7 +50,6 @@ function IconBtn({ icon, label, onClick, loading, disabled }: {
 export function PluginLibraryPage() {
   const [plugins, setPlugins] = useState<LibraryPlugin[]>([]);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
-  const [failed, setFailed] = useState<FailedPluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -58,16 +58,15 @@ export function PluginLibraryPage() {
   const [uninstallTarget, setUninstallTarget] = useState<LibraryPlugin | null>(null);
   const [disableInAccounts, setDisableInAccounts] = useState(false);
   const [drawerTarget, setDrawerTarget] = useState<{ name: string; tab?: string } | null>(null);
-  const [errorLog, setErrorLog] = useState('');
+  // 插件日志弹窗：常驻入口 + 操作失败时自动打开
+  const [logOpen, setLogOpen] = useState(false);
+  const [logHint, setLogHint] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
-      const [p, f, a] = await Promise.all([
-        fetchLibraryPlugins(), fetchFailedPlugins(), fetchAccounts(),
-      ]);
+      const [p, a] = await Promise.all([fetchLibraryPlugins(), fetchAccounts()]);
       setPlugins(p);
-      setFailed(f);
       setAccounts(a);
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -83,6 +82,10 @@ export function PluginLibraryPage() {
       load();
     } catch (e: any) {
       showToast('error', '操作失败', e.message);
+      // 失败时自动打开插件日志，便于直接看到报错与 traceback
+      setLogHint(e.message || '');
+      setLogOpen(true);
+      load();
     } finally {
       setProcessing('');
     }
@@ -292,47 +295,16 @@ export function PluginLibraryPage() {
             })}>
             应用默认插件
           </Button>
+          <Button variant="ghost" icon={<ScrollText className="w-4 h-4" />}
+            onClick={() => { setLogHint(''); setLogOpen(true); }}>
+            插件日志
+          </Button>
           <Button variant="primary" icon={<Upload className="w-4 h-4" />}
             onClick={() => fileRef.current?.click()}>
             安装插件
           </Button>
         </div>
       </div>
-
-      {/* 失败插件 */}
-      {failed.length > 0 && (
-        <div className="card">
-          <div className="card-header">
-            <h3 className="font-semibold flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500" /> 加载失败的插件
-            </h3>
-          </div>
-          <div className="card-body space-y-2">
-            {failed.map((f) => (
-              <div key={f.dir_name} className="flex items-center justify-between py-2 border-b border-gray-100 dark:border-gray-700 last:border-0">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{f.dir_name}</p>
-                  <p className="text-xs text-red-500 truncate">{f.error}</p>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  <Button size="sm" variant="ghost"
-                    onClick={async () => {
-                      try {
-                        const token = localStorage.getItem('auth_token');
-                        const tb = await fetch(`/api/plugin/failed/${f.dir_name}`, {
-                          headers: token ? { Authorization: `Bearer ${token}` } : {},
-                        }).then((r) => r.json().catch(() => ({})));
-                        setErrorLog(tb.traceback || f.error || '');
-                      } catch { /* ignore */ }
-                    }}>日志</Button>
-                  <Button size="sm" variant="secondary"
-                    onClick={async () => { await retryFailedPlugin(f.dir_name); load(); }}>重试</Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* 插件卡片 */}
       {plugins.length === 0 ? (
@@ -360,6 +332,16 @@ export function PluginLibraryPage() {
                                      text-amber-600 dark:text-amber-400 text-[10px] font-medium">
                           默认
                         </span>
+                      )}
+                      {p.last_error && (
+                        <button
+                          title={`初始化失败：${p.last_error}\n点击查看插件日志`}
+                          onClick={() => { setLogHint(p.last_error || ''); setLogOpen(true); }}
+                          className="px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/30
+                                     text-red-600 dark:text-red-400 text-[10px] font-medium
+                                     hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors">
+                          初始化失败
+                        </button>
                       )}
                     </div>
                   </div>
@@ -519,18 +501,11 @@ export function PluginLibraryPage() {
           e.target.value = '';
         }} />
 
-      {errorLog && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setErrorLog('')} />
-          <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 p-5">
-            <h3 className="font-semibold mb-3">错误日志</h3>
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs bg-gray-100 dark:bg-gray-900 p-3 rounded-lg">{errorLog}</pre>
-            <div className="flex justify-end mt-4">
-              <Button variant="ghost" size="sm" onClick={() => setErrorLog('')}>关闭</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PluginLogDialog
+        open={logOpen}
+        hint={logHint}
+        onClose={() => { setLogOpen(false); setLogHint(''); }}
+      />
     </div>
   );
 }

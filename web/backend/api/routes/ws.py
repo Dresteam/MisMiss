@@ -36,12 +36,35 @@ def _strip_ansi(text: str) -> str:
 # 日志条目
 # ================================================================== #
 
+def _is_plugin_source(path: str) -> bool:
+    """判断一条日志是否来自「插件相关」代码。
+
+    覆盖三类来源：
+    - 插件库源码 ``<repo>/plugins/<name>/``
+    - 账户插件副本 ``data/accounts/{id}/installed_plugins/<name>/``
+    - 框架的插件生命周期代码 ``src/core/plugin/``
+
+    :param path: 记录该日志的源文件路径（loguru extra 中的 ``path``）
+    :return: 属于插件相关日志返回 ``True``
+    """
+    p = path.replace("\\", "/")
+    return (
+        "/installed_plugins/" in p
+        or "/plugins/" in p
+        or "/core/plugin/" in p
+    )
+
+
 @dataclass
 class LogEntry:
     seq_id: int
     timestamp: float
     level: str
     message: str
+    # 来源类名（如 NicknamePlugin / PluginManager），用于展示
+    source: str = ""
+    # 来源文件路径，仅服务端过滤用——不进入 API 响应，避免泄漏服务器路径
+    path: str = ""
 
 
 # ================================================================== #
@@ -57,7 +80,9 @@ class RingBuffer:
         self._seq = 0
         self._lock = threading.Lock()
 
-    def append(self, level: str, message: str) -> LogEntry:
+    def append(
+        self, level: str, message: str, source: str = "", path: str = ""
+    ) -> LogEntry:
         with self._lock:
             self._seq += 1
             entry = LogEntry(
@@ -65,18 +90,25 @@ class RingBuffer:
                 timestamp=time.time(),
                 level=level,
                 message=_strip_ansi(str(message)),
+                source=source,
+                path=path,
             )
             self._buffer.append(entry)
             return entry
 
     def get_since(
-        self, since_seq: int, limit: int = 50, levels: set[str] | None = None
+        self,
+        since_seq: int,
+        limit: int = 50,
+        levels: set[str] | None = None,
+        plugin_only: bool = False,
     ) -> tuple[list[dict], bool, int]:
         """获取 since_seq **之前** 的日志（用于向上翻页加载更早历史）。
 
         返回 limit 条 seq_id <= since_seq 的最新日志，按 seq_id 升序排列。
         首次加载传入 0 则返回最新 limit 条。
-        传入 ``levels`` 时仅返回指定级别的日志（源头过滤）。
+        传入 ``levels`` 时仅返回指定级别的日志（源头过滤）；
+        传入 ``plugin_only`` 时仅返回插件相关来源的日志。
 
         :return: ``(entries, has_more, filtered_total)``
         """
@@ -84,6 +116,8 @@ class RingBuffer:
             all_entries = list(self._buffer)
             if levels:
                 all_entries = [e for e in all_entries if e.level in levels]
+            if plugin_only:
+                all_entries = [e for e in all_entries if _is_plugin_source(e.path)]
             if since_seq <= 0:
                 # 首次加载：返回最新 limit 条
                 result = all_entries[-limit:]
@@ -138,11 +172,13 @@ class RingBuffer:
 
 
 def _entry_to_dict(e: LogEntry) -> dict:
+    # 刻意不输出 path：它是服务器绝对路径，仅用于服务端过滤
     return {
         "seq_id": e.seq_id,
         "timestamp": e.timestamp,
         "level": e.level,
         "message": e.message,
+        "source": e.source,
     }
 
 
@@ -242,7 +278,14 @@ try:
 
     def _loguru_sink(message: str) -> None:
         record = message.record
-        _enqueue(_buffer.append(record["level"].name, str(record["message"])))
+        # extra 由 core.logging._caller_context() 绑定：class_name / path
+        extra = record["extra"]
+        _enqueue(_buffer.append(
+            record["level"].name,
+            str(record["message"]),
+            source=str(extra.get("class_name", "") or ""),
+            path=str(extra.get("path", "") or ""),
+        ))
 
     # 从 config.yml 读取持久化的日志等级
     _initial_level = "DEBUG"
@@ -296,12 +339,15 @@ async def logs_history(
     since: int = Query(default=0, description="起始 seq_id（不包含）"),
     limit: int = Query(default=50, le=500),
     levels: str | None = Query(default=None, description="逗号分隔的级别过滤，如 DEBUG,ERROR"),
+    scope: str | None = Query(default=None, description="scope=plugin 时仅返回插件相关日志"),
 ):
     """拉取 since_seq 之后的历史日志（支持源头级别过滤）。"""
     level_set = None
     if levels:
         level_set = {lv.strip().upper() for lv in levels.split(",") if lv.strip()}
-    entries, has_more, total = _buffer.get_since(since, limit, levels=level_set)
+    entries, has_more, total = _buffer.get_since(
+        since, limit, levels=level_set, plugin_only=(scope == "plugin")
+    )
     return {
         "entries": entries,
         "latest_seq": _buffer.latest_seq,

@@ -618,15 +618,6 @@ def _plugin_changelog(args: list[str]) -> None:
         _log.info(f"[错误] {e}")
 
 
-def _plugin_failed(_args: list[str]) -> None:
-    failed = server.get_failed_plugins()
-    if not failed:
-        _log.info("  (无失败插件)")
-        return
-    for f in failed:
-        _log.info(f"  [{f.get('dir_name')}] {f.get('error')}")
-
-
 async def _plugin_refresh(_args: list[str]) -> None:
     """重新扫描插件目录，加载新插件。"""
     await server.refresh_plugins()
@@ -719,7 +710,6 @@ def build_registry() -> CommandRegistry:
         Command("plugin perm",      _plugin_perm,      "plugin perm <name> <key> <T/F>", "修改权限"),
         Command("plugin readme",    _plugin_readme,    "plugin readme <name>",           "README"),
         Command("plugin changelog", _plugin_changelog, "plugin changelog <name>",        "CHANGELOG"),
-        Command("plugin failed",    _plugin_failed,    "plugin failed",                  "失败插件"),
         Command("plugin refresh",   _plugin_refresh,   "plugin refresh",                 "扫描新插件"),
         Command("plugin uninstall", _plugin_uninstall, "plugin uninstall <name>",        "卸载插件"),
 

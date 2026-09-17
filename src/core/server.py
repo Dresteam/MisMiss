@@ -661,21 +661,6 @@ class MissevanServer(ServerInterface):
             return pm.config_manager.load_schema(metadata.config_schema_path)
         return None
 
-    def get_failed_plugins(self) -> list[dict[str, Any]]:
-        return self._plugin_manager.get_failed_plugins()
-
-    async def retry_failed_plugin(self, dir_name: str) -> PluginMetadata:
-        pm = self._require_plugin_manager()
-        metadata = await pm.retry_failed_plugin(dir_name)
-        self._save_state()
-        return metadata
-
-    async def discard_failed_plugin(self, dir_name: str) -> None:
-        """放弃加载失败的插件（从失败列表和插件列表中移除）。"""
-        pm = self._require_plugin_manager()
-        pm.discard_failed_plugin(dir_name)
-        self._save_state()
-
     # ================================================================== #
     # 定时消息
     # ================================================================== #

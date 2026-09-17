@@ -70,8 +70,6 @@ const zhCN = {
     noLivestreams: '暂无直播间',
     noPlugins: '暂无插件',
     botPermissions: 'Bot 权限汇总',
-    failedPluginWarning: '插件加载失败',
-    failedPluginHint: '有 {n} 个插件加载失败，请前往插件中心查看详情',
     loadingDashboard: '加载仪表盘...',
   },
 

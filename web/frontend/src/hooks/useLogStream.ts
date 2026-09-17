@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import type { LogEntry } from '../api/types';
 
-export interface LogEntry {
-  seq_id: number;
-  timestamp: number;
-  level: string;
-  message: string;
-}
+export type { LogEntry };
 
 interface UseLogStreamReturn {
   entries: LogEntry[];

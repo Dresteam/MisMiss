@@ -323,24 +323,6 @@ class Server(ABC):
         """
         ...
 
-    @abstractmethod
-    def get_failed_plugins(self) -> "list[dict[str, Any]]":
-        """获取加载失败的插件信息列表。
-
-        :return: 失败插件信息列表
-        """
-        ...
-
-    @abstractmethod
-    async def retry_failed_plugin(self, dir_name: str) -> "PluginMetadata":
-        """重试加载之前失败的插件。
-
-        :param dir_name: 插件目录名
-        :return: 插件元数据
-        :raises CorePluginNotFoundException: 插件不存在
-        """
-        ...
-
     # ------------------------------------------------------------------ #
     # 定时消息
     # ------------------------------------------------------------------ #

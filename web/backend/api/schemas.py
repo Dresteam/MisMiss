@@ -125,6 +125,8 @@ class PluginSummary(BaseModel):
     has_changelog: bool = False
     has_ui: bool = False
     is_default: bool = False
+    # 最近一次初始化失败的原因；成功后清空。用于在卡片上标记「初始化失败」
+    last_error: str | None = None
 
 
 class PluginEventHandler(BaseModel):
@@ -164,6 +166,8 @@ class PluginDetailResponse(BaseModel):
     config_schema: dict[str, Any] | None = None
     config_values: dict[str, Any] | None = None
     ui_schema: dict[str, Any] | None = None
+    # 最近一次初始化失败的原因；成功后清空。用于在卡片上标记「初始化失败」
+    last_error: str | None = None
 
 
 class PluginPermUpdateRequest(BaseModel):
@@ -177,14 +181,6 @@ class PluginConfigUpdateRequest(BaseModel):
     """更新插件配置请求。"""
 
     config: dict[str, Any] = Field(..., description="完整配置字典")
-
-
-class FailedPluginInfo(BaseModel):
-    """加载失败的插件信息。"""
-
-    dir_name: str
-    error: str
-    traceback: str = ""
 
 
 # ================================================================== #

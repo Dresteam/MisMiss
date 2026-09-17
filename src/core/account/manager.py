@@ -983,6 +983,7 @@ class AccountManager:
                 "has_changelog": meta.changelog_path is not None,
                 "is_default": meta.name in self._default_plugins,
                 "used_by_accounts": sorted(used.get(meta.name, [])),
+                "last_error": meta.last_error,
             }
             result.append(item)
         return result
@@ -1044,7 +1045,6 @@ class AccountManager:
         if meta is not None:
             pm._purge_modules(meta)
             pm._plugins.pop(plugin_name, None)
-        pm._failed_plugins.pop(plugin_name, None)
         # 3. 覆盖源码副本
         shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(src, dest)
@@ -1322,7 +1322,6 @@ class AccountManager:
             )
         # load_all 只做增量合并,不会移除目录已消失的插件 → 显式清除条目
         pm._plugins.pop(plugin_name, None)
-        pm._failed_plugins.pop(plugin_name, None)
         await server.refresh_plugins()
         server._save_state()
         _log.info("账户 {} 已卸载插件 {}", account_id, plugin_name)

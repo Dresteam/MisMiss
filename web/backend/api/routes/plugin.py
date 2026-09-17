@@ -21,12 +21,9 @@ from fastapi.responses import StreamingResponse
 from core.account import AccountManager
 from core.exceptions import (
     CorePluginNotFoundException,
-    CorePluginLoadException,
 )
 from api.deps import get_account_manager
 from api.schemas import (
-    FailedPluginInfo,
-    PluginSummary,
     StatusResponse,
 )
 
@@ -373,45 +370,6 @@ async def plugin_uninstall(
             disable_in_accounts=disable_in_accounts,
         )
         return StatusResponse(success=True, message=f"插件 '{plugin_name}' 已从插件库删除")
-    except CorePluginNotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.get("/failed/list", response_model=list[FailedPluginInfo])
-async def plugin_failed(manager: AccountManager = _DEP):
-    """列出加载失败的插件。"""
-    failed = manager.get_library_pm().get_failed_plugins()
-    return [FailedPluginInfo(**f) for f in failed]
-
-
-@router.post("/failed/{dir_name}/retry", response_model=PluginSummary)
-async def plugin_retry_failed(dir_name: str, manager: AccountManager = _DEP):
-    """重试加载失败的插件。"""
-    try:
-        pm = manager.get_library_pm()
-        meta = await pm.retry_failed_plugin(dir_name)
-        await manager.refresh_library()
-        return PluginSummary(
-            name=meta.name, plugin_id=meta.plugin_id, author=meta.author,
-            version=meta.version, display_name=meta.display_name,
-            short_desc=meta.short_desc, desc=meta.desc, enabled=False,
-            has_config=meta.config_schema_path is not None,
-            has_readme=meta.readme_path is not None,
-            has_ui=meta.ui_schema_path is not None,
-            has_changelog=meta.changelog_path is not None,
-        )
-    except CorePluginNotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/failed/{dir_name}/discard", response_model=StatusResponse)
-async def plugin_discard_failed(dir_name: str, manager: AccountManager = _DEP):
-    """放弃加载失败的插件（从列表中移除，保留目录文件）。"""
-    try:
-        manager.get_library_pm().discard_failed_plugin(dir_name)
-        return StatusResponse(success=True, message=f"已放弃加载 '{dir_name}'")
     except CorePluginNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
 

@@ -31,6 +31,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { RenewDialog } from '../components/AccountDialogs';
 import { PluginDrawer } from '../components/PluginDrawer';
 import { UninstallDialog } from '../components/UninstallDialog';
+import { PluginLogDialog } from '../components/PluginLogDialog';
 import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
 
@@ -964,6 +965,9 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
     groups: BulkGroup[];
   } | null>(null);
   const [updateAllListOpen, setUpdateAllListOpen] = useState(false);
+  // 插件日志弹窗：操作失败时自动打开，便于直接看到报错与 traceback
+  const [logOpen, setLogOpen] = useState(false);
+  const [logHint, setLogHint] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -991,6 +995,10 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
       load();
     } catch (e: any) {
       showToast('error', '操作失败', e.message);
+      // 失败时自动打开插件日志，便于直接看到报错与 traceback
+      setLogHint(e.message || '');
+      setLogOpen(true);
+      load();
     } finally { setProcessing(''); }
   };
 
@@ -1138,6 +1146,16 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                     <span className={`inline-block rounded-full w-1.5 h-1.5 ${p.enabled ? 'bg-emerald-500' : 'bg-surface-400'}`} />
                     {p.enabled ? '已启用' : '未启用'}
                   </span>
+                  {p.last_error && (
+                    <button
+                      title={`初始化失败：${p.last_error}\n点击查看插件日志`}
+                      onClick={() => { setLogHint(p.last_error || ''); setLogOpen(true); }}
+                      className="inline-flex items-center rounded-full px-1.5 py-0 text-[10px] font-medium
+                                 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400
+                                 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors">
+                      初始化失败
+                    </button>
+                  )}
                 </div>
                 <p className="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-1">
                   {p.short_desc || p.desc || '无描述'}
@@ -1231,6 +1249,13 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
           } finally { setProcessing(''); }
         }}
         onCancel={() => setUninstallTarget(null)}
+      />
+
+      {/* 插件日志：操作失败时自动打开，也可由「初始化失败」徽标打开 */}
+      <PluginLogDialog
+        open={logOpen}
+        hint={logHint}
+        onClose={() => { setLogOpen(false); setLogHint(''); }}
       />
 
       {/* 一键更新二次确认——会重启插件实例，误触代价大 */}

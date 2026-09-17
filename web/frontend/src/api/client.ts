@@ -14,7 +14,7 @@ import type {
   PluginEventHandler,
   PluginPermissionInfo,
   PluginConfigResponse,
-  FailedPluginInfo,
+  LogEntry,
   DashboardData,
   ServerStatus,
   PluginPushResult,
@@ -273,14 +273,12 @@ export async function fetchPluginChangelog(name: string): Promise<{ content: str
   return request(`/plugin/${encodeURIComponent(name)}/changelog`);
 }
 
-export async function fetchFailedPlugins(): Promise<FailedPluginInfo[]> {
-  return request<FailedPluginInfo[]>('/plugin/failed/list');
-}
-
-export async function retryFailedPlugin(dirName: string): Promise<PluginSummary> {
-  return request<PluginSummary>(`/plugin/failed/${encodeURIComponent(dirName)}/retry`, {
-    method: 'POST',
-  });
+/** 拉取插件相关日志（仅插件自身代码 + 框架插件生命周期）。 */
+export async function fetchPluginLogs(limit = 500): Promise<LogEntry[]> {
+  const res = await request<{ entries: LogEntry[] }>(
+    `/logs/history?scope=plugin&limit=${limit}`,
+  );
+  return res.entries || [];
 }
 
 export async function refreshPlugins(): Promise<StatusResponse> {

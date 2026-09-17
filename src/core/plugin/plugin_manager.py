@@ -114,7 +114,6 @@ class PluginManager:
         self._plugins: dict[str, PluginMetadata] = {}
         self._config_mgr = PluginConfigManager(config_dir)
         self._permission_mgr = PluginPermissionManager(permission_dir)
-        self._failed_plugins: dict[str, dict[str, Any]] = {}
         self._app = None  # FastAPI app 引用
         self._server = None  # MissevanServer 引用，供插件获取直播间列表等
 
@@ -645,7 +644,6 @@ class PluginManager:
 
         # 5. 存入内部字典（仅元数据，不加载代码）
         self._plugins[metadata.name] = metadata
-        self._failed_plugins.pop(dir_name, None)
         self._notify_state_changed()
         _log.info("插件已发现（禁用状态）: {}", metadata)
         return metadata
@@ -756,7 +754,6 @@ class PluginManager:
         # 从内部字典移除
         del self._plugins[plugin_name]
         self._disabled_plugins.discard(plugin_name)
-        self._failed_plugins.pop(root_dir, None)  # type: ignore[arg-type]
         self._notify_state_changed()
         _log.info("插件已卸载: {}", plugin_name)
 
@@ -893,22 +890,18 @@ class PluginManager:
         try:
             await instance.initialize(config=miss_config)
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            _log.error("插件 [{}] 初始化失败，移入失败列表: {}", metadata.name, e)
+            # exception() 会自动附带完整 traceback，报错进入日志文件与实时日志流
+            _log.exception("插件 [{}] 初始化失败: {}", metadata.name, e)
             metadata.enabled = False
             metadata.initialized = False
+            metadata.last_error = str(e)
             # 保留 plugin_instance 以便 UI 路由继续工作
-            self._failed_plugins[dir_name] = {
-                "dir_name": dir_name,
-                "error": str(e),
-                "traceback": tb,
-            }
             self._notify_state_changed()
             raise CorePluginLoadException(
                 metadata.name, f"插件初始化失败: {e}"
             )
 
+        metadata.last_error = None
         metadata.initialized = True
         self._event_bus.register_new_event(instance)
         _log.info("插件已激活并注册到事件总线: {}", metadata.name)
@@ -1144,21 +1137,17 @@ class PluginManager:
         try:
             await instance.initialize(config=miss_config)
         except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            _log.error("插件 [{}] 初始化失败，移入失败列表: {}", metadata.name, e)
+            # exception() 会自动附带完整 traceback，报错进入日志文件与实时日志流
+            _log.exception("插件 [{}] 初始化失败: {}", metadata.name, e)
             metadata.enabled = False
             metadata.initialized = False
-            # 保留 plugin_instance/m/module 以便 UI 路由继续工作
-            self._failed_plugins[metadata.root_dir_name or metadata.name] = {
-                "dir_name": metadata.root_dir_name or metadata.name,
-                "error": str(e),
-                "traceback": tb,
-            }
+            metadata.last_error = str(e)
+            # 保留 plugin_instance/module 以便 UI 路由继续工作
             self._notify_state_changed()
             raise CorePluginLoadException(
                 metadata.name, f"插件初始化失败: {e}"
             )
+        metadata.last_error = None
         metadata.enabled = True
         metadata.initialized = True
         self._event_bus.register_new_event(instance)
@@ -1452,104 +1441,6 @@ class PluginManager:
             except OSError as e:
                 _log.warning("读取 CHANGELOG 失败 [{}]: {}", plugin_name, e)
         return None
-
-    # ------------------------------------------------------------------ #
-    # 失败插件追踪
-    # ------------------------------------------------------------------ #
-
-    def get_failed_plugins(self) -> list[dict[str, Any]]:
-        """获取加载失败的插件信息列表。
-
-        :return: 失败插件信息列表，每项包含 ``dir_name``、``error`` 等字段
-        """
-        return list(self._failed_plugins.values())
-
-    async def retry_failed_plugin(self, dir_name: str) -> PluginMetadata:
-        """重试加载之前失败的插件。
-
-        流程：移除旧条目 → 重新加载元数据 → 若之前已启用则重新激活。
-        激活成功才算重试成功。
-
-        :param dir_name: 插件目录名
-        :return: 插件元数据（已激活）
-        :raises CorePluginLoadException: 重试仍然失败（加载或激活失败）
-        :raises CorePluginNotFoundException: 插件不在失败列表
-        """
-        if dir_name not in self._failed_plugins:
-            raise CorePluginNotFoundException(dir_name)
-
-        # 先从 _plugins 中移除旧条目
-        to_remove = [name for name, meta in self._plugins.items()
-                     if meta.root_dir_name == dir_name]
-        for name in to_remove:
-            del self._plugins[name]
-            _log.debug("已移除旧条目以重新加载: {}", name)
-
-        self._failed_plugins.pop(dir_name, None)
-
-        _log.info("正在重试加载插件: {}", dir_name)
-
-        # 1. 重新加载元数据
-        metadata = await self.load_plugin(dir_name)
-        if metadata is None:
-            raise CorePluginLoadException(dir_name, "load_plugin 返回 None")
-
-        # 2. 重新激活（包含 initialize 调用），激活成功才算重试成功
-        metadata.enabled = True
-        try:
-            await self._activate_plugin(metadata)
-        except CorePluginLoadException:
-            # _activate_plugin 已将失败记录到 _failed_plugins
-            raise
-
-        _log.info("插件重试成功: {}", metadata)
-        self._notify_state_changed()
-        return metadata  # type: ignore[return-value]
-
-    def discard_failed_plugin(self, dir_name: str) -> None:
-        """放弃加载失败的插件，将其回退到禁用状态。
-
-        失败插件的元数据仍保留在插件列表中（``enabled=False``），
-        可从失败筛选器中看到并可重试。目录文件保留不删除。
-
-        :param dir_name: 插件目录名
-        :raises CorePluginNotFoundException: 插件不在失败列表
-        """
-        if dir_name not in self._failed_plugins:
-            raise CorePluginNotFoundException(dir_name)
-
-        _log.info("放弃加载插件，回退到禁用状态: {}", dir_name)
-        # 将插件设为禁用状态
-        for meta in self._plugins.values():
-            if meta.root_dir_name == dir_name:
-                meta.enabled = False
-                if meta.plugin_instance is not None:
-                    self._unload_plugin_instance(meta)
-        # 从失败列表移除
-        self._failed_plugins.pop(dir_name, None)
-        self._notify_state_changed()
-
-    def _record_failed_plugin(
-        self,
-        dir_name: str,
-        error: str,
-        metadata: PluginMetadata | None = None,
-    ) -> None:
-        """记录一个加载失败的插件。
-
-        :param dir_name: 插件目录名
-        :param error: 错误描述
-        :param metadata: 部分元数据（如有）
-        """
-        record: dict[str, Any] = {
-            "dir_name": dir_name,
-            "error": error,
-        }
-        if metadata is not None:
-            record["name"] = metadata.name
-            record["author"] = metadata.author
-            record["version"] = metadata.version
-        self._failed_plugins[dir_name] = record
 
     @property
     def disabled_plugin_names(self) -> set[str]:
