@@ -230,16 +230,21 @@ marimo/_lsp/
 __marimo__/
 
 # Streamlit
-.streamlit/secrets.tomlweb/frontend/node_modules/
+.streamlit/secrets.toml
 
 # node
 web/frontend/node_modules
 
-# plugins
+# 运行时数据（挂载为 volume）
 plugins
 data
 permissions
-test/
+
+# 测试
+#   原先整目录被忽略，导致 19 个测试脚本对任何全新 clone 都不存在。
+#   测试是回归护栏，应当入库；下面只排除本地专用文件与孤儿夹具。
+test/cookie.txt
+test/plugins/
 
 # Frontend build output
 web/frontend/dist
