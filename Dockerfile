@@ -94,6 +94,9 @@ COPY web/backend/ ./web/backend/
 COPY mismiss_cli.py pyproject.toml ./
 COPY config.yml ./config.yml.dist
 
+# 更新日志 —— 账户登录后按版本弹出（core.version.load_changelog 读取）
+COPY docs/changelog/ ./docs/changelog/
+
 # 前端产物（Stage 1）
 COPY --from=frontend-builder /src/web/frontend/dist/ ./web/frontend/dist/
 

@@ -14,55 +14,18 @@ import { SettingsPage } from './pages/SettingsPage';
 import { PluginPageView } from './pages/PluginPageView';
 import { UpdatePage } from './pages/UpdatePage';
 import { LoginPage } from './pages/LoginPage';
-import { AccountLoginPage } from './pages/AccountLoginPage';
 import { AccountSetup } from './components/AccountSetup';
+import { ChangelogDialog } from './components/ChangelogDialog';
 import { useToast, type Toast as ToastType } from './hooks/useToast';
 import { AuthContext, useAuthState } from './hooks/useAuth';
-import { isAccountPortalHost } from './utils/host';
 
-// ------------------------------------------------------------------ #
-// 账户入口路由树(user. 子域名):仅账户界面,无任何面板功能
-// ------------------------------------------------------------------ #
-
-function AccountPortalApp({
-  dark, onToggleDark, sidebarCollapsed, onToggleSidebar, toasts, onRemoveToast,
-}: {
+interface ShellProps {
   dark: boolean;
   onToggleDark: () => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   toasts: ToastType[];
   onRemoveToast: (id: number) => void;
-}) {
-  return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <Routes>
-        <Route
-          element={
-            <Layout
-              dark={dark}
-              onToggleDark={onToggleDark}
-              sidebarCollapsed={sidebarCollapsed}
-              onToggleSidebar={onToggleSidebar}
-              toasts={toasts}
-              onRemoveToast={onRemoveToast}
-            />
-          }
-        >
-          <Route index element={<Navigate to="/account/home" replace />} />
-          <Route path="account/home" element={<AccountOverviewPage />} />
-          <Route path="account/live" element={<AccountLivePage />} />
-          <Route path="account/bot" element={<AccountBotPage />} />
-          <Route path="account/timer" element={<AccountTimerPage />} />
-          <Route path="account/plugins" element={<AccountPluginsPage />} />
-          <Route path="account/library" element={<AccountLibraryPage />} />
-          <Route path="account/password" element={<AccountPasswordPage />} />
-          <Route path="account/plugin/:name/page" element={<PluginPageView />} />
-          <Route path="*" element={<Navigate to="/account/home" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
-  );
 }
 
 function App() {
@@ -90,43 +53,20 @@ function App() {
 
   // 本地控制首次登录对话框——跳过即隐藏，不依赖 server 端 first_login 标志
   const [showAccountSetup, setShowAccountSetup] = useState(true);
-
-  // 固定子域名账户入口(user.localhost / user.<域名>)
-  const accountPortal = isAccountPortalHost();
+  // 本地控制更新日志弹窗——关闭即隐藏，同时向服务端 ack
+  const [changelogDismissed, setChangelogDismissed] = useState(false);
 
   if (auth.loading) {
     return <div className="min-h-screen bg-gray-100 dark:bg-gray-950" />;
   }
 
-  // ------------------------------------------------------------------ #
-  // 账户入口:user. 子域名 → 仅账户登录 + 账户管理界面
-  // 身份完全由登录时输入的用户名/密码决定
-  // ------------------------------------------------------------------ #
-  if (accountPortal) {
+  // 未登录:管理端与账户端共用同一个登录页，身份由凭据决定
+  if (!auth.token) {
     return (
       <AuthContext.Provider value={auth}>
-        {(!auth.token || auth.role !== 'account') ? (
-          // 未登录 / 管理员 token → 一律显示账户登录页
-          <AccountLoginPage />
-        ) : (
-          <AccountPortalApp
-            dark={dark}
-            onToggleDark={() => setDark(!dark)}
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-            toasts={toasts}
-            onRemoveToast={removeToast}
-          />
-        )}
+        <LoginPage />
       </AuthContext.Provider>
     );
-  }
-
-  // ------------------------------------------------------------------ #
-  // 面板入口(主域名)
-  // ------------------------------------------------------------------ #
-  if (!auth.token) {
-    return <LoginPage onLogin={() => window.location.reload()} />;
   }
 
   const handleAccountDone = async () => {
@@ -140,27 +80,45 @@ function App() {
     } catch { /* ignore */ }
   };
 
+  const handleChangelogClose = async () => {
+    setChangelogDismissed(true);
+    // 版本号由服务端取当前版本，客户端不上报
+    try {
+      await fetch('/api/auth/ack-changelog', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + auth.token },
+      });
+    } catch { /* ignore */ }
+  };
+
+  const shell: ShellProps = {
+    dark,
+    onToggleDark: () => setDark(!dark),
+    sidebarCollapsed,
+    onToggleSidebar: () => setSidebarCollapsed(!sidebarCollapsed),
+    toasts,
+    onRemoveToast: removeToast,
+  };
+
   return (
     <AuthContext.Provider value={auth}>
       {auth.firstLogin && showAccountSetup && (
         <AccountSetup firstLogin token={auth.token} onDone={handleAccountDone} />
       )}
+      {auth.role === 'account' && auth.pendingChangelog && !changelogDismissed && (
+        <ChangelogDialog
+          open
+          version={auth.pendingChangelog.version}
+          title={auth.pendingChangelog.title}
+          body={auth.pendingChangelog.body}
+          onClose={handleChangelogClose}
+        />
+      )}
       <BrowserRouter
         future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
       >
         <Routes>
-          <Route
-            element={
-              <Layout
-                dark={dark}
-                onToggleDark={() => setDark(!dark)}
-                sidebarCollapsed={sidebarCollapsed}
-                onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-                toasts={toasts}
-                onRemoveToast={removeToast}
-              />
-            }
-          >
+          <Route element={<Layout {...shell} />}>
             <Route index element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <AccountsPage />} />
             <Route path="account/home" element={<AccountOverviewPage />} />
             <Route path="account/live" element={auth.role === 'account' ? <AccountLivePage /> : <Navigate to="/" replace />} />
@@ -177,6 +135,7 @@ function App() {
             <Route path="logs" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <LogsPage />} />
             <Route path="settings" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <SettingsPage />} />
             <Route path="update" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <UpdatePage />} />
+            <Route path="*" element={<Navigate to={auth.role === 'account' ? '/account/home' : '/'} replace />} />
           </Route>
         </Routes>
       </BrowserRouter>

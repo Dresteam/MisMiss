@@ -146,6 +146,8 @@ $copy = { param($src, $dst)
 & $copy "$ProjectRoot\pyproject.toml"    "$BuildDir\pyproject.toml"
 & $copy "$ProjectRoot\mismiss_cli.py"    "$BuildDir\mismiss_cli.py"
 & $copy "$ProjectRoot\README.md"         "$BuildDir\README.md"
+# 更新日志 —— 账户登录后按版本弹出（core.version.load_changelog 读取）
+& $copy "$ProjectRoot\docs\changelog"    "$BuildDir\docs\changelog"
 
 New-Item -ItemType Directory -Path "$BuildDir\scripts" -Force | Out-Null
 Get-ChildItem "$ProjectRoot\scripts" | ForEach-Object {
@@ -219,6 +221,7 @@ if ($SkipPyInstaller) {
         --add-data "$ProjectRoot\config.yml;." `
         --add-data "$ProjectRoot\src;src" `
         --add-data "$ProjectRoot\web\backend;web\backend" `
+        --add-data "$ProjectRoot\docs\changelog;docs/changelog" `
         --hidden-import "core" `
         --hidden-import "core.server" `
         --hidden-import "core.bot.mis_bot" `

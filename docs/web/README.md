@@ -2,13 +2,18 @@
 
 现代化的 Web 控制台，完全替代 CLI，提供图形化的 MisMiss 管理体验。
 
-v1.1.0 起从「单服务器仪表盘」重构为**多账户面板**：同一份前端构建产物服务两种产品，
+v1.1.0 起从「单服务器仪表盘」重构为**多账户面板**：同一份前端构建产物服务两种角色，
+**同一个域名、同一个登录页**，登录后按角色分流：
 
-- **管理面板**（默认域名）——面板管理员维护账户、插件库、授权码与系统设置
-- **账户门户**（`user.` 子域名，如 `user.localhost:15173`）——直播主用自己的账户凭据登录，
-  只能看到并操作自己的 Bot / 直播间 / 定时消息 / 插件，没有任何面板功能
+- **管理面板**（`role = admin`）——面板管理员维护账户、插件库、授权码与系统设置
+- **账户界面**（`role = account`）——直播主只能看到并操作自己的
+  Bot / 直播间 / 定时消息 / 插件，没有任何面板功能
 
-身份由登录凭据决定（token 中携带 `role` 与 `account_id`），子域名只负责选择入口。
+身份完全由登录凭据决定（token 中携带 `role` 与 `account_id`），前端路由按 `role` 守卫。
+
+账户登录后若服务器已更新到新版本，会**自动弹出该版本的更新日志**（每个账户每个版本只弹一次，
+关闭时回写 `panel.json` 的 `seen_changelog_version`）。日志取自 `docs/changelog/v{版本}.md`，
+该目录随部署包分发。
 
 ## 项目结构
 
@@ -69,19 +74,19 @@ web/
 │       │   ├── UpdateDialog.tsx # 插件更新弹窗
 │       │   ├── AccountDialogs.tsx # 创建账户 / 续期 / 重置凭据弹窗
 │       │   ├── AccountSetup.tsx # 管理员账户设置（首次改密）
+│       │   ├── ChangelogDialog.tsx # 更新日志弹窗（更新页 + 登录后自动弹出）
 │       │   └── DynamicConfigForm.tsx # 动态配置表单生成器（_conf_schema.json）
 │       └── pages/
 │           ├── AccountsPage.tsx    # 账户总览（面板首页，卡片 + 10s 刷新）
 │           ├── AccountDetailPage.tsx # 账户详情（概览/直播间/Bot/定时/插件/插件库 标签页）
-│           ├── AccountPortalPages.tsx # 账户门户各页面（复用详情页标签组件）
-│           ├── AccountLoginPage.tsx # 账户门户登录（拒绝管理员凭据）
+│           ├── AccountPortalPages.tsx # 账户界面各页面（复用详情页标签组件）
 │           ├── PluginLibraryPage.tsx # 插件库（面板级，安装/卸载/失败插件）
 │           ├── PluginPageView.tsx  # 插件自定义 UI 页面
 │           ├── UpdatePage.tsx  # 程序更新（版本列表/镜像站/回滚）
 │           ├── LogsPage.tsx    # 服务器日志（虚拟滚动）
 │           ├── SettingsPage.tsx # 设置（账户安全/公共 Bot/授权码/日志/端口/配置）
 │           ├── ServerPage.tsx  # 服务器设置（状态/重载/关闭）
-│           └── LoginPage.tsx   # 面板登录页
+│           └── LoginPage.tsx   # 登录页（管理端与账户端共用，按 role 分流）
 └── README.md
 ```
 

@@ -99,6 +99,9 @@ function Collect-Files {
 
     # Docs
     Copy-Item "$ProjectRoot\README.md"                   "$BuildDir\"
+    # 更新日志（账户登录后按版本弹出，core.version.load_changelog 读取）
+    New-Item -ItemType Directory -Path "$BuildDir\docs\changelog" -Force | Out-Null
+    Copy-Item "$ProjectRoot\docs\changelog\*"            "$BuildDir\docs\changelog\"
 
     # Runtime empty dirs
     @("data", "logs", "plugins", "permissions") | ForEach-Object {

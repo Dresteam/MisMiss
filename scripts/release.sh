@@ -145,6 +145,9 @@ cp "$PROJECT_ROOT/requirements.txt"      "$BUILD_DIR/"
 cp "$PROJECT_ROOT/pyproject.toml"        "$BUILD_DIR/"
 cp "$PROJECT_ROOT/mismiss_cli.py"        "$BUILD_DIR/"
 cp "$PROJECT_ROOT/README.md"             "$BUILD_DIR/"
+# 更新日志 —— 账户登录后按版本弹出（core.version.load_changelog 读取）
+mkdir -p "$BUILD_DIR/docs/changelog"
+cp "$PROJECT_ROOT/docs/changelog/"*      "$BUILD_DIR/docs/changelog/"
 
 mkdir -p "$BUILD_DIR/scripts"
 cp "$PROJECT_ROOT/scripts/"*             "$BUILD_DIR/scripts/" 2>/dev/null || true
@@ -207,6 +210,7 @@ else
         --add-data "$PROJECT_ROOT/config.yml:." \
         --add-data "$PROJECT_ROOT/src:src" \
         --add-data "$PROJECT_ROOT/web/backend:web/backend" \
+        --add-data "$PROJECT_ROOT/docs/changelog:docs/changelog" \
         --hidden-import "core" \
         --hidden-import "core.server" \
         --hidden-import "core.bot.mis_bot" \

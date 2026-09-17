@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Download, RefreshCw, RotateCcw, Loader2, Globe, Shield, Container,
-  ChevronLeft, ChevronRight, ScrollText, X,
+  ChevronLeft, ChevronRight, ScrollText,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ChangelogDialog } from '../components/ChangelogDialog';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
 
 interface ReleaseInfo {
@@ -393,33 +394,13 @@ export function UpdatePage() {
 
 /** 更新日志弹框 —— 展示指定版本的完整更新日志 */
 function ChangelogModal({ release, onClose }: { release: ReleaseInfo | null; onClose: () => void }) {
-  if (!release) return null;
-
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col animate-slide-in-up">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex items-center gap-2 min-w-0">
-            <ScrollText className="w-4 h-4 text-gray-500 shrink-0" />
-            <h3 className="font-semibold text-gray-900 dark:text-white truncate">v{release.tag} 更新日志</h3>
-          </div>
-          <button onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors shrink-0">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6">
-          <p className="text-xs text-gray-400 font-mono mb-3">
-            [{release.tag}] - {release.published_at?.slice(0, 10) || '?'}
-          </p>
-          {release.body ? (
-            <MarkdownRenderer content={release.body} />
-          ) : (
-            <p className="text-sm text-gray-400 text-center py-8">无更新日志</p>
-          )}
-        </div>
-      </div>
-    </div>
+    <ChangelogDialog
+      open={!!release}
+      version={release?.tag ?? ''}
+      meta={release ? `[${release.tag}] - ${release.published_at?.slice(0, 10) || '?'}` : undefined}
+      body={release?.body ?? ''}
+      onClose={onClose}
+    />
   );
 }

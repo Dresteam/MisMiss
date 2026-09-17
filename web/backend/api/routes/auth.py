@@ -16,6 +16,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import JSONResponse
 
+from core.version import CURRENT_VERSION, load_changelog
+
 router = APIRouter()
 
 # 持久化路径：PyInstaller 模式下使用 exe 所在目录，而非临时解压目录
@@ -157,6 +159,26 @@ def token_info(token: str) -> dict | None:
     return _load_token(token)
 
 
+# ---- 更新日志 ----
+
+def _pending_changelog(role: str, account_id: int | None) -> dict | None:
+    """账户角色待确认的更新日志；已确认过或管理员返回 None。
+
+    任何异常都回落为「不弹窗」——这是安全的失败方向。
+    """
+    if role != "account" or account_id is None:
+        return None
+    from api.deps import get_account_manager
+    from core.exceptions import CoreAccountNotFoundException
+    try:
+        rec = get_account_manager().get_record(int(account_id))
+    except (RuntimeError, CoreAccountNotFoundException, TypeError, ValueError):
+        return None
+    if rec.seen_changelog_version == CURRENT_VERSION:
+        return None
+    return load_changelog(CURRENT_VERSION)
+
+
 # ---- Middleware helper ----
 def require_auth(authorization: str = Header(default="")) -> str:
     """FastAPI dependency: extract and verify Bearer token, return username."""
@@ -206,6 +228,7 @@ async def login(body: dict):
         "first_login": first_login,
         "role": role,
         "account_id": account_id,
+        "pending_changelog": _pending_changelog(role, account_id),
     }
 
 
@@ -253,12 +276,17 @@ async def check_auth(authorization: str = Header(default="")):
     info = token_info(token) if token else None
     auth = _load_auth()
     valid = info is not None
+    role = (info or {}).get("role", "admin")
+    account_id = (info or {}).get("account_id")
     return {
         "valid": valid,
         "username": (info or {}).get("username") or auth["username"],
-        "first_login": auth.get("first_login", False),
-        "role": (info or {}).get("role", "admin"),
-        "account_id": (info or {}).get("account_id"),
+        # first_login 存于 data/auth.json，是面板管理员的全局标志；
+        # 账户角色的凭据在 panel.json，没有这个引导，必须回报 False
+        "first_login": auth.get("first_login", False) if role == "admin" else False,
+        "role": role,
+        "account_id": account_id,
+        "pending_changelog": _pending_changelog(role, account_id),
     }
 
 
@@ -269,3 +297,28 @@ async def skip_first_login():
     auth["first_login"] = False
     _save_auth(auth)
     return {"success": True, "message": "已跳过首次登录引导"}
+
+
+@router.post("/auth/ack-changelog")
+async def ack_changelog(authorization: str = Header(default="")):
+    """标记当前账户已读更新日志（弹窗关闭时调用）。
+
+    版本号取服务端当前版本，不接受客户端上报——避免陈旧页面把未读的
+    新版本误标为已读。``/api/auth/*`` 不经中间件鉴权，故这里自行校验 token。
+    """
+    token = authorization.removeprefix("Bearer ")
+    info = token_info(token) if token else None
+    if info is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+
+    account_id = info.get("account_id")
+    if info.get("role") != "account" or account_id is None:
+        return {"success": True, "version": CURRENT_VERSION, "message": "无需确认"}
+
+    from api.deps import get_account_manager
+    from core.exceptions import CoreAccountNotFoundException
+    try:
+        get_account_manager().ack_changelog(int(account_id), CURRENT_VERSION)
+    except CoreAccountNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"success": True, "version": CURRENT_VERSION}

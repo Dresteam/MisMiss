@@ -1,5 +1,12 @@
 import { useState, useEffect, createContext, useContext } from 'react';
 
+/** 待确认的更新日志(仅账户角色,同一版本只下发一次) */
+export interface PendingChangelog {
+  version: string;
+  title: string;
+  body: string;
+}
+
 interface AuthState {
   token: string | null;
   username: string | null;
@@ -7,7 +14,14 @@ interface AuthState {
   /** 角色:admin(面板管理员) | account(账户持有者) */
   role: 'admin' | 'account';
   accountId: number | null;
+  /** 服务器更新后首次登录时非空,关闭弹窗并 ack 后清空 */
+  pendingChangelog: PendingChangelog | null;
 }
+
+const EMPTY_STATE = {
+  token: null, username: null, firstLogin: false,
+  role: 'admin' as const, accountId: null, pendingChangelog: null,
+};
 
 interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<void>;
@@ -20,10 +34,10 @@ export const AuthContext = createContext<AuthContextType>(null!);
 export const useAuth = () => useContext(AuthContext);
 
 export function useAuthState(): AuthContextType {
-  const [state, setState] = useState<AuthState>(() => {
-    const token = localStorage.getItem('auth_token');
-    return { token, username: null, firstLogin: false, role: 'admin', accountId: null };
-  });
+  const [state, setState] = useState<AuthState>(() => ({
+    ...EMPTY_STATE,
+    token: localStorage.getItem('auth_token'),
+  }));
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -38,10 +52,11 @@ export function useAuthState(): AuthContextType {
               firstLogin: d.first_login,
               role: d.role === 'account' ? 'account' : 'admin',
               accountId: d.account_id ?? null,
+              pendingChangelog: d.pending_changelog ?? null,
             }));
           } else {
             localStorage.removeItem('auth_token');
-            setState({ token: null, username: null, firstLogin: false, role: 'admin', accountId: null });
+            setState(EMPTY_STATE);
           }
         })
         .finally(() => setLoading(false));
@@ -65,12 +80,13 @@ export function useAuthState(): AuthContextType {
       firstLogin: data.first_login,
       role: data.role === 'account' ? 'account' : 'admin',
       accountId: data.account_id ?? null,
+      pendingChangelog: data.pending_changelog ?? null,
     });
   };
 
   const logout = () => {
     localStorage.removeItem('auth_token');
-    setState({ token: null, username: null, firstLogin: false, role: 'admin', accountId: null });
+    setState(EMPTY_STATE);
   };
 
   const changePassword = async (current: string, newPwd: string) => {

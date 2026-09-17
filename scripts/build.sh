@@ -94,6 +94,10 @@ collect_files() {
     cp "$PROJECT_ROOT/scripts/deploy.sh"     "$BUILD_DIR/"
     cp "$PROJECT_ROOT/scripts/deploy.ps1"    "$BUILD_DIR/"
 
+    # — 更新日志（账户登录后按版本弹出，core.version.load_changelog 读取）—
+    mkdir -p "$BUILD_DIR/docs/changelog"
+    cp "$PROJECT_ROOT/docs/changelog/"*      "$BUILD_DIR/docs/changelog/"
+
     # — 文档 —
     cp "$PROJECT_ROOT/README.md"             "$BUILD_DIR/"
 
@@ -198,6 +202,7 @@ build_pyinstaller() {
         --add-data "$PROJECT_ROOT/config.yml:." \
         --add-data "$PROJECT_ROOT/src:src" \
         --add-data "$PROJECT_ROOT/web/backend:web/backend" \
+        --add-data "$PROJECT_ROOT/docs/changelog:docs/changelog" \
         --hidden-import "core" \
         --hidden-import "core.server" \
         --hidden-import "core.bot.mis_bot" \

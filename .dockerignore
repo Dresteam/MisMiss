@@ -35,6 +35,8 @@ test
 # Docs
 *.md
 !README.md
+# 更新日志需随镜像分发（Dockerfile 会 COPY）——`*` 不跨 `/`，此处显式声明
+!docs/changelog/*.md
 
 # OS
 .DS_Store

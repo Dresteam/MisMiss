@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
 import { Terminal, Key, User, Lock, Eye, EyeOff } from 'lucide-react';
 import { Button } from '../components/Button';
-import { showToast } from '../hooks/useToast';
+import { useAuth } from '../hooks/useAuth';
 
-interface Props {
-  onLogin: (token: string) => void;
-}
-
-export function LoginPage({ onLogin }: Props) {
+/**
+ * 登录页 —— 管理端与账户端共用。
+ *
+ * 身份完全由凭据决定:面板管理员进面板,账户持有者进账户界面,
+ * 登录后由 App 的路由守卫按 ``role`` 分流。
+ */
+export function LoginPage() {
+  const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [logging, setLogging] = useState(false);
@@ -26,19 +29,12 @@ export function LoginPage({ onLogin }: Props) {
     e.preventDefault();
     setLogging(true);
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.detail); }
-      const data = await res.json();
+      await login(username.trim(), password);
       setError('');
-      localStorage.setItem('auth_token', data.token);
-      onLogin(data.token);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
+      // 整页刷新后 useAuthState 重新拉 /api/auth/check，按 role 分流
+      window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '登录失败');
       setLogging(false);
     }
   };
@@ -51,7 +47,7 @@ export function LoginPage({ onLogin }: Props) {
             <Terminal className="w-7 h-7 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">MisMiss Console</h1>
-          <p className="text-sm text-gray-500 mt-1">默认用户名和密码均为 MisMiss</p>
+          <p className="text-sm text-gray-500 mt-1">请使用你的账号登录</p>
         </div>
 
         <form onSubmit={handleLogin} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 space-y-4">
@@ -81,9 +77,9 @@ export function LoginPage({ onLogin }: Props) {
           {error && (
             <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-center">
               <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-              <p className="text-xs text-red-500 dark:text-red-400/70 mt-1">提示：默认用户名和密码均为 MisMiss</p>
             </div>
           )}
+          <p className="text-xs text-gray-400 text-center">账户凭据由面板管理员创建 / 重置</p>
         </form>
       </div>
     </div>

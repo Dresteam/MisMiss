@@ -32,6 +32,7 @@ from core.exceptions import (
 )
 from core.logging import get_logger
 from core.server import MissevanServer
+from core.version import CURRENT_VERSION
 
 _log = get_logger(__name__)
 
@@ -69,6 +70,8 @@ class AccountRecord:
     resume_error: str | None = None
     username: str = ""
     password_hash: str = ""
+    # 最后一次确认已读更新日志的版本；"" = 尚未确认过（升级到本版本后会弹一次）
+    seen_changelog_version: str = ""
 
     @property
     def expired(self) -> bool:
@@ -98,6 +101,7 @@ class AccountRecord:
             "resume_error": self.resume_error,
             "username": self.username,
             "password_hash": self.password_hash,
+            "seen_changelog_version": self.seen_changelog_version,
         }
 
     @classmethod
@@ -115,6 +119,7 @@ class AccountRecord:
             resume_error=d.get("resume_error"),
             username=str(d.get("username", "")),
             password_hash=str(d.get("password_hash", "")),
+            seen_changelog_version=str(d.get("seen_changelog_version", "")),
         )
 
 
@@ -379,6 +384,22 @@ class AccountManager:
         _log.info("账户 {} 已自助修改登录密码", rec.id)
         return rec
 
+    def ack_changelog(self, account_id: int, version: str) -> AccountRecord:
+        """记录账户已读的更新日志版本(弹窗关闭时调用)。
+
+        版本号由调用方取服务端当前版本传入,不信任客户端上报。
+
+        :param version: 已确认的版本号
+        """
+        rec = self.get_record(account_id)
+        if rec.seen_changelog_version == version:
+            return rec
+        rec.seen_changelog_version = version
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        _log.info("账户 {} 已确认更新日志 v{}", rec.id, version)
+        return rec
+
     def get_record(self, account_id: int) -> AccountRecord:
         rec = self._records.get(int(account_id))
         if rec is None:
@@ -543,6 +564,8 @@ class AccountManager:
             updated_at=_now_iso(),
             username=uname,
             password_hash=self._hash_password(pwd),
+            # 全新账户不提示「更新」——它没有经历过本次更新
+            seen_changelog_version=CURRENT_VERSION,
         )
         os.makedirs(self._server_dirs(aid), exist_ok=True)
         self._records[aid] = rec
