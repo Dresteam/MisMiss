@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus, Settings2, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
+  Plus, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
   Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass,
 } from 'lucide-react';
 import {
@@ -154,11 +154,21 @@ export function AccountsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {accounts.map((acc) => (
-            <div key={acc.id} className="card hover:shadow-lg transition-shadow">
+            <div key={acc.id}
+              className="card hover:shadow-lg transition-shadow relative group/card">
               <div className="card-header">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
-                    <h3 className="font-semibold truncate">{acc.name}</h3>
+                    {/* 拉伸链接：标题是真实 <a>，其 ::after 覆盖整张卡片，
+                        从而「整卡可点」且保留键盘可达 / 中键新标签页打开 */}
+                    <h3 className="font-semibold truncate">
+                      <Link
+                        to={`/account/${acc.id}`}
+                        className="rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
+                      >
+                        {acc.name}
+                      </Link>
+                    </h3>
                     <span className={
                       'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ' +
                       (acc.bot_public
@@ -211,10 +221,15 @@ export function AccountsPage() {
                 )}
                 {/* 操作 */}
                 <div className="flex items-center justify-between pt-1 border-t border-gray-100 dark:border-gray-700">
-                  <Button variant="primary" size="sm" onClick={() => navigate(`/account/${acc.id}`)}>
-                    管理
-                  </Button>
-                  <div className="flex gap-1">
+                  {/* 纯视觉锚点，不接收点击——整卡点击由标题的拉伸链接承担 */}
+                  <span
+                    aria-hidden="true"
+                    className="text-sm font-medium text-gray-400 dark:text-gray-500 transition-colors group-hover/card:text-primary-600 dark:group-hover/card:text-primary-400"
+                  >
+                    进入管理 →
+                  </span>
+                  {/* z-10 把图标行抬到拉伸链接的覆盖层之上，避免点操作按钮时连带跳转 */}
+                  <div className="relative z-10 flex gap-1">
                     <Button variant="ghost" size="sm" icon={<CalendarClock className="w-4 h-4" />}
                       tooltip="续期" onClick={() => { setRenewMode('days'); setRenewTarget(acc); }} />
                     <Button variant="ghost" size="sm" icon={<Hourglass className="w-4 h-4" />}
@@ -223,8 +238,6 @@ export function AccountsPage() {
                       tooltip="兑换授权码" onClick={() => { setRenewMode('code'); setRenewTarget(acc); }} />
                     <Button variant="ghost" size="sm" icon={<Lock className="w-4 h-4" />}
                       tooltip="重置登录凭据" onClick={() => setCredTarget(acc)} />
-                    <Button variant="ghost" size="sm" icon={<Settings2 className="w-4 h-4" />}
-                      tooltip="账户设置" onClick={() => navigate(`/account/${acc.id}`)} />
                     <Button variant="ghost" size="sm" icon={<Trash2 className="w-4 h-4 text-red-500" />}
                       tooltip="删除账户" onClick={() => setDeleteTarget(acc)} />
                   </div>
