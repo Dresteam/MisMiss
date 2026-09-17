@@ -110,9 +110,9 @@ export function ServerPage() {
               </p>
             </div>
             <div className="p-4 rounded-lg bg-surface-50 dark:bg-surface-900">
-              <p className="text-xs text-surface-500">插件</p>
+              <p className="text-xs text-surface-500">插件库</p>
               <p className="text-2xl font-bold text-surface-900 dark:text-white mt-1">
-                {status?.enabled_plugin_count || 0}
+                {status?.plugin_count || 0}
               </p>
             </div>
           </div>
