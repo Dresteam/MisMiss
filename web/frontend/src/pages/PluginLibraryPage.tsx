@@ -358,12 +358,22 @@ export function PluginLibraryPage() {
                 </p>
               </div>
               <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-xl">
-                <div className="flex flex-wrap gap-1">
-                  {p.used_by_accounts.map((aid) => (
-                    <span key={aid} className="badge badge-blue">账户 {aid}</span>
+                {/* 固定单行：逐个列出会让账户多的插件把卡片撑高，并由 grid 拉齐连累同排卡片。
+                    只展示前几个 + 「+N」，其余走「使用账户」抽屉（那里还带账户名） */}
+                <div className="flex flex-1 min-w-0 items-center gap-1 overflow-hidden">
+                  {p.used_by_accounts.slice(0, 3).map((aid) => (
+                    <span key={aid} className="badge badge-blue shrink-0 whitespace-nowrap">账户 {aid}</span>
                   ))}
+                  {p.used_by_accounts.length > 3 && (
+                    <button
+                      onClick={() => openDrawer(p.name, 'accounts')}
+                      title={`查看全部 ${p.used_by_accounts.length} 个账户`}
+                      className="badge badge-blue shrink-0 whitespace-nowrap hover:brightness-95 dark:hover:brightness-110">
+                      +{p.used_by_accounts.length - 3}
+                    </button>
+                  )}
                 </div>
-                <div className="flex items-center gap-0.5 lg:gap-1 flex-nowrap">
+                <div className="flex shrink-0 items-center gap-0.5 lg:gap-1 flex-nowrap">
                   {p.has_readme && (
                     <IconBtn icon={<BookOpen className="w-3.5 h-3.5" />} label="文档"
                       onClick={() => openDrawer(p.name, 'readme')} />
