@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
+from ..logging import get_logger
 from ..models.events import (
     OpenEvent,
     CloseEvent,
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from interfaces.entity.medal import Medal
     from .mis_livestream import MissevanLivestream
 
+_log = get_logger(__name__)
+
 
 class Live(LiveWebSocket):
     """Missevan 直播事件路由器。
@@ -46,6 +49,8 @@ class Live(LiveWebSocket):
     def __init__(self, livestream: MissevanLivestream) -> None:
         super().__init__(livestream.live_id)
         self._livestream = livestream
+        # 跨房包是否携带 lucky 只提示一次（DEBUG 级别下逐条记录会淹没日志）
+        self._cross_lucky_absent_logged = False
 
     # ------------------------------------------------------------------ #
     # WebSocket 生命周期
@@ -225,11 +230,36 @@ class Live(LiveWebSocket):
     def _handle_cross_gift(self, data: dict[str, Any]) -> None:
         """处理 ``gift:cross_send`` —— 大厅中赠送给非主麦的礼物。
 
-        ``gift`` 字段结构与 ``gift:send`` 一致；跨房包不携带 ``lucky``，
-        故幸运礼物字段留空。
+        ``gift`` 字段结构与 ``gift:send`` 一致。此前认为跨房包**不携带**
+        ``lucky`` 而写死为 ``None``，导致跨房幸运礼物无法计入幸运值榜单；
+        现改为按本房同样的方式解析——平台带了就用，没带则为 ``None``，
+        两种情况都与旧行为向后兼容。
         """
         user = data.get("user", {})
         live_user = self._build_live_user(user)
+
+        # 幸运礼物（跨房包是否携带由平台决定，故带一次性诊断日志）
+        lucky_data = data.get("lucky")
+        lucky: LiveGift | None = None
+        if lucky_data:
+            lucky = LiveGift(
+                gift_livestream=self._livestream,
+                gift_user=live_user,
+                gift_id=lucky_data.get("gift_id", 0),
+                gift_name=lucky_data.get("name", ""),
+                gift_price=lucky_data.get("price", 0),
+                gift_num=lucky_data.get("num", 0),
+                gift_lucky=None,
+            )
+            if isinstance(lucky_data, dict):
+                _log.info("跨房礼物携带 lucky 字段，已解析: {}", lucky_data)
+        elif not self._cross_lucky_absent_logged:
+            # 只提示一次：DEBUG 级别下逐条记录会淹没日志
+            self._cross_lucky_absent_logged = True
+            _log.info(
+                "跨房礼物未携带 lucky 字段（该礼物的幸运值不计入榜单）——仅提示一次"
+            )
+
         gift_data = data.get("gift", {})
         gift = LiveGift(
             gift_livestream=self._livestream,
@@ -238,7 +268,7 @@ class Live(LiveWebSocket):
             gift_name=gift_data.get("name", ""),
             gift_price=gift_data.get("price", 0),
             gift_num=gift_data.get("num", 0),
-            gift_lucky=None,
+            gift_lucky=lucky,
         )
         self._post_event(CrossGiftEvent(
             event_livestream=self._livestream,
