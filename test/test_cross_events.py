@@ -48,6 +48,34 @@ CROSS_GIFT_PACKET = {
     "traces": '{"gift_trace_id":"d764602c-077a-4e60-95a8-1b92c88291f1"}',
 }
 
+# 用户提供的真实跨房**幸运**礼物样本 —— 携带 lucky 字段。
+# 上面那份样本没有 lucky，只是因为那份礼物（喵卡龙）本就不是幸运礼物，
+# 并非跨房包结构上不含该字段——曾据此把 gift_lucky 写死为 None，属误判。
+CROSS_GIFT_LUCKY_PACKET = {
+    "type": "gift", "event": "cross_send", "room_id": 869222866,
+    "user": {
+        "user_id": 24797403, "username": "TexasTheDrest",
+        "iconurl": "https://static.maoercdn.com/avatars/202601/03/8b68.png",
+        "titles": [{"type": "level", "level": 36}],
+    },
+    "room": {
+        "room_id": 869224371, "creator_id": 38189986, "creator_username": "S_比达",
+        "creator_iconurl": "https://static.maoercdn.com/avatars/202609/14/877e.png",
+    },
+    "time": 1789709377173,
+    "gift": {
+        "gift_id": 92342, "name": "汉堡包",
+        "icon_url": "https://static.maoercdn.com/live/gifts/icons/10128.png",
+        "price": 1, "num": 1,
+    },
+    "lucky": {
+        "gift_id": 80165, "name": "秋韵宝藏",
+        "icon_url": "https://static.maoercdn.com/live/gifts/icons/80165.png",
+        "price": 10, "num": 1,
+    },
+    "traces": '{"gift_trace_id":"f75680e9-94da-4b67-8a3f-615bd09e4d06"}',
+}
+
 # message:cross_new 暂无真实样本，按其与 cross_send 同构（携带 room）构造
 CROSS_MSG_PACKET = {
     "type": "message", "event": "cross_new", "room_id": 869222866,
@@ -170,6 +198,23 @@ async def main() -> None:
     check("跨房礼物:不再有 origin_* 字段（方向语义不混用）",
           not hasattr(cg, "origin_creator_name") and not hasattr(cg, "origin_room_id"))
 
+    # ---- 4b. 跨房幸运礼物：必须解析 lucky ----
+    # 曾长期把 gift_lucky 写死为 None（注释误以为跨房包不携带 lucky），
+    # 导致跨房幸运礼物对幸运值榜单零贡献。此用例锁定正确行为。
+    await live.on_message(dict(CROSS_GIFT_LUCKY_PACKET))
+    cgl = rec.cross_gift[-1]
+    check("跨房幸运礼物:is_lucky_gift 为真", cgl.gift.is_lucky_gift is True,
+          f"{cgl.gift.is_lucky_gift}")
+    check("跨房幸运礼物:lucky_gift 已解析",
+          cgl.gift.lucky_gift is not None and cgl.gift.lucky_gift.name == "秋韵宝藏",
+          f"{getattr(cgl.gift.lucky_gift, 'name', None)!r}")
+    check("跨房幸运礼物:幸运原价 = lucky.price × num",
+          cgl.gift.lucky_gift is not None
+          and cgl.gift.lucky_gift.price * cgl.gift.lucky_gift.num == 10,
+          f"{getattr(cgl.gift.lucky_gift, 'price', 0)}")
+    check("跨房幸运礼物:标注不受影响", cgl.target_creator_name == "S_比达",
+          f"{cgl.target_creator_name!r}")
+
     cm = rec.cross_msg[0]
     check("跨房弹幕:内容与来源",
           cm.message == "对面直播间的弹幕" and cm.origin_room_id == 869224364
@@ -179,8 +224,8 @@ async def main() -> None:
           hasattr(cm, "origin_creator_name") and not hasattr(cm, "target_creator_name"))
 
     # ---- 5. 监听父类的插件两者都能收到 ----
-    check("监听 LivestreamUserEvent 可收到全部 4 类用户事件",
-          len(rec.user_events) == 4, f"{len(rec.user_events)}")
+    check("监听 LivestreamUserEvent 可收到全部 5 类用户事件",
+          len(rec.user_events) == 5, f"{len(rec.user_events)}")
 
     # ---- 6. 包内缺 room 字段时按未知处理，不抛异常 ----
     bare = {k: v for k, v in CROSS_MSG_PACKET.items() if k != "room"}
@@ -191,9 +236,9 @@ async def main() -> None:
           f"{len(rec.cross_msg)}/{rec.cross_msg[-1].origin_room_id}")
 
     # ---- 7. 跨房分组基类：一个 handler 收全部跨房事件，且不漏本房 ----
-    # 到此处共发出 3 个跨房包（2 弹幕 + 1 礼物）与 2 个本房包（弹幕 + 礼物）
-    check("监听 LiveCrossEvent 收下全部跨房事件(2 弹幕 + 1 礼物)",
-          len(cross_probe.events) == 3, f"{len(cross_probe.events)}")
+    # 到此处共发出 4 个跨房包（2 弹幕 + 2 礼物）与 2 个本房包（弹幕 + 礼物）
+    check("监听 LiveCrossEvent 收下全部跨房事件(2 弹幕 + 2 礼物)",
+          len(cross_probe.events) == 4, f"{len(cross_probe.events)}")
     check("监听 LiveCrossEvent 收不到本房事件",
           all(isinstance(e, LiveCrossEvent) for e in cross_probe.events),
           f"{[type(e).__name__ for e in cross_probe.events]}")
