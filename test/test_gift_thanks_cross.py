@@ -149,9 +149,13 @@ async def main() -> None:
     check("聚合路径同样输出受赠主播标注",
           n == 1 and "送给：s_晴天" in msg, f"n={n} {msg!r}")
 
+    # v1.3.4 起：同名礼物合并成一行，受赠主播以顿号接在同一行尾——
+    # 此前是每个受赠主播各占一行，多行看起来完全重复且与礼物无视觉对应
     msg, n = await batch_message(["s_晴天", "小美"])
-    check("同名不同受赠主播各自成行",
-          n == 1 and "送给：s_晴天" in msg and "送给：小美" in msg, f"n={n} {msg!r}")
+    check("同名不同受赠主播合并成一行",
+          n == 1 and "s_晴天" in msg and "小美" in msg
+          and msg.count("喵卡龙") == 1 and "s_晴天、小美" in msg,
+          f"n={n} {msg!r}")
 
     msg, n = await batch_message(["s_晴天", "s_晴天"])
     # 不断言 emoji：喵卡龙不在 cat_food_names 里，默认 emoji 来自 default_gift_emoji
