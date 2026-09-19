@@ -66,6 +66,8 @@ class LogEntry:
     source: str = ""
     # 来源文件路径，仅服务端过滤用——不进入 API 响应，避免泄漏服务器路径
     path: str = ""
+    # 所属账户名；空串表示面板级（非账户上下文）
+    account: str = ""
 
 
 # ================================================================== #
@@ -82,7 +84,12 @@ class RingBuffer:
         self._lock = threading.Lock()
 
     def append(
-        self, level: str, message: str, source: str = "", path: str = ""
+        self,
+        level: str,
+        message: str,
+        source: str = "",
+        path: str = "",
+        account: str = "",
     ) -> LogEntry:
         with self._lock:
             self._seq += 1
@@ -93,6 +100,7 @@ class RingBuffer:
                 message=_strip_ansi(str(message)),
                 source=source,
                 path=path,
+                account=account,
             )
             self._buffer.append(entry)
             return entry
@@ -103,6 +111,7 @@ class RingBuffer:
         limit: int = 50,
         levels: set[str] | None = None,
         plugin_only: bool = False,
+        account: str | None = None,
     ) -> tuple[list[dict], bool, int]:
         """获取 since_seq **之前** 的日志（用于向上翻页加载更早历史）。
 
@@ -110,6 +119,8 @@ class RingBuffer:
         首次加载传入 0 则返回最新 limit 条。
         传入 ``levels`` 时仅返回指定级别的日志（源头过滤）；
         传入 ``plugin_only`` 时仅返回插件相关来源的日志。
+
+        传入 ``account`` 时仅返回该账户的日志；传空串表示只看面板级日志。
 
         :return: ``(entries, has_more, filtered_total)``
         """
@@ -119,6 +130,8 @@ class RingBuffer:
                 all_entries = [e for e in all_entries if e.level in levels]
             if plugin_only:
                 all_entries = [e for e in all_entries if _is_plugin_source(e.path)]
+            if account is not None:
+                all_entries = [e for e in all_entries if e.account == account]
             if since_seq <= 0:
                 # 首次加载：返回最新 limit 条
                 result = all_entries[-limit:]
@@ -180,6 +193,7 @@ def _entry_to_dict(e: LogEntry) -> dict:
         "level": e.level,
         "message": e.message,
         "source": e.source,
+        "account": e.account,
     }
 
 
@@ -200,11 +214,12 @@ def get_buffer() -> RingBuffer:
 
 _clients: dict[int, WebSocket] = {}
 _client_levels: dict[int, set[str] | None] = {}  # 客户端源头级别过滤（None=全部）
+_client_accounts: dict[int, str | None] = {}  # 客户端账户过滤（None=全部，""=仅面板级）
 _client_id_seq = 0
 
 
 async def _broadcast_entries(entries: list[dict]) -> None:
-    """批量广播日志条目（每 200ms 合并一次），按客户端级别过滤。"""
+    """批量广播日志条目（每 200ms 合并一次），按客户端级别与账户过滤。"""
     dead: list[int] = []
     for cid, ws in _clients.items():
         try:
@@ -213,6 +228,9 @@ async def _broadcast_entries(entries: list[dict]) -> None:
                 entries if levels is None
                 else [e for e in entries if e["level"] in levels]
             )
+            account = _client_accounts.get(cid)
+            if account is not None and payload:
+                payload = [e for e in payload if e.get("account", "") == account]
             if not payload:
                 continue
             await ws.send_json({"type": "logs", "entries": payload})
@@ -221,6 +239,7 @@ async def _broadcast_entries(entries: list[dict]) -> None:
     for cid in dead:
         _clients.pop(cid, None)
         _client_levels.pop(cid, None)
+        _client_accounts.pop(cid, None)
 
 
 # ================================================================== #
@@ -294,6 +313,7 @@ try:
             text,
             source=str(extra.get("class_name", "") or ""),
             path=str(extra.get("path", "") or ""),
+            account=str(extra.get("account_name", "") or ""),
         ))
 
     # 从 config.yml 读取持久化的日志等级
@@ -349,13 +369,18 @@ async def logs_history(
     limit: int = Query(default=50, le=500),
     levels: str | None = Query(default=None, description="逗号分隔的级别过滤，如 DEBUG,ERROR"),
     scope: str | None = Query(default=None, description="scope=plugin 时仅返回插件相关日志"),
+    account: str | None = Query(
+        default=None,
+        description="按账户名过滤；传空串表示只看面板级日志；不传则不过滤",
+    ),
 ):
-    """拉取 since_seq 之后的历史日志（支持源头级别过滤）。"""
+    """拉取 since_seq 之后的历史日志（支持级别 / 来源 / 账户过滤）。"""
     level_set = None
     if levels:
         level_set = {lv.strip().upper() for lv in levels.split(",") if lv.strip()}
     entries, has_more, total = _buffer.get_since(
-        since, limit, levels=level_set, plugin_only=(scope == "plugin")
+        since, limit, levels=level_set, plugin_only=(scope == "plugin"),
+        account=account,
     )
     return {
         "entries": entries,
@@ -409,9 +434,11 @@ async def websocket_endpoint(ws: WebSocket):
     cid = _client_id_seq
     _clients[cid] = ws
 
-    # 解析客户端携带的 last_seq 与级别过滤
+    # 解析客户端携带的 last_seq 与过滤条件
     last_seq = 0
     level_set: set[str] | None = None
+    # None = 不过滤；"" = 只看面板级日志（非账户上下文）
+    account_filter: str | None = None
     if ws.query_params:
         try:
             last_seq = int(ws.query_params.get("last_seq", "0"))
@@ -420,14 +447,18 @@ async def websocket_endpoint(ws: WebSocket):
         levels_str = ws.query_params.get("levels", "")
         if levels_str:
             level_set = {lv.strip().upper() for lv in levels_str.split(",") if lv.strip()}
+        account_filter = ws.query_params.get("account")
     _client_levels[cid] = level_set
+    _client_accounts[cid] = account_filter
 
     # 启动批量推送任务（若尚未运行）
     _ensure_flush_task()
 
-    # 断线补发（按级别过滤，批量单帧）
+    # 断线补发（按级别与账户过滤，批量单帧）
     if last_seq > 0:
-        gap, _, _ = _buffer.get_since(last_seq, limit=500, levels=level_set)
+        gap, _, _ = _buffer.get_since(
+            last_seq, limit=500, levels=level_set, account=account_filter,
+        )
         if gap:
             try:
                 await ws.send_json({"type": "logs", "entries": gap})
@@ -467,3 +498,4 @@ async def websocket_endpoint(ws: WebSocket):
     finally:
         _clients.pop(cid, None)
         _client_levels.pop(cid, None)
+        _client_accounts.pop(cid, None)

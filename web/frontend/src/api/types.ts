@@ -84,6 +84,8 @@ export interface LogEntry {
   message: string;
   /** 来源类名（如 NicknamePlugin / PluginManager）；旧数据可能为空 */
   source?: string;
+  /** 所属账户名；空串表示面板级日志（非账户上下文） */
+  account?: string;
 }
 
 export interface PluginSummary {

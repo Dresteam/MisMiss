@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { useLogStream, type LogEntry } from '../hooks/useLogStream';
 import { Button } from '../components/Button';
+import { fetchAccounts } from '../api/client';
+import type { AccountSummary } from '../api/types';
 import { showToast } from '../hooks/useToast';
 
 const ansi = new Convert({
@@ -29,9 +31,19 @@ const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 
 export function LogsPage() {
   const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
-  // 级别筛选下推到后端（源头过滤），级别变化时 hook 自动重连重拉
+  // 账户筛选：undefined = 不过滤；'' = 只看面板级；其余为账户名
+  const [filterAccount, setFilterAccount] = useState<string | undefined>(undefined);
+  const [accountOptions, setAccountOptions] = useState<AccountSummary[]>([]);
+
+  // 级别与账户筛选均下推到后端（源头过滤），变化时 hook 自动重连重拉
   const { entries, connected, authRequired, loading, total, hasMore, loadMore, refresh } =
-    useLogStream([...filterLevels]);
+    useLogStream([...filterLevels], filterAccount);
+
+  // 账户列表用于筛选下拉；取自面板账户而非已加载日志，
+  // 否则筛选后列表会随日志内容塌缩、无法切回其他账户
+  useEffect(() => {
+    fetchAccounts().then(setAccountOptions).catch(() => { /* 拉不到就只留「全部/面板级」 */ });
+  }, []);
   const [keyword, setKeyword] = useState('');
   const [atBottom, setAtBottom] = useState(true);
   const [expanded, setExpanded] = useState<Set<number>>(new Set()); // 展开的日志行
@@ -173,6 +185,23 @@ export function LogsPage() {
             <button onClick={() => setFilterLevels(new Set())}
               className="px-2 py-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors">清除</button>
           )}
+          <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
+          <select
+            value={filterAccount === undefined ? '__all__' : filterAccount}
+            onChange={(e) => {
+              const v = e.target.value;
+              setFilterAccount(v === '__all__' ? undefined : v);
+            }}
+            title="按账户筛选日志（多账户下各账户日志交织在一起）"
+            className="px-2 py-1 text-[11px] rounded border border-gray-300 dark:border-gray-600
+                       bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200
+                       focus:outline-none focus:ring-1 focus:ring-primary-500 max-w-[10rem]">
+            <option value="__all__">全部账户</option>
+            <option value="">面板级</option>
+            {accountOptions.map((a) => (
+              <option key={a.id} value={a.name}>{a.name}</option>
+            ))}
+          </select>
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
           <Button variant="ghost" size="sm" icon={<RefreshCw />}
             onClick={refresh}>刷新</Button>

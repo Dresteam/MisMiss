@@ -31,7 +31,7 @@ from core.exceptions import (
     CoreCookieException,
     CoreLicenseException,
 )
-from core.logging import get_logger
+from core.logging import get_logger, reset_account, set_account
 from core.server import MissevanServer
 from core.version import CURRENT_VERSION
 
@@ -302,24 +302,30 @@ class AccountManager:
 
     async def _start_account(self, rec: AccountRecord) -> MissevanServer:
         """启动账户运行时;public 模式无 Bot 时自动用公共 cookie 创建。"""
-        server = self._new_server(rec.id)
-        server.account_record = rec
-        self._servers[rec.id] = server
-        await server.start(auto_resume=not rec.expired)
-        # public 模式:注入公共 cookie(未配置公共 cookie 时跳过)
-        # 公共 Cookie 的 Bot 权限强制为「仅发送直播间消息」
-        if rec.bot_mode == "public" and server.bot.id == 0:
-            cookie = self._public_bot.get("cookie", "")
-            if cookie:
-                from interfaces.bot import BotPermission
-                try:
-                    await server.create_bot(
-                        cookie, permissions=BotPermission.SEND_LIVESTREAM_MESSAGE
-                    )
-                    _log.info("账户 {} 已使用公共 Cookie 创建 Bot", rec.name)
-                except CoreCookieException as e:
-                    _log.warning("公共 Cookie 无效,账户 {} Bot 未创建: {}", rec.name, e)
-        return server
+        # 标记账户上下文：启动过程中创建的后台任务（Bot 消费循环、直播间 WS、
+        # 插件处理器）会按 contextvars 的复制语义继承它，日志自动带上账户名
+        token = set_account(rec.name)
+        try:
+            server = self._new_server(rec.id)
+            server.account_record = rec
+            self._servers[rec.id] = server
+            await server.start(auto_resume=not rec.expired)
+            # public 模式:注入公共 cookie(未配置公共 cookie 时跳过)
+            # 公共 Cookie 的 Bot 权限强制为「仅发送直播间消息」
+            if rec.bot_mode == "public" and server.bot.id == 0:
+                cookie = self._public_bot.get("cookie", "")
+                if cookie:
+                    from interfaces.bot import BotPermission
+                    try:
+                        await server.create_bot(
+                            cookie, permissions=BotPermission.SEND_LIVESTREAM_MESSAGE
+                        )
+                        _log.info("账户 {} 已使用公共 Cookie 创建 Bot", rec.name)
+                    except CoreCookieException as e:
+                        _log.warning("公共 Cookie 无效,账户 {} Bot 未创建: {}", rec.name, e)
+            return server
+        finally:
+            reset_account(token)
 
     async def start_all(self) -> None:
         """启动全部账户运行时(lifespan 调用)。"""

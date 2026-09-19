@@ -10,6 +10,7 @@ from core.exceptions import (
     CoreAccountExpiredException,
     CoreAccountNotFoundException,
 )
+from core.logging import set_account
 
 # ------------------------------------------------------------------ #
 # 模块级单例存储
@@ -39,7 +40,20 @@ def _to_http(e: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(e))
 
 
-def require_account(account_id: int) -> MissevanServer:
+def _mark_account(server: MissevanServer) -> MissevanServer:
+    """把账户上下文标记到当前请求，使该请求产生的日志带账户名。
+
+    刻意不还原：每个请求由 uvicorn 在独立 Task 中处理，contextvars 随 Task 结束
+    自然丢弃，不会泄漏到其他请求。设为 async 依赖也是为此——同步依赖由 FastAPI
+    丢进线程池执行，那里设的 contextvar 传不回端点。
+    """
+    rec = getattr(server, "account_record", None)
+    if rec is not None:
+        set_account(getattr(rec, "name", ""))
+    return server
+
+
+async def require_account(account_id: int) -> MissevanServer:
     """账户级依赖(读/写通用)—— 返回账户运行时并同步跨 worker 状态。
 
     不做过期检查(读端点可用,便于查看已过期账户状态)。
@@ -49,13 +63,13 @@ def require_account(account_id: int) -> MissevanServer:
     except CoreAccountNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     server._ensure_state_fresh()
-    return server
+    return _mark_account(server)
 
 
-def require_active_account(account_id: int) -> MissevanServer:
+async def require_active_account(account_id: int) -> MissevanServer:
     """账户级依赖(写操作)—— 过期账户拒绝(403)。"""
     try:
         server = _manager.require_active(account_id)
     except (CoreAccountNotFoundException, CoreAccountExpiredException) as e:
         raise _to_http(e)
-    return server
+    return _mark_account(server)

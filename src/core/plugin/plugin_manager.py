@@ -203,9 +203,9 @@ class PluginManager:
             if meta.plugin_instance is not None and hasattr(meta.plugin_instance, 'register_routes'):
                 # 仅当路由尚未注册时才注册（避免重复注册同一前缀）
                 self._register_routes_if_needed(meta)
-                _log.info("插件已注册 UI 路由: {}", name)
+                _log.info("插件已注册 UI 路由: {}", meta)
             else:
-                _log.warning("插件实例不可用或缺少 register_routes: {}", name)
+                _log.warning("插件实例不可用或缺少 register_routes: {}", meta)
 
     # ------------------------------------------------------------------ #
     # 目录扫描
@@ -755,7 +755,8 @@ class PluginManager:
         del self._plugins[plugin_name]
         self._disabled_plugins.discard(plugin_name)
         self._notify_state_changed()
-        _log.info("插件已卸载: {}", plugin_name)
+        # metadata 已从字典移除，用卸载前取到的变量才能带上版本号
+        _log.info("插件已卸载: {}", metadata if metadata is not None else plugin_name)
 
     # ------------------------------------------------------------------ #
     # 重载
@@ -909,7 +910,7 @@ class PluginManager:
         metadata.last_error = None
         metadata.initialized = True
         self._event_bus.register_new_event(instance)
-        _log.info("插件已激活并注册到事件总线: {}", metadata.name)
+        _log.info("插件已激活并注册到事件总线: {}", metadata)
 
         # 注册 @command 指令
         if self._command_router is not None:
@@ -930,7 +931,7 @@ class PluginManager:
         """
         metadata = self._get_plugin(plugin_name)
         if metadata.plugin_instance is not None and metadata.enabled:
-            _log.info("插件已处于启用状态: {}", plugin_name)
+            _log.debug("插件已处于启用状态: {}", metadata)
             return
 
         self._disabled_plugins.discard(plugin_name)
@@ -957,7 +958,7 @@ class PluginManager:
                 _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
             await self._notify_bound_livestream(metadata)
 
-        _log.info("插件已启用: {}", plugin_name)
+        _log.debug("插件已启用: {}", metadata)
 
     async def disable_plugin(self, plugin_name: str) -> None:
         """禁用插件。
@@ -971,7 +972,7 @@ class PluginManager:
         """
         metadata = self._get_plugin(plugin_name)
         if not metadata.enabled:
-            _log.info("插件已处于禁用状态: {}", plugin_name)
+            _log.debug("插件已处于禁用状态: {}", metadata)
             return
 
         self._disabled_plugins.add(plugin_name)
@@ -990,7 +991,7 @@ class PluginManager:
             # 兜底：插件若未在 terminate 中自行清理，由框架强制回收其定时消息
             self._purge_plugin_timers(plugin_name)
 
-        _log.info("插件已禁用: {}", plugin_name)
+        _log.debug("插件已禁用: {}", metadata)
 
     def suspend_plugin(self, plugin_name: str) -> None:
         """暂停插件——取消事件注册和终止钩子，但不改变 enabled 标记。"""
@@ -1005,7 +1006,7 @@ class PluginManager:
             # terminate 是 fire-and-forget，框架同步回收定时消息，
             # 保证暂停后不再广播（也避免把清理塞进异步任务引发状态写入竞态）
             self._purge_plugin_timers(plugin_name)
-        _log.info("插件已暂停: {}", plugin_name)
+        _log.debug("插件已暂停: {}", metadata)
 
     def resume_plugin(self, plugin_name: str) -> None:
         """恢复暂停的插件——全部后台异步执行，不阻塞调用方。"""
@@ -1035,7 +1036,7 @@ class PluginManager:
                 loop.create_task(self._call_on_enable(metadata, plugin_name))
             except RuntimeError:
                 pass
-        _log.info("插件已恢复: {}", plugin_name)
+        _log.debug("插件已恢复: {}", metadata)
 
     async def _call_on_enable(self, metadata: PluginMetadata, plugin_name: str) -> None:
         """安全调用插件的 on_enable 钩子，随后补发直播间绑定通知。"""
@@ -1061,7 +1062,7 @@ class PluginManager:
             inst.register_routes(plugin_router)
             PluginManager._insert_plugin_routes(self._app, plugin_router)
             metadata.routes_registered = True
-            _log.info("插件已补注册 UI 路由: {}", metadata.name)
+            _log.info("插件已补注册 UI 路由: {}", metadata)
 
     def _ensure_plugin_loaded(self, metadata: PluginMetadata) -> None:
         """同步加载插件模块并注册路由，不执行 initialize。"""
@@ -1161,7 +1162,7 @@ class PluginManager:
         metadata.enabled = True
         metadata.initialized = True
         self._event_bus.register_new_event(instance)
-        _log.info("插件已激活并注册到事件总线: {}", metadata.name)
+        _log.info("插件已激活并注册到事件总线: {}", metadata)
         if self._command_router is not None:
             self._command_router.register_plugin(instance)
             cmds = self._command_router.list_commands()

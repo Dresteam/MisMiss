@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from core.logging import get_logger
+from core.logging import get_logger, reset_account, set_account
 
 if TYPE_CHECKING:
     from core.account.manager import AccountManager
@@ -38,10 +38,14 @@ class ExpiryScheduler:
                 continue
             if rec.paused_reason == "expiry":
                 continue
+            # 标记账户上下文，使停用过程中的日志带账户名
+            token = set_account(rec.name)
             try:
                 await self._manager.stop_for_expiry(rec.id)
             except Exception as e:
                 _log.error("账户 {} 到期停用失败: {}", rec.id, e)
+            finally:
+                reset_account(token)
 
     async def _run(self) -> None:
         try:

@@ -58,8 +58,9 @@ def test_ring_buffer_scope():
     # API 产物含 source 供展示，但不含服务器绝对路径
     assert "source" in all_entries[0], "FAIL: 产物缺少 source"
     assert "path" not in all_entries[0], "FAIL: 产物泄漏了服务器路径 path"
-    assert set(all_entries[0]) == {"seq_id", "timestamp", "level", "message", "source"}, \
-        f"FAIL: 产物字段意外 {sorted(all_entries[0])}"
+    assert set(all_entries[0]) == {
+        "seq_id", "timestamp", "level", "message", "source", "account",
+    }, f"FAIL: 产物字段意外 {sorted(all_entries[0])}"
     print("PASS 3: API 产物含 source 且不含 path")
 
     # 级别 + 来源两个维度可叠加

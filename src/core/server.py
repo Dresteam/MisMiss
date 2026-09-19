@@ -231,11 +231,18 @@ class MissevanServer(ServerInterface):
         bot.enabled = was_enabled
 
         # 1. 先停用所有已启用插件（终止旧实例）
+        # 逐个插件打日志会刷屏（每个插件还会由 disable_plugin 再打一条），
+        # 故只在开头汇总一条，细节留在 DEBUG
         pm = self._plugin_manager
         enabled_names = [p.name for p in pm.list_plugins() if p.enabled]
+        if enabled_names:
+            _log.info(
+                "Cookie 更新：先停用 {} 个已启用插件（随后用新 Bot 重新启用）",
+                len(enabled_names),
+            )
+            _log.debug("待停用插件: {}", "、".join(enabled_names))
         for name in enabled_names:
             try:
-                _log.info("Cookie 更新前停用插件: {}", name)
                 await pm.disable_plugin(name)
             except Exception as e:
                 _log.warning("停用插件失败 [{}]: {}", name, e)
@@ -256,10 +263,11 @@ class MissevanServer(ServerInterface):
         # 4. 重新启用插件（使用新 bot 实例初始化）
         for name in enabled_names:
             try:
-                _log.info("Cookie 更新后启用插件: {}", name)
                 await pm.enable_plugin(name)
             except Exception as e:
                 _log.warning("启用插件失败 [{}]: {}", name, e)
+        if enabled_names:
+            _log.info("Cookie 更新：{} 个插件已用新 Bot 重新启用", len(enabled_names))
 
         self._save_state()
         _log.info("Bot 创建成功: {}", bot)

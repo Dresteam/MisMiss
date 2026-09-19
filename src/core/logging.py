@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,11 +31,35 @@ _LOG_DIR: Path = Path("logs")
 _LOG_FORMAT: str = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
     "<level>{level: <8}</level> | "
+    "{extra[account]}"
     "<cyan>{extra[class_name]}</cyan>:<cyan>{extra[func_name]}</cyan> | "
     "<level>{message}</level>"
 )
 
 _initialized: bool = False
+
+
+# ================================================================ #
+# 账户上下文
+# ================================================================ #
+# 多账户下各账户的日志交织在一起，无法分辨归属。用 contextvar 标记「当前账户」，
+# 日志格式里就会带上账户名；contextvars 会随 Task 创建被复制，因此账户后台任务
+# （Bot 消费循环、直播间 WS、插件事件处理）里产生的日志自动带上正确的账户。
+
+current_account: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_account", default=""
+)
+"""当前账户名；空串表示非账户上下文（面板级 / 启动期）。"""
+
+
+def set_account(name: str) -> contextvars.Token[str]:
+    """标记当前上下文所属账户，返回用于还原的 Token。"""
+    return current_account.set(name or "")
+
+
+def reset_account(token: contextvars.Token[str]) -> None:
+    """还原账户上下文。"""
+    current_account.reset(token)
 
 
 # ================================================================ #
@@ -337,12 +362,14 @@ class _LoggerProxy:
 # ================================================================ #
 
 def _caller_context(file_path: bool = False) -> dict[str, str]:
-    """从调用栈中提取类名和方法名。
+    """从调用栈中提取类名和方法名，并附带当前账户上下文。
 
     从当前帧向上遍历，跳过所有 ``core.logging`` 模块内的帧。
 
     :param file_path: 是否附加调用源文件路径
-    :return: 含 ``class_name`` / ``func_name`` / ``path`` 的字典
+    :return: 含 ``class_name`` / ``func_name`` / ``account`` / ``account_name``
+        （以及可选的 ``path``）的字典。``account`` 已含方括号与尾随空格供格式串
+        直接拼接，无账户时为空串；``account_name`` 为未装饰的账户名，供按账户筛选
     """
     import inspect
 
@@ -358,7 +385,10 @@ def _caller_context(file_path: bool = False) -> dict[str, str]:
             frame = frame.f_back
 
         if frame is None:
-            return {"class_name": "-", "func_name": "-", "path": "-"}
+            ctx = {"class_name": "-", "func_name": "-"}
+            if file_path:
+                ctx["path"] = "-"
+            return _with_account(ctx)
 
         func_name = frame.f_code.co_name
 
@@ -377,10 +407,22 @@ def _caller_context(file_path: bool = False) -> dict[str, str]:
         if file_path:
             ctx["path"] = frame.f_globals.get("__file__", "-")
 
-        return ctx
+        return _with_account(ctx)
 
     finally:
         del frame
+
+
+def _with_account(ctx: dict[str, str]) -> dict[str, str]:
+    """把当前账户上下文并入日志字段。
+
+    ``account`` 直接用于格式串（无账户时为空串，不占位）；
+    ``account_name`` 供 Web 端按账户筛选。
+    """
+    name = current_account.get()
+    ctx["account"] = f"[{name}] " if name else ""
+    ctx["account_name"] = name
+    return ctx
 
 
 # ================================================================ #

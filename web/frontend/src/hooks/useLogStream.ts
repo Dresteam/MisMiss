@@ -25,7 +25,11 @@ const PAGE_SIZE = 100;
  *   不足 ``PAGE_SIZE`` 条时再向后端补拉更早的筛选项
  * - 加载更早历史期间冻结实时插入，完成后一次性批量合并（避免列表抖动）
  */
-export function useLogStream(levels: string[] = []): UseLogStreamReturn {
+export function useLogStream(
+  levels: string[] = [],
+  /** 按账户过滤：`undefined` 不过滤；空串表示只看面板级日志；其余为账户名 */
+  account?: string,
+): UseLogStreamReturn {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
@@ -43,15 +47,22 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
   const isFirstRunRef = useRef(true);
 
   const levelsKey = [...levels].sort().join(',');
-  const levelsRef = useRef(levelsKey);
-  levelsRef.current = levelsKey;
+  // 把「级别 + 账户」压成一个查询串贯穿始终：筛选条件只需透传，无需在
+  // 分页逻辑里分别处理，避免把两条筛选条件缠绕进本来就绕的翻页游标计算
+  const buildQuery = useCallback((lvKey: string, acct: string | undefined) => {
+    let q = lvKey ? `&levels=${encodeURIComponent(lvKey)}` : '';
+    // 传空串表示「只看面板级」；undefined 表示不过滤
+    if (acct !== undefined) q += `&account=${encodeURIComponent(acct)}`;
+    return q;
+  }, []);
+  const filterRef = useRef('');
+  filterRef.current = buildQuery(levelsKey, account);
 
-  // ---- HTTP: 历史拉取（含源头级别过滤）----
-  const fetchHistory = useCallback(async (since: number, lvKey: string) => {
+  // ---- HTTP: 历史拉取（含源头级别与账户过滤）----
+  const fetchHistory = useCallback(async (since: number, query: string) => {
     const token = localStorage.getItem('auth_token');
-    const lv = lvKey ? `&levels=${encodeURIComponent(lvKey)}` : '';
     const res = await fetch(
-      `/api/logs/history?since=${since}&limit=${PAGE_SIZE}${lv}`,
+      `/api/logs/history?since=${since}&limit=${PAGE_SIZE}${query}`,
       { headers: token ? { Authorization: `Bearer ${token}` } : {} },
     );
     const data = await res.json();
@@ -62,10 +73,10 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
     };
   }, []);
 
-  const loadHistory = useCallback(async (since: number, lvKey: string) => {
+  const loadHistory = useCallback(async (since: number, query: string) => {
     setLoading(true);
     try {
-      const data = await fetchHistory(since, lvKey);
+      const data = await fetchHistory(since, query);
       const merged = [...data.entries].sort((a, b) => a.seq_id - b.seq_id);
       entriesRef.current = merged;
       setEntries(merged);
@@ -98,7 +109,7 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
     try {
       const oldest = entriesRef.current.length > 0 ? entriesRef.current[0].seq_id : 0;
       if (oldest <= 0) return false;
-      const data = await fetchHistory(oldest, levelsRef.current);
+      const data = await fetchHistory(oldest, filterRef.current);
       if (!data.entries.length) return false;
       setEntries((prev) => {
         const existing = new Set(prev.map((e) => e.seq_id));
@@ -131,27 +142,30 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
     setTotal(0);
     setHasMore(false);
     setRefreshKey((k) => k + 1); // 触发 WS 重连
-    loadHistory(0, levelsRef.current);
+    loadHistory(0, filterRef.current);
   }, [loadHistory]);
 
   // ---- 挂载时初始加载 ----
   useEffect(() => {
-    loadHistory(0, levelsRef.current);
+    loadHistory(0, filterRef.current);
   }, [loadHistory]);
 
-  // ---- 级别筛选变化：本地过滤 + 最新窗口合并 + 不足时向更早历史补拉 ----
-  const applyLevelFilter = useCallback(async (lvKey: string) => {
+  // ---- 筛选变化：本地过滤 + 最新窗口合并 + 不足时向更早历史补拉 ----
+  const applyFilter = useCallback(
+    async (query: string, lvKey: string, acct: string | undefined) => {
     frozenRef.current = true;
     try {
       const levelSet = new Set(lvKey ? lvKey.split(',') : []);
       // 1. 先对已加载日志做本地过滤（空筛选 = 全部保留）
-      const local = levelSet.size === 0
-        ? entriesRef.current
-        : entriesRef.current.filter((e) => levelSet.has(e.level));
+      const local = entriesRef.current.filter(
+        (e) =>
+          (levelSet.size === 0 || levelSet.has(e.level))
+          && (acct === undefined || (e.account ?? '') === acct),
+      );
 
       // 2. 拉取最新 PAGE_SIZE 条筛选结果并合并：
-      //    保证加选级别 / 取消筛选后，最近日志立即正确出现
-      const latest = await fetchHistory(0, lvKey);
+      //    保证加选筛选 / 取消筛选后，最近日志立即正确出现
+      const latest = await fetchHistory(0, query);
       const existingLatest = new Set(local.map((e) => e.seq_id));
       const freshLatest = latest.entries.filter((e) => !existingLatest.has(e.seq_id));
       let current = [...local, ...freshLatest].sort((a, b) => a.seq_id - b.seq_id);
@@ -165,7 +179,7 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
       let more = latest.has_more;
       let filteredTotal = latest.total;
       while (more) {
-        const data = await fetchHistory(cursor, lvKey);
+        const data = await fetchHistory(cursor, query);
         if (!data.entries.length) { more = false; filteredTotal = data.total; break; }
         // 游标严格递减（本批最旧 seq），必然终止
         cursor = data.entries[0].seq_id;
@@ -186,14 +200,16 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
       frozenRef.current = false;
       flushPending(); // 合并筛选期间暂存的实时日志
     }
-  }, [fetchHistory, flushPending]);
+    },
+    [fetchHistory, flushPending],
+  );
 
   useEffect(() => {
     if (isFirstRunRef.current) { isFirstRunRef.current = false; return; }
-    applyLevelFilter(levelsKey);
-  }, [levelsKey, applyLevelFilter]);
+    applyFilter(buildQuery(levelsKey, account), levelsKey, account);
+  }, [levelsKey, account, buildQuery, applyFilter]);
 
-  // ---- WebSocket（levels / refreshKey 变化时重连）----
+  // ---- WebSocket（筛选 / refreshKey 变化时重连）----
   useEffect(() => {
     let stopped = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
@@ -205,11 +221,11 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
       // 始终使用同源连接：经过反向代理时自动适配 HTTPS/WSS
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.host; // 含端口（非标准端口时）
-      const lv = levelsKey ? `&levels=${encodeURIComponent(levelsKey)}` : '';
+      const q = buildQuery(levelsKey, account);
       // 浏览器 WebSocket API 无法设置 Authorization header,故 token 走查询参数
       const token = localStorage.getItem('auth_token');
       const tk = token ? `&token=${encodeURIComponent(token)}` : '';
-      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?last_seq=${lastSeq}${lv}${tk}`;
+      const wsUrl = `${wsProtocol}//${wsHost}/api/ws?last_seq=${lastSeq}${q}${tk}`;
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -306,7 +322,7 @@ export function useLogStream(levels: string[] = []): UseLogStreamReturn {
         wsRef.current = null;
       }
     };
-  }, [refreshKey, levelsKey]);
+  }, [refreshKey, levelsKey, account, buildQuery]);
 
   return { entries, connected, authRequired, loading, latestSeq, total, hasMore, loadMore, refresh };
 }
