@@ -3,6 +3,16 @@
 @tailwind utilities;
 
 @layer base {
+  /* 让原生控件跟随应用主题。缺了 color-scheme，暗色模式下 <select> 展开的
+     选项列表、原生滚动条等仍按系统亮色渲染，在深色界面里非常突兀。
+     .dark 与 :root 同特异性，靠书写顺序覆盖。 */
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+
   * {
     margin: 0;
     padding: 0;
