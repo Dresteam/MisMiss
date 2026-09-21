@@ -11,6 +11,9 @@ update:
   repo: Dresteam/MisMiss
   mirror: ''
   proxy: ''
+  notify_enabled: false
+  notify_before: 机器人即将更新，稍后自动恢复
+  notify_after: 机器人已更新完成，已恢复正常
 logging:
   dir: logs
   level: DEBUG

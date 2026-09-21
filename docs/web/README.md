@@ -319,9 +319,22 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | GET | `/api/update/info` | 当前版本与更新配置 |
 | GET | `/api/update/check` | 检测最新版本（语义版本比较） |
 | GET | `/api/update/changelog/{version}` | 指定版本更新日志 |
-| POST | `/api/update/settings` | 保存更新配置（仓库/镜像/代理） |
+| POST | `/api/update/settings` | 保存更新配置（仓库/镜像/代理/更新提示消息） |
 | POST | `/api/update/apply` | 执行更新（Docker 走镜像重建，原生走覆盖解压） |
 | POST | `/api/update/rollback` | 回滚到备份版本 |
+
+**更新提示消息**：`update.notify_enabled` 打开后，程序更新时会用各账户的机器人
+在其**已启用且正在开播**的直播间各发一条自定义消息（未绑定 / 未启用 / 未开播 /
+已过期的账户自动跳过，单账户失败不影响其余账户）：
+
+- `update.notify_before`（默认「机器人即将更新，稍后自动恢复」）——在更新包下载完成、
+  覆盖程序文件**之前**发送；发送后等消息队列真正排空，否则解压触发的进程重启会把
+  未发出的消息一并掐掉（原生部署的 uvicorn `reload=True` 会在覆盖 `src/` 后自动重启）。
+- `update.notify_after`（默认「机器人已更新完成，已恢复正常」）——更新时把待发标记写入
+  `data/update_state.json`，由新版本启动完成后的 lifespan 补发，只发一次；解压失败会
+  撤销标记，普通重启不会误发。
+
+单条消息上限 80 字符，超出截断；留空则跳过对应阶段。
 
 ### 认证
 
@@ -342,6 +355,11 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | PUT | `/api/config/ports` | 修改 API 端口并重启 |
 | POST | `/api/config/pip-install` | 安装 pip 包（admin） |
 | GET | `/api/proxy/image?url=` | 图片代理（域名白名单 + 内网拦截） |
+
+**日志等级**：由 `config.yml` 的 `logging.level` 决定，默认 **INFO**。
+`core.logging.init()`、面板实时日志流（WS sink）与「设置」页的调试开关都读写这同一项——
+面板切换 DEBUG 会就地改各 handler 的等级并持久化，无需重启。
+排查插件加载、`state` 文件同步等流程时需要先切到 DEBUG，这些细节日志按 DEBUG 输出。
 
 ## 技术栈
 

@@ -35,9 +35,13 @@ _DEFAULTS: dict[str, Any] = {
         "repo": "Dresteam/MisMiss",
         "mirror": "",
         "proxy": "",
+        "notify_enabled": False,
+        "notify_before": "机器人即将更新，稍后自动恢复",
+        "notify_after": "机器人已更新完成，已恢复正常",
     },
     "logging": {
         "dir": "logs",
+        "level": "INFO",
     },
 }
 

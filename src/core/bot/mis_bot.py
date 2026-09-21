@@ -89,6 +89,9 @@ class MissevanBot(Bot):
         self._message_queue: list[_MessageItem] = []
         self._queue_lock = asyncio.Lock()
         self._consumer_task: asyncio.Task[None] | None = None
+        # 队列排空信号：有消息待发时 clear，消费者退出（含在途消息发完）时 set
+        self._queue_idle = asyncio.Event()
+        self._queue_idle.set()
 
         # 定时消息
         # 全局队列（live_id=0，适用于所有直播间）
@@ -292,6 +295,7 @@ class MissevanBot(Bot):
             )
             # 按优先级由大到小排序
             self._message_queue.sort(key=lambda x: x.priority, reverse=True)
+            self._queue_idle.clear()
 
             # 如果消费者未运行则启动
             consumer_idle = (
@@ -299,15 +303,26 @@ class MissevanBot(Bot):
             )
             if consumer_idle:
                 self._consumer_task = asyncio.create_task(self._consume_queue())
-                _log.debug(
-                    "消费者已启动 直播间={} 队列长度={}", live_id, len(self._message_queue)
-                )
-            else:
-                _log.debug(
-                    "消息已入队 直播间={} 队列长度={}（消费者运行中）",
-                    live_id,
-                    len(self._message_queue),
-                )
+
+    async def wait_message_queue_idle(self, timeout: float = 15.0) -> bool:
+        """等待队列中**已入队**的消息全部真正发送完毕。
+
+        :meth:`send_livestream_message` 只把消息入队就返回，消费循环异步发送。
+        进程即将重启（如程序更新）时，必须等队列排空，否则提示消息会连同
+        进程一起消失。
+
+        :param timeout: 最长等待秒数
+        :return: ``True`` 表示队列已排空；``False`` 表示超时仍有待发消息
+        """
+        try:
+            await asyncio.wait_for(self._queue_idle.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            _log.warning(
+                "等待消息发送完成超时（{}s），仍有 {} 条未发出",
+                timeout, len(self._message_queue),
+            )
+            return False
 
     # ------------------------------------------------------------------ #
     # 消息队列消费者
@@ -322,12 +337,15 @@ class MissevanBot(Bot):
 
         调用方（:meth:`send_livestream_message`）仅在消费者
         未运行时才会启动新的消费任务。
+
+        每条退出路径都必须置位 ``_queue_idle``，否则
+        :meth:`wait_message_queue_idle` 会一直等到超时。
         """
         try:
             # 取一条消息
             async with self._queue_lock:
                 if not self._message_queue:
-                    _log.debug("消费者退出：队列为空")
+                    self._queue_idle.set()
                     return
                 item = self._message_queue.pop(0)
                 _log.info(
@@ -347,13 +365,8 @@ class MissevanBot(Bot):
                 )
             except CoreApiException as e:
                 err_str = str(e)
-                # 直播间未开播（主播休息）——静默忽略，仅 debug 级记录
-                if "500030011" in err_str or "主播休息" in err_str:
-                    _log.debug(
-                        "直播间未开播，消息已忽略 直播间={} 内容={}",
-                        item.live_id, item.message,
-                    )
-                else:
+                # 直播间未开播（主播休息）——预期情况，静默忽略
+                if "500030011" not in err_str and "主播休息" not in err_str:
                     _log.warning(
                         "消息发送失败 直播间={} 内容={} 原因={}",
                         item.live_id,
@@ -365,6 +378,7 @@ class MissevanBot(Bot):
                            len(self._message_queue) + 1)
                 async with self._queue_lock:
                     self._message_queue.clear()
+                    self._queue_idle.set()
                 return  # Cookie 过期后不再续调
 
             # 发送间隔，防止请求过于频繁
@@ -373,13 +387,15 @@ class MissevanBot(Bot):
             # 判断队列是否还有剩余，有则续调自身
             async with self._queue_lock:
                 has_more = bool(self._message_queue)
+                if not has_more:
+                    self._queue_idle.set()
 
             if has_more:
                 self._consumer_task = asyncio.create_task(self._consume_queue())
-            else:
-                _log.debug("消费者退出：队列已清空")
         except Exception:
             _log.exception("消费者发生未预期异常，任务终止")
+            # 消费者异常终止后队列不会再被消费，置空闲避免等待方卡到超时
+            self._queue_idle.set()
 
     async def send_private_message(self, user_id: int, message: str) -> None:
         """向指定用户发送私信（后续扩展）。
@@ -752,7 +768,7 @@ class MissevanBot(Bot):
         if self._enabled:
             # 仅启用状态才启动计时循环，避免停用期间每间隔空转告警
             self._ensure_timer_running()
-        _log.info(
+        _log.debug(
             "定时消息已恢复: 全局 {} 条, 直播间 {} 个",
             len(self._global_timer_cycle), len(self._room_timer_cycles),
         )
@@ -1134,10 +1150,6 @@ class MissevanBot(Bot):
                     entry.live_id, entry.message
                 )
             )
-            _log.info(
-                "定时消息已发送: id={} live={} msg={}",
-                msg_id, entry.live_id, entry.message[:30],
-            )
         except CoreApiException as e:
             err_str = str(e)
             if "500030011" in err_str or "主播休息" in err_str:
@@ -1176,8 +1188,7 @@ class MissevanBot(Bot):
         # 插件消息可声明「仅开播时发送」：未开播则跳过本条（指针已推进）
         target = live_id if entry.live_id == 0 else entry.live_id
         if entry.only_when_live and not self._is_live(target):
-            _log.debug("直播间未开播，跳过定时消息 id={} live={}", msg_id, target)
-            return True
+            return True  # 未开播：跳过本条（指针已推进）
         # 全局消息发送到目标直播间（entry.live_id == 0，重定向到 live_id）
         if entry.live_id == 0:
             entry = _TimerEntry(

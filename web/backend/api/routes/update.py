@@ -22,15 +22,31 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from core.account import AccountManager
 from core.config import ServerConfig
+from core.logging import get_logger
 from core.version import CURRENT_VERSION
 from api.deps import get_account_manager
 from api.schemas import StatusResponse
+
+_log = get_logger("web.api.update")
 
 router = APIRouter()
 
 _GITHUB_REPO = "Dresteam/MisMiss"
 _GITHUB_API = "https://api.github.com"
 _UPDATE_STATE_FILE = Path("data/update_state.json")
+
+# 更新提示消息的默认文案（config.yml 缺省时使用）
+_NOTIFY_BEFORE_DEFAULT = "机器人即将更新，稍后自动恢复"
+_NOTIFY_AFTER_DEFAULT = "机器人已更新完成，已恢复正常"
+
+# 单条提示消息最长字符数（直播弹幕有长度上限，超出会被服务端拒绝）
+_NOTIFY_MAX_LEN = 80
+
+# 等待消息队列排空的秒数——「更新前」提示必须在程序重启前真正发出去
+_NOTIFY_DRAIN_TIMEOUT = 15.0
+
+# 更新状态文件中记录「重启后补发更新完成提示」的键
+_NOTIFY_PENDING_KEY = "notify_pending"
 
 # 是否运行在 Docker 容器内（Docker 会在容器根目录创建 /.dockerenv）
 _IS_DOCKER = Path("/.dockerenv").exists()
@@ -55,16 +71,26 @@ _CURRENT_VERSION = CURRENT_VERSION
 # ------------------------------------------------------------------ #
 
 def _update_config() -> dict:
-    """读取 update 配置（含镜像/代理）。"""
+    """读取 update 配置（含镜像/代理/更新提示）。"""
     cfg = ServerConfig.load()
     return {
         "repo": cfg.get_str("update.repo", _GITHUB_REPO),
         "mirror": cfg.get_str("update.mirror", ""),
         "proxy": cfg.get_str("update.proxy", ""),
+        "notify_enabled": cfg.get_bool("update.notify_enabled", False),
+        "notify_before": cfg.get_str("update.notify_before", _NOTIFY_BEFORE_DEFAULT),
+        "notify_after": cfg.get_str("update.notify_after", _NOTIFY_AFTER_DEFAULT),
     }
 
 
-def _save_update_config(repo: str, mirror: str, proxy: str) -> None:
+def _save_update_config(
+    repo: str,
+    mirror: str,
+    proxy: str,
+    notify_enabled: bool = False,
+    notify_before: str = "",
+    notify_after: str = "",
+) -> None:
     """保存 update 配置到 config.yml（原子写入，避免与其他写入并发时损坏）。"""
     import yaml
     config_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml"
@@ -78,6 +104,9 @@ def _save_update_config(repo: str, mirror: str, proxy: str) -> None:
     data["update"]["repo"] = repo
     data["update"]["mirror"] = mirror
     data["update"]["proxy"] = proxy
+    data["update"]["notify_enabled"] = bool(notify_enabled)
+    data["update"]["notify_before"] = notify_before
+    data["update"]["notify_after"] = notify_after
     tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
     tmp_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     os.replace(tmp_path, config_path)
@@ -91,6 +120,132 @@ def _load_update_state() -> dict:
         except (json.JSONDecodeError, OSError):
             pass
     return {}
+
+
+# ------------------------------------------------------------------ #
+# 更新提示消息
+# ------------------------------------------------------------------ #
+
+def _clip(message: str) -> str:
+    """裁剪提示消息到直播弹幕可接受的长度。"""
+    text = " ".join(str(message).split())
+    return text[:_NOTIFY_MAX_LEN]
+
+
+def _mark_notify_pending(version: str, message: str) -> None:
+    """记录「重启后补发更新完成提示」，由下次启动的 lifespan 读取。
+
+    标记先于解压写入 —— 覆盖的文件里不含 ``data/``，所以能存活到重启之后；
+    解压失败时由调用方 :func:`_clear_notify_pending` 撤销。
+    """
+    state = _load_update_state()
+    state[_NOTIFY_PENDING_KEY] = {"version": version, "message": message}
+    _save_update_state(state)
+
+
+def _clear_notify_pending() -> None:
+    """撤销待发标记（更新失败时调用，避免下次启动误发）。"""
+    state = _load_update_state()
+    if state.pop(_NOTIFY_PENDING_KEY, None) is not None:
+        _save_update_state(state)
+
+
+async def _notify_livestreams(manager: AccountManager, message: str) -> str:
+    """向各账户**已启用且正在开播**的直播间发送一条提示消息。
+
+    逐个账户独立兜底：任一账户的 Bot 不可用 / 直播间未开播 / 发送异常
+    都只跳过该账户，不影响其余账户，也不影响更新流程本身。
+
+    :param manager: 面板账户管理器
+    :param message: 消息文本
+    :return: 结果摘要，形如 ``成功 2 个 / 跳过 5 个 / 失败 0 个``
+    """
+    text = _clip(message)
+    if not text:
+        return "消息为空，未发送"
+
+    sent = skipped = failed = 0
+    bots: list = []
+    for rec in manager.list_records():
+        try:
+            if rec.expired or not rec.room_id:
+                skipped += 1
+                continue
+            server = manager.get_server(rec.id)
+            # 多 worker 下 Bot / 直播间可能还没在本 worker 恢复
+            await server._ensure_bot_restored()
+            if not server.bot_available:
+                _log.debug("账户 {} 的 Bot 不可用，跳过更新提示", rec.name)
+                skipped += 1
+                continue
+            room = server.livestreams.get(int(rec.room_id))
+            if room is None or not room.enabled:
+                _log.debug("账户 {} 的直播间未启用，跳过更新提示", rec.name)
+                skipped += 1
+                continue
+            if not room.is_streaming:
+                _log.debug("账户 {} 的直播间未开播，跳过更新提示", rec.name)
+                skipped += 1
+                continue
+            await room.send_message(text)
+            bots.append(room.bot)
+            sent += 1
+        except Exception as e:
+            _log.warning("账户 {} 发送更新提示失败: {}", rec.name, e)
+            failed += 1
+
+    # send_message 只入队，须等消费循环真正发完 —— 提示发出后进程就要重启了
+    for bot in bots:
+        try:
+            await bot.wait_message_queue_idle(_NOTIFY_DRAIN_TIMEOUT)
+        except Exception as e:
+            _log.warning("等待更新提示发送完成时出错: {}", e)
+
+    summary = f"成功 {sent} 个 / 跳过 {skipped} 个 / 失败 {failed} 个"
+    if sent:
+        _log.info("更新提示已发送: {}（{}）", text, summary)
+    else:
+        _log.info("更新提示无需发送（{}）", summary)
+    return summary
+
+
+async def notify_before_update(manager: AccountManager) -> None:
+    """程序更新前：向各直播间发送「即将更新」提示。"""
+    cfg = _update_config()
+    if not cfg["notify_enabled"]:
+        return
+    message = cfg["notify_before"]
+    if not _clip(message):
+        return
+    try:
+        await _notify_livestreams(manager, message)
+    except Exception as e:
+        # 提示失败不应阻断更新
+        _log.warning("更新前提示发送失败: {}", e)
+
+
+async def notify_after_update(manager: AccountManager) -> None:
+    """程序更新重启后：补发上一轮更新留下的「更新完成」提示。
+
+    无待发标记时直接返回 —— 普通重启不会触发。标记无论发送成败都会清除，
+    避免每次重启重复发送。
+    """
+    state = _load_update_state()
+    pending = state.get(_NOTIFY_PENDING_KEY)
+    if not isinstance(pending, dict):
+        return
+    state.pop(_NOTIFY_PENDING_KEY, None)
+    _save_update_state(state)
+
+    version = str(pending.get("version", "?"))
+    message = pending.get("message", "")
+    if not _clip(message):
+        return
+    try:
+        summary = await _notify_livestreams(manager, message)
+        _log.info("更新完成提示已处理（v{}）: {}", version, summary)
+    except Exception as e:
+        _log.warning("更新完成提示发送失败: {}", e)
 
 
 def _save_update_state(state: dict) -> None:
@@ -444,7 +599,12 @@ def _spawn_recreate() -> None:
         raise HTTPException(status_code=500, detail=f"启动重建任务失败: {e}")
 
 
-def _docker_apply(cfg: dict, target_version: str, assets: list[dict]) -> StatusResponse:
+async def _docker_apply(
+    manager: AccountManager,
+    cfg: dict,
+    target_version: str,
+    assets: list[dict],
+) -> StatusResponse:
     """Docker 在线更新：下载部署包 → 校验 → 备份 → 解压 → 导入镜像 → 后台重建。"""
     asset_url, asset_name = _docker_select_asset(assets, target_version)
 
@@ -457,15 +617,25 @@ def _docker_apply(cfg: dict, target_version: str, assets: list[dict]) -> StatusR
     # 校验格式（含内层镜像归档检查，避免 load 时才报 unrecognized image format）
     _verify_docker_package(pkg_path)
 
+    # 容器重建前先把「即将更新」提示发出去（此后镜像导入耗时较长，队列有充足时间排空）
+    notify_after = cfg["notify_after"]
+    if cfg["notify_enabled"] and _clip(cfg["notify_before"]):
+        await _notify_livestreams(manager, cfg["notify_before"])
+
     # 备份当前部署包（供在线回滚）
     _backup_deploy(_CURRENT_VERSION)
+    # 记录待发提示：容器重建后由新进程 lifespan 补发（data/ 是挂载卷，能存活到重启后）
+    if cfg["notify_enabled"] and _clip(notify_after):
+        _mark_notify_pending(target_version, notify_after)
 
     # 解压到宿主部署目录（剥离顶层目录；config.yml 用户配置与 .env 不被覆盖）
     try:
         _extract_archive(pkg_path, _DEPLOY_DIR, skip={"config.yml", ".env"})
     except HTTPException:
+        _clear_notify_pending()
         raise
     except Exception as e:
+        _clear_notify_pending()
         raise HTTPException(status_code=500, detail=f"部署包解压失败: {e}")
 
     # 导入新镜像（标准 docker save 格式，任意版本 docker load 可读）
@@ -508,6 +678,10 @@ async def update_info():
         "repo": cfg["repo"],
         "mirror": cfg["mirror"],
         "proxy": cfg["proxy"],
+        "notify_enabled": cfg["notify_enabled"],
+        "notify_before": cfg["notify_before"],
+        "notify_after": cfg["notify_after"],
+        "notify_max_len": _NOTIFY_MAX_LEN,
         "has_backup": bool(state.get("backup_dir")),
         "backup_version": state.get("backup_version", ""),
         "is_docker": _IS_DOCKER,
@@ -574,11 +748,16 @@ async def update_changelog(version: str):
 
 @router.post("/settings", response_model=StatusResponse)
 async def update_settings(body: dict, manager: AccountManager = Depends(get_account_manager)):
-    """保存更新配置（镜像站 / 代理）。"""
+    """保存更新配置（镜像站 / 代理 / 更新提示消息）。"""
     repo = str(body.get("repo", _GITHUB_REPO)).strip() or _GITHUB_REPO
     mirror = str(body.get("mirror", "")).strip()
     proxy = str(body.get("proxy", "")).strip()
-    _save_update_config(repo, mirror, proxy)
+    notify_enabled = bool(body.get("notify_enabled", False))
+    notify_before = _clip(body.get("notify_before", _NOTIFY_BEFORE_DEFAULT))
+    notify_after = _clip(body.get("notify_after", _NOTIFY_AFTER_DEFAULT))
+    _save_update_config(
+        repo, mirror, proxy, notify_enabled, notify_before, notify_after
+    )
     return StatusResponse(success=True, message="更新配置已保存")
 
 
@@ -610,7 +789,7 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
     if _IS_DOCKER:
         if not _docker_ready():
             raise HTTPException(status_code=400, detail=_DOCKER_UPDATE_HINT)
-        return _docker_apply(cfg, target_version, assets)
+        return await _docker_apply(manager, cfg, target_version, assets)
 
     asset_name = str(body.get("asset_name", "")).strip()
     asset_url = None
@@ -641,8 +820,25 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
         if not asset_url:
             raise HTTPException(status_code=400, detail="该版本没有可下载的更新包")
 
-    # 备份当前版本
     project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+    suffix = ".tar.gz" if asset_name.endswith(".tar.gz") else ".zip"
+    tmp_pkg = project_root / "data" / f"update_{target_version}{suffix}"
+
+    # 先只下载到 data/ 下的临时文件（不动程序文件），
+    # 下载这一步是整条链路最可能失败的地方
+    try:
+        _download_asset(asset_url, tmp_pkg, cfg)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新包下载失败: {e}")
+
+    # 走到这里更新已无退路：解压覆盖 src/ 会触发 uvicorn 的 reload 监视器重启进程，
+    # 故必须在写文件之前把「即将更新」提示真正发出去（内部会等队列排空）
+    if cfg["notify_enabled"] and _clip(cfg["notify_before"]):
+        await _notify_livestreams(manager, cfg["notify_before"])
+
+    # 备份当前版本
     backup_dir = project_root / "data" / "backup" / f"v{_CURRENT_VERSION}"
     try:
         if backup_dir.exists():
@@ -658,19 +854,23 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
                     shutil.copy2(src, dst)
         _save_update_state({"backup_dir": str(backup_dir), "backup_version": _CURRENT_VERSION})
     except Exception as e:
+        tmp_pkg.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"备份失败: {e}")
 
-    # 下载更新包并解压覆盖（剥离归档顶层目录；config.yml 用户配置不会被覆盖）
-    suffix = ".tar.gz" if asset_name.endswith(".tar.gz") else ".zip"
-    tmp_pkg = project_root / "data" / f"update_{target_version}{suffix}"
+    # 记录待发提示：进程重启后由新进程 lifespan 补发（data/ 不在覆盖范围内，能存活）
+    if cfg["notify_enabled"] and _clip(cfg["notify_after"]):
+        _mark_notify_pending(target_version, cfg["notify_after"])
+
+    # 解压覆盖（剥离归档顶层目录；config.yml 用户配置不会被覆盖）
     try:
-        _download_asset(asset_url, tmp_pkg, cfg)
         _extract_archive(tmp_pkg, project_root)
         tmp_pkg.unlink(missing_ok=True)
     except HTTPException:
+        _clear_notify_pending()
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"更新包下载/解压失败: {e}")
+        _clear_notify_pending()
+        raise HTTPException(status_code=500, detail=f"更新包解压失败: {e}")
 
     return StatusResponse(
         success=True,

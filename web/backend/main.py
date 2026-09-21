@@ -79,7 +79,7 @@ _DATA_DIR = os.environ.get("MISMISS_DATA_DIR", "data")
 async def lifespan(app: FastAPI):
     """应用生命周期——迁移旧数据、启动账户管理器与到期调度器。"""
     global _manager, _scheduler
-    _log.info("正在启动 MisMiss 多账户面板 ...")
+    _log.debug("正在启动 MisMiss 多账户面板 ...")
     # 单服务器旧数据备份迁移(全新开始,幂等)
     migrate_legacy_data(_DATA_DIR)
     _manager = AccountManager(data_dir=_DATA_DIR)
@@ -90,8 +90,14 @@ async def lifespan(app: FastAPI):
     _scheduler.start()
     set_account_manager(_manager)
     _log.info("AccountManager 已启动,{} 个账户运行中", len(_manager.list_records()))
+    # 程序更新重启后补发「更新完成」提示 —— 标记由上一轮更新写入，
+    # 普通重启没有标记，此处直接返回
+    try:
+        await update.notify_after_update(_manager)
+    except Exception as e:
+        _log.warning("更新完成提示发送失败: {}", e)
     yield
-    _log.info("正在关闭 AccountManager ...")
+    _log.debug("正在关闭 AccountManager ...")
     if _scheduler is not None:
         _scheduler.stop()
     try:

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Download, RefreshCw, RotateCcw, Loader2, Globe, Shield, Container,
-  ChevronLeft, ChevronRight, ScrollText,
+  ChevronLeft, ChevronRight, ScrollText, Megaphone,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
@@ -23,6 +23,14 @@ interface UpdateInfo {
   repo: string;
   mirror: string;
   proxy: string;
+  /** 更新时是否向各账户直播间发送提示消息 */
+  notify_enabled: boolean;
+  /** 更新前（重启前）发送的消息 */
+  notify_before: string;
+  /** 更新后（新版本启动完成）发送的消息 */
+  notify_after: string;
+  /** 单条提示消息的字符上限 */
+  notify_max_len: number;
   has_backup: boolean;
   backup_version: string;
   is_docker: boolean;
@@ -72,6 +80,12 @@ export function UpdatePage() {
   const [mirrorCustom, setMirrorCustom] = useState(false); // 是否处于「自定义地址」模式
   const [proxy, setProxy] = useState('');
 
+  // 更新提示消息
+  const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const [notifyBefore, setNotifyBefore] = useState('');
+  const [notifyAfter, setNotifyAfter] = useState('');
+  const notifyMaxLen = info?.notify_max_len || 80;
+
   const api = async (path: string, method = 'GET', body?: any) => {
     const token = localStorage.getItem('auth_token');
     const res = await fetch('/api/update' + path, {
@@ -98,6 +112,9 @@ export function UpdatePage() {
       // 已保存的值不在预设列表中 → 视为自定义地址
       setMirrorCustom(Boolean(data.mirror) && !MIRROR_PRESETS.some(m => m.url === data.mirror));
       setProxy(data.proxy);
+      setNotifyEnabled(Boolean(data.notify_enabled));
+      setNotifyBefore(data.notify_before ?? '');
+      setNotifyAfter(data.notify_after ?? '');
     } catch (e: any) { showToast('error', '加载失败', e.message); }
     finally { setLoading(false); }
   }, []);
@@ -116,10 +133,17 @@ export function UpdatePage() {
 
   useEffect(() => { loadInfo(); checkUpdate(); }, [loadInfo, checkUpdate]);
 
-  const saveSettings = async () => {
+  const saveSettings = async (label = '更新配置') => {
     try {
-      await api('/settings', 'POST', { repo, mirror, proxy });
-      showToast('success', '更新配置已保存');
+      // 两张设置卡片共用同一份状态与同一个接口，任一「保存」都会落盘全部字段
+      await api('/settings', 'POST', {
+        repo, mirror, proxy,
+        notify_enabled: notifyEnabled,
+        notify_before: notifyBefore,
+        notify_after: notifyAfter,
+      });
+      showToast('success', `${label}已保存`);
+      loadInfo();
     } catch (e: any) { showToast('error', '保存失败', e.message); }
   };
 
@@ -374,7 +398,57 @@ export function UpdatePage() {
           </div>
         </div>
         <div className="flex justify-end mt-4">
-          <Button variant="primary" size="sm" icon={<Shield />} onClick={saveSettings}>保存设置</Button>
+          <Button variant="primary" size="sm" icon={<Shield />} onClick={() => saveSettings()}>保存设置</Button>
+        </div>
+      </div>
+
+      {/* 更新提示消息 */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+            <Megaphone className="w-4 h-4" /> 更新提示消息
+          </h2>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 dark:text-gray-400">启用更新提示</span>
+            <button
+              onClick={() => setNotifyEnabled(!notifyEnabled)}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
+                ${notifyEnabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
+              <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
+                ${notifyEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          开启后，程序更新时会用各账户的机器人在其绑定的直播间各发一条消息；
+          <span className="text-gray-400 dark:text-gray-500">
+            直播间未启用或未开播的账户自动跳过。
+          </span>
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">更新前提示（重启前发送）</label>
+            <input value={notifyBefore} maxLength={notifyMaxLen}
+              disabled={!notifyEnabled}
+              onChange={e => setNotifyBefore(e.target.value)}
+              placeholder="如：机器人即将更新，稍后自动恢复"
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">更新后提示（新版本启动后发送）</label>
+            <input value={notifyAfter} maxLength={notifyMaxLen}
+              disabled={!notifyEnabled}
+              onChange={e => setNotifyAfter(e.target.value)}
+              placeholder="如：机器人已更新完成，已恢复正常"
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-50" />
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+          单条最多 {notifyMaxLen} 个字符。留空则跳过对应阶段的消息。
+        </p>
+        <div className="flex justify-end mt-4">
+          <Button variant="primary" size="sm" icon={<Megaphone />}
+            onClick={() => saveSettings('更新提示设置')}>保存提示设置</Button>
         </div>
       </div>
 
