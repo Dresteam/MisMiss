@@ -134,6 +134,10 @@ class Live(LiveWebSocket):
 
     def _handle_message(self, data: dict[str, Any]) -> None:
         user = data.get("user", {})
+        # 过滤机器人自己发送的弹幕：平台会把本连接发出的消息回推，
+        # 若插件回复内容包含触发关键词（如「喵」→「喵喵喵~」）会形成自触发死循环
+        if self._is_self_message(user):
+            return
         live_user = self._build_live_user(user)
         msg = data.get("message", "")
         self._post_event(MessageEvent(
@@ -141,6 +145,24 @@ class Live(LiveWebSocket):
             event_user=live_user,
             event_message=msg,
         ))
+
+    def _is_self_message(self, user: dict[str, Any]) -> bool:
+        """判断弹幕是否由本连接对应的机器人自己发出。
+
+        平台会将机器人发出的弹幕回推给同一连接，若不过滤，插件回复中
+        包含触发关键词时会「回复 → 再次触发 → 再回复」无限循环。
+
+        :param user: 弹幕 JSON 中的 ``user`` 字段
+        :return: True 表示是机器人自己发的消息，应忽略
+        """
+        bot = getattr(self._livestream, "bot", None)
+        bot_id = getattr(bot, "id", 0) or 0
+        if not bot_id:
+            return False
+        try:
+            return int(user.get("user_id", 0) or 0) == int(bot_id)
+        except (TypeError, ValueError):
+            return False
 
     def _handle_join_queue(self, data: dict[str, Any]) -> None:
         queue: list[dict[str, Any]] = data.get("queue", [])
@@ -219,6 +241,8 @@ class Live(LiveWebSocket):
         混在一起会让本房的指令类插件（签到、点播等）被对方直播间的弹幕触发。
         """
         user = data.get("user", {})
+        if self._is_self_message(user):  # 同样过滤机器人自己发出的跨房弹幕
+            return
         live_user = self._build_live_user(user)
         self._post_event(CrossMessageEvent(
             event_livestream=self._livestream,
@@ -251,8 +275,6 @@ class Live(LiveWebSocket):
                 gift_num=lucky_data.get("num", 0),
                 gift_lucky=None,
             )
-            if isinstance(lucky_data, dict):
-                _log.info("跨房礼物携带 lucky 字段，已解析: {}", lucky_data)
         elif not self._cross_lucky_absent_logged:
             # 只提示一次：DEBUG 级别下逐条记录会淹没日志
             self._cross_lucky_absent_logged = True
