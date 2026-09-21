@@ -40,6 +40,23 @@ _log = get_logger(__name__)
 _PANEL_FILE = "panel.json"
 _SCHEMA_VERSION = 1
 
+# 广播类消息（更新提示、面板全局消息）的最长字符数 ——
+# 直播弹幕有长度上限，超出会被平台拒绝，故统一在入库前裁剪
+BROADCAST_MAX_LEN = 80
+
+# 等待消息队列排空的秒数：调用方可能紧接着要重启进程，必须等真正发出去
+BROADCAST_DRAIN_TIMEOUT = 15.0
+
+
+def clip_broadcast(message: object) -> str:
+    """裁剪广播消息：压掉多余空白并截断到 :data:`BROADCAST_MAX_LEN`。
+
+    ``None`` / 非字符串一律按字符串处理；纯空白返回空串（调用方据此跳过发送）。
+    """
+    if message is None:
+        return ""
+    return " ".join(str(message).split())[:BROADCAST_MAX_LEN]
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -989,6 +1006,72 @@ class AccountManager:
             "插件库已刷新: {} 个插件(新增 {}),已同步 {} 个账户",
             new_count, max(0, new_count - prev_count), synced,
         )
+
+    # ================================================================== #
+    # 全局消息
+    # ================================================================== #
+
+    async def broadcast_to_livestreams(self, message: str) -> dict[str, Any]:
+        """用各账户的机器人，向**已启用且正在开播**的直播间各发一条消息。
+
+        与「更新提示消息」共用同一条通道：只发给真正在播的房间，
+        未绑定 / 未启用 / 未开播 / 已过期的账户逐个跳过。逐个账户独立兜底 ——
+        任一账户的 Bot 不可用、房间没开播或发送异常，都只影响该账户。
+
+        消息入队后即返回，故这里会等到消费循环真正发完再收尾；
+        调用方若紧接着要重启进程（如程序更新），必须依赖这一等待。
+
+        :param message: 消息文本，超长会被裁剪
+        :return: ``{"sent": 成功数, "skipped": 跳过数, "failed": 失败数, "text": 实发文本}``
+        """
+        text = clip_broadcast(message)
+        result: dict[str, Any] = {
+            "sent": 0, "skipped": 0, "failed": 0, "text": text,
+        }
+        if not text:
+            return result
+
+        bots: list[Any] = []
+        for rec in self.list_records():
+            try:
+                if rec.expired or not rec.room_id:
+                    result["skipped"] += 1
+                    continue
+                server = self.get_server(rec.id)
+                # 多 worker 下 Bot / 直播间可能还没在本 worker 恢复
+                await server._ensure_bot_restored()
+                if not server.bot_available:
+                    _log.debug("账户 {} 的 Bot 不可用，跳过全局消息", rec.name)
+                    result["skipped"] += 1
+                    continue
+                room = server.livestreams.get(int(rec.room_id))
+                if room is None or not room.enabled:
+                    _log.debug("账户 {} 的直播间未启用，跳过全局消息", rec.name)
+                    result["skipped"] += 1
+                    continue
+                if not room.is_streaming:
+                    _log.debug("账户 {} 的直播间未开播，跳过全局消息", rec.name)
+                    result["skipped"] += 1
+                    continue
+                await room.send_message(text)
+                bots.append(room.bot)
+                result["sent"] += 1
+            except Exception as e:
+                _log.warning("账户 {} 发送全局消息失败: {}", rec.name, e)
+                result["failed"] += 1
+
+        for bot in bots:
+            try:
+                await bot.wait_message_queue_idle(BROADCAST_DRAIN_TIMEOUT)
+            except Exception as e:
+                _log.warning("等待全局消息发送完成时出错: {}", e)
+
+        _log.info(
+            "全局消息{}: {}（成功 {} / 跳过 {} / 失败 {}）",
+            "已发送" if result["sent"] else "无需发送",
+            text, result["sent"], result["skipped"], result["failed"],
+        )
+        return result
 
     def list_library_plugins(self) -> list[dict[str, Any]]:
         """库级插件列表(含被哪些账户启用)。"""

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Server, RefreshCw, Power, AlertTriangle, Activity } from 'lucide-react';
-import { fetchServerStatus, reloadServer, shutdownServer } from '../api/client';
+import { Server, RefreshCw, Power, AlertTriangle, Activity, Megaphone } from 'lucide-react';
+import { fetchServerStatus, reloadServer, shutdownServer, broadcastServer } from '../api/client';
 import type { ServerStatus } from '../api/types';
 import { showToast } from '../hooks/useToast';
 import { StatusBadge } from '../components/StatusBadge';
@@ -15,6 +15,14 @@ export function ServerPage() {
   // Confirm dialogs
   const [showReload, setShowReload] = useState(false);
   const [showShutdown, setShowShutdown] = useState(false);
+
+  // 全局消息
+  const [message, setMessage] = useState('');
+  const [showBroadcast, setShowBroadcast] = useState(false);
+  const [broadcastLoading, setBroadcastLoading] = useState(false);
+  // 字符上限由后端下发（直播弹幕有长度限制），拿不到时兜底 80
+  const maxLen = status?.broadcast_max_len || 80;
+  const canSend = message.trim() !== '' && !broadcastLoading;
 
   const load = async () => {
     try {
@@ -58,6 +66,20 @@ export function ServerPage() {
       showToast('error', '关闭失败', e.message);
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  const handleBroadcast = async () => {
+    setBroadcastLoading(true);
+    setShowBroadcast(false);
+    try {
+      const res = await broadcastServer(message.trim());
+      showToast('success', '全局消息已发送', res.message);
+      setMessage('');
+    } catch (e: any) {
+      showToast('error', '发送失败', e.message);
+    } finally {
+      setBroadcastLoading(false);
     }
   };
 
@@ -154,6 +176,37 @@ export function ServerPage() {
         </div>
       </div>
 
+      {/* 全局消息 */}
+      <div className="card">
+        <div className="card-header flex items-center gap-2">
+          <Megaphone className="w-4 h-4 text-emerald-500" />
+          全局消息
+        </div>
+        <div className="card-body space-y-3">
+          <p className="text-xs text-surface-500">
+            用各账户的机器人，向<span className="font-medium">已启用且正在开播</span>的直播间
+            各发一条消息。未绑定、未启用、未开播或已过期的账户会自动跳过；发送失败也只影响该账户。
+          </p>
+          <input
+            value={message}
+            maxLength={maxLen}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canSend) setShowBroadcast(true); }}
+            placeholder="如：机器人已上线，有问题欢迎随时喊我"
+            className="input w-full"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className={`text-xs ${message.length >= maxLen ? 'text-amber-600 dark:text-amber-400' : 'text-surface-400'}`}>
+              {message.length} / {maxLen}
+            </span>
+            <Button variant="primary" icon={<Megaphone />}
+              disabled={!canSend}
+              loading={broadcastLoading}
+              onClick={() => setShowBroadcast(true)}>发送</Button>
+          </div>
+        </div>
+      </div>
+
       {/* Info */}
       <div className="flex items-start gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
         <AlertTriangle className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
@@ -187,6 +240,22 @@ export function ServerPage() {
         onCancel={() => setShowShutdown(false)}
         loading={actionLoading}
       />
+
+      <ConfirmDialog
+        open={showBroadcast}
+        title="发送全局消息"
+        message="将用各账户的机器人，向所有「已启用且正在开播」的直播间发送这条消息。消息会公开出现在直播间，确定要发送吗？"
+        variant="warning"
+        confirmLabel="确认发送"
+        onConfirm={handleBroadcast}
+        onCancel={() => setShowBroadcast(false)}
+        loading={broadcastLoading}
+      >
+        <p className="mt-3 px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900
+                      text-sm text-gray-800 dark:text-gray-100 break-all">
+          {message.trim()}
+        </p>
+      </ConfirmDialog>
     </div>
   );
 }

@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,6 +51,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from web.backend.main import app  # noqa: E402
 from api.deps import get_account_manager  # noqa: E402
 from api.routes import update as upd  # noqa: E402
+from core.account import BROADCAST_MAX_LEN, clip_broadcast  # noqa: E402
 
 res: list[tuple[str, bool, str]] = []
 
@@ -209,7 +211,11 @@ with TestClient(app) as c:
                with_room=False)
     e_srv = mk_account("E-已过期", "notifyE", 710005,
                        enabled=True, streaming=True, days=1)
-    e_srv.account_record.expires_at = "2000-01-01T00:00:00"
+    # 必须是带时区的时间 —— days_left 拿它和 aware 的 utcnow 相减，
+    # 用不带时区的字符串会在 overview() 里抛 naive/aware 比较错误
+    e_srv.account_record.expires_at = (
+        datetime.now(timezone.utc) - timedelta(days=1)
+    ).isoformat()
 
     # 打桩掉异步 Bot 恢复（真实实现要联网）
     async def _noop_restore() -> None:
@@ -218,13 +224,14 @@ with TestClient(app) as c:
     for aid in (1, 5):
         mgr.get_server(aid)._ensure_bot_restored = _noop_restore  # type: ignore[method-assign]
 
-    # ---- 消息裁剪 ----
+    # ---- 消息裁剪（与面板「全局消息」共用 core.account.clip_broadcast）----
     raw = "  a   b\n" + "x" * 200
     check("消息裁剪：压掉多余空白并截断到上限",
-          upd._clip(raw) == ("a b " + "x" * 200)[:upd._NOTIFY_MAX_LEN]
-          and len(upd._clip(raw)) == upd._NOTIFY_MAX_LEN,
-          repr(upd._clip(raw)))
-    check("空白消息裁剪后为空", upd._clip("  \n\t ") == "", repr(upd._clip("  \n\t ")))
+          clip_broadcast(raw) == ("a b " + "x" * 200)[:BROADCAST_MAX_LEN]
+          and len(clip_broadcast(raw)) == BROADCAST_MAX_LEN,
+          repr(clip_broadcast(raw)))
+    check("空白消息裁剪后为空",
+          clip_broadcast("  \n\t ") == "", repr(clip_broadcast("  \n\t ")))
 
     # ---- 接口契约：默认值 + 保存往返 ----
     info = c.get("/api/update/info", headers=H).json()
@@ -302,6 +309,10 @@ with TestClient(app) as c:
 
     # ---- 全部异步断言（同一事件循环） ----
     asyncio.run(_async_checks(mgr))
+
+    # 在 with 块内部就先还原：出块时的 lifespan 收尾若卡住（断言失败时发生过），
+    # 外层 timeout 会直接杀进程，atexit 就来不及跑了，真实 config.yml 会被留下脏数据
+    _restore_config()
 
 # ---------------------------------------------------------------- #
 

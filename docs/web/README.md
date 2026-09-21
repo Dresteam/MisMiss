@@ -290,9 +290,18 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/server/status` | 服务器状态 |
+| GET | `/api/server/status` | 服务器状态（含 `broadcast_max_len` 全局消息上限） |
 | POST | `/api/server/reload` | 重载全部账户运行时 |
 | POST | `/api/server/shutdown` | 关闭全部账户运行时 |
+| POST | `/api/server/broadcast` | 用各账户的机器人发送一条全局消息 |
+
+**全局消息**：`POST /api/server/broadcast`，请求体 `{"message": "..."}`。
+与程序更新的提示消息走**同一条通道**（`AccountManager.broadcast_to_livestreams`）：
+
+- 只发给**已启用且正在开播**的直播间；未绑定 / 未启用 / 未开播 / 已过期的账户跳过
+- 单个账户发送失败只影响它自己，结果里计入「失败」，不影响其余账户
+- 消息会压掉多余空白并截断到 `broadcast_max_len`（默认 80，弹幕有长度上限）
+- 消息为空或纯空白返回 400；面板「服务器设置」页有对应输入框与二次确认
 
 ### WebSocket
 

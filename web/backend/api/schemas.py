@@ -197,6 +197,8 @@ class ServerStatusResponse(BaseModel):
     livestream_count: int = 0
     plugin_count: int = 0
     enabled_plugin_count: int = 0
+    # 全局消息的字符上限 —— 前端据此限制输入框，避免超长被平台拒绝
+    broadcast_max_len: int = 80
 
 
 # ================================================================== #

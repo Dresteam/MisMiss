@@ -180,6 +180,8 @@ export interface ServerStatus {
   livestream_count: number;
   plugin_count: number;
   enabled_plugin_count: number;
+  /** 全局消息的字符上限 */
+  broadcast_max_len: number;
 }
 
 // ================================================================== //

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.account import AccountManager
+from core.account import BROADCAST_MAX_LEN, AccountManager, clip_broadcast
 from core.config import ServerConfig
 from core.logging import get_logger
 from core.version import CURRENT_VERSION
@@ -42,12 +42,6 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent.parent / "co
 # 更新提示消息的默认文案（config.yml 缺省时使用）
 _NOTIFY_BEFORE_DEFAULT = "机器人即将更新，稍后自动恢复"
 _NOTIFY_AFTER_DEFAULT = "机器人已更新完成，已恢复正常"
-
-# 单条提示消息最长字符数（直播弹幕有长度上限，超出会被服务端拒绝）
-_NOTIFY_MAX_LEN = 80
-
-# 等待消息队列排空的秒数——「更新前」提示必须在程序重启前真正发出去
-_NOTIFY_DRAIN_TIMEOUT = 15.0
 
 # 更新状态文件中记录「重启后补发更新完成提示」的键
 _NOTIFY_PENDING_KEY = "notify_pending"
@@ -151,13 +145,6 @@ def _load_update_state() -> dict:
 # 更新提示消息
 # ------------------------------------------------------------------ #
 
-def _clip(message: object) -> str:
-    """裁剪提示消息到直播弹幕可接受的长度（顺带压掉多余空白）。"""
-    if message is None:
-        return ""
-    return " ".join(str(message).split())[:_NOTIFY_MAX_LEN]
-
-
 def _mark_notify_pending(version: str, message: str) -> None:
     """记录「重启后补发更新完成提示」，由下次启动的 lifespan 读取。
 
@@ -177,62 +164,18 @@ def _clear_notify_pending() -> None:
 
 
 async def _notify_livestreams(manager: AccountManager, message: str) -> str:
-    """向各账户**已启用且正在开播**的直播间发送一条提示消息。
+    """向各直播间发送一条更新提示。
 
-    逐个账户独立兜底：任一账户的 Bot 不可用 / 直播间未开播 / 发送异常
-    都只跳过该账户，不影响其余账户，也不影响更新流程本身。
+    实际发送走 :meth:`AccountManager.broadcast_to_livestreams`（面板的
+    「全局消息」也用同一通道），这里只负责把结果整理成一句摘要。
 
-    :param manager: 面板账户管理器
-    :param message: 消息文本
     :return: 结果摘要，形如 ``成功 2 个 / 跳过 5 个 / 失败 0 个``
     """
-    text = _clip(message)
+    text = clip_broadcast(message)
     if not text:
         return "消息为空，未发送"
-
-    sent = skipped = failed = 0
-    bots: list = []
-    for rec in manager.list_records():
-        try:
-            if rec.expired or not rec.room_id:
-                skipped += 1
-                continue
-            server = manager.get_server(rec.id)
-            # 多 worker 下 Bot / 直播间可能还没在本 worker 恢复
-            await server._ensure_bot_restored()
-            if not server.bot_available:
-                _log.debug("账户 {} 的 Bot 不可用，跳过更新提示", rec.name)
-                skipped += 1
-                continue
-            room = server.livestreams.get(int(rec.room_id))
-            if room is None or not room.enabled:
-                _log.debug("账户 {} 的直播间未启用，跳过更新提示", rec.name)
-                skipped += 1
-                continue
-            if not room.is_streaming:
-                _log.debug("账户 {} 的直播间未开播，跳过更新提示", rec.name)
-                skipped += 1
-                continue
-            await room.send_message(text)
-            bots.append(room.bot)
-            sent += 1
-        except Exception as e:
-            _log.warning("账户 {} 发送更新提示失败: {}", rec.name, e)
-            failed += 1
-
-    # send_message 只入队，须等消费循环真正发完 —— 提示发出后进程就要重启了
-    for bot in bots:
-        try:
-            await bot.wait_message_queue_idle(_NOTIFY_DRAIN_TIMEOUT)
-        except Exception as e:
-            _log.warning("等待更新提示发送完成时出错: {}", e)
-
-    summary = f"成功 {sent} 个 / 跳过 {skipped} 个 / 失败 {failed} 个"
-    if sent:
-        _log.info("更新提示已发送: {}（{}）", text, summary)
-    else:
-        _log.info("更新提示无需发送（{}）", summary)
-    return summary
+    r = await manager.broadcast_to_livestreams(text)
+    return f"成功 {r['sent']} 个 / 跳过 {r['skipped']} 个 / 失败 {r['failed']} 个"
 
 
 async def notify_before_update(manager: AccountManager) -> None:
@@ -241,7 +184,7 @@ async def notify_before_update(manager: AccountManager) -> None:
     if not cfg["notify_enabled"]:
         return
     message = cfg["notify_before"]
-    if not _clip(message):
+    if not clip_broadcast(message):
         return
     try:
         await _notify_livestreams(manager, message)
@@ -265,7 +208,7 @@ async def notify_after_update(manager: AccountManager) -> None:
 
     version = str(pending.get("version", "?"))
     message = pending.get("message", "")
-    if not _clip(message):
+    if not clip_broadcast(message):
         return
     try:
         summary = await _notify_livestreams(manager, message)
@@ -645,13 +588,13 @@ async def _docker_apply(
 
     # 容器重建前先把「即将更新」提示发出去（此后镜像导入耗时较长，队列有充足时间排空）
     notify_after = cfg["notify_after"]
-    if cfg["notify_enabled"] and _clip(cfg["notify_before"]):
+    if cfg["notify_enabled"] and clip_broadcast(cfg["notify_before"]):
         await _notify_livestreams(manager, cfg["notify_before"])
 
     # 备份当前部署包（供在线回滚）
     _backup_deploy(_CURRENT_VERSION)
     # 记录待发提示：容器重建后由新进程 lifespan 补发（data/ 是挂载卷，能存活到重启后）
-    if cfg["notify_enabled"] and _clip(notify_after):
+    if cfg["notify_enabled"] and clip_broadcast(notify_after):
         _mark_notify_pending(target_version, notify_after)
 
     # 解压到宿主部署目录（剥离顶层目录；config.yml 用户配置与 .env 不被覆盖）
@@ -707,7 +650,7 @@ async def update_info():
         "notify_enabled": cfg["notify_enabled"],
         "notify_before": cfg["notify_before"],
         "notify_after": cfg["notify_after"],
-        "notify_max_len": _NOTIFY_MAX_LEN,
+        "notify_max_len": BROADCAST_MAX_LEN,
         "has_backup": bool(state.get("backup_dir")),
         "backup_version": state.get("backup_version", ""),
         "is_docker": _IS_DOCKER,
@@ -789,11 +732,11 @@ async def update_settings(body: dict, manager: AccountManager = Depends(get_acco
         else cur["notify_enabled"]
     )
     notify_before = (
-        _clip(body["notify_before"]) if "notify_before" in body
+        clip_broadcast(body["notify_before"]) if "notify_before" in body
         else cur["notify_before"]
     )
     notify_after = (
-        _clip(body["notify_after"]) if "notify_after" in body
+        clip_broadcast(body["notify_after"]) if "notify_after" in body
         else cur["notify_after"]
     )
 
@@ -877,7 +820,7 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
 
     # 走到这里更新已无退路：解压覆盖 src/ 会触发 uvicorn 的 reload 监视器重启进程，
     # 故必须在写文件之前把「即将更新」提示真正发出去（内部会等队列排空）
-    if cfg["notify_enabled"] and _clip(cfg["notify_before"]):
+    if cfg["notify_enabled"] and clip_broadcast(cfg["notify_before"]):
         await _notify_livestreams(manager, cfg["notify_before"])
 
     # 备份当前版本
@@ -900,7 +843,7 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
         raise HTTPException(status_code=500, detail=f"备份失败: {e}")
 
     # 记录待发提示：进程重启后由新进程 lifespan 补发（data/ 不在覆盖范围内，能存活）
-    if cfg["notify_enabled"] and _clip(cfg["notify_after"]):
+    if cfg["notify_enabled"] and clip_broadcast(cfg["notify_after"]):
         _mark_notify_pending(target_version, cfg["notify_after"])
 
     # 解压覆盖（剥离归档顶层目录；config.yml 用户配置不会被覆盖）

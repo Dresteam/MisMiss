@@ -335,6 +335,14 @@ export async function shutdownServer(): Promise<StatusResponse> {
   return request<StatusResponse>('/server/shutdown', { method: 'POST' });
 }
 
+/** 用各账户的机器人向所有直播间发送一条全局消息 */
+export async function broadcastServer(message: string): Promise<StatusResponse> {
+  return request<StatusResponse>('/server/broadcast', {
+    method: 'POST',
+    body: { message },
+  });
+}
+
 // ================================================================== //
 // 面板(账户 / 公共 Bot / 授权码)
 // ================================================================== //
