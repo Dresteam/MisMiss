@@ -308,9 +308,13 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/logs/history?since=&limit=&levels=&scope=` | 历史日志分页查询（`scope=plugin` 仅返回插件相关日志） |
+| GET | `/api/logs/history?since=&limit=&levels=&scope=&account=` | 历史日志分页查询（`scope=plugin` 仅返回插件相关日志） |
 | GET | `/api/logs/gap?from_seq=&to_seq=` | 断线补发（数据被淘汰时返回 `status: expired`） |
 | GET | `/api/logs/stats` | 环形缓冲区统计（容量 10000 条） |
+
+**日志的账户筛选**：`account` 参数**可重复传递以多选**（`?account=甲&account=乙`），
+WebSocket 实时推送用同一套参数；其中**空串表示只看面板级日志**，不传该参数则不过滤。
+面板日志页的筛选器是多选浮层，勾选即生效。
 
 ### 程序更新
 

@@ -111,7 +111,7 @@ class RingBuffer:
         limit: int = 50,
         levels: set[str] | None = None,
         plugin_only: bool = False,
-        account: str | None = None,
+        accounts: list[str] | None = None,
     ) -> tuple[list[dict], bool, int]:
         """获取 since_seq **之前** 的日志（用于向上翻页加载更早历史）。
 
@@ -120,7 +120,8 @@ class RingBuffer:
         传入 ``levels`` 时仅返回指定级别的日志（源头过滤）；
         传入 ``plugin_only`` 时仅返回插件相关来源的日志。
 
-        传入 ``account`` 时仅返回该账户的日志；传空串表示只看面板级日志。
+        传入 ``accounts`` 时仅返回这些账户的日志，**可多选**；
+        列表中的空串表示面板级日志（非账户上下文）。``None`` 表示不过滤。
 
         :return: ``(entries, has_more, filtered_total)``
         """
@@ -130,8 +131,8 @@ class RingBuffer:
                 all_entries = [e for e in all_entries if e.level in levels]
             if plugin_only:
                 all_entries = [e for e in all_entries if _is_plugin_source(e.path)]
-            if account is not None:
-                all_entries = [e for e in all_entries if e.account == account]
+            if accounts is not None:
+                all_entries = [e for e in all_entries if e.account in accounts]
             if since_seq <= 0:
                 # 首次加载：返回最新 limit 条
                 result = all_entries[-limit:]
@@ -214,7 +215,7 @@ def get_buffer() -> RingBuffer:
 
 _clients: dict[int, WebSocket] = {}
 _client_levels: dict[int, set[str] | None] = {}  # 客户端源头级别过滤（None=全部）
-_client_accounts: dict[int, str | None] = {}  # 客户端账户过滤（None=全部，""=仅面板级）
+_client_accounts: dict[int, list[str] | None] = {}  # 客户端账户过滤（None=全部，可多选，""=仅面板级）
 _client_id_seq = 0
 
 
@@ -228,9 +229,9 @@ async def _broadcast_entries(entries: list[dict]) -> None:
                 entries if levels is None
                 else [e for e in entries if e["level"] in levels]
             )
-            account = _client_accounts.get(cid)
-            if account is not None and payload:
-                payload = [e for e in payload if e.get("account", "") == account]
+            accounts = _client_accounts.get(cid)
+            if accounts is not None and payload:
+                payload = [e for e in payload if e.get("account", "") in accounts]
             if not payload:
                 continue
             await ws.send_json({"type": "logs", "entries": payload})
@@ -369,9 +370,12 @@ async def logs_history(
     limit: int = Query(default=50, le=500),
     levels: str | None = Query(default=None, description="逗号分隔的级别过滤，如 DEBUG,ERROR"),
     scope: str | None = Query(default=None, description="scope=plugin 时仅返回插件相关日志"),
-    account: str | None = Query(
+    account: list[str] | None = Query(
         default=None,
-        description="按账户名过滤；传空串表示只看面板级日志；不传则不过滤",
+        description=(
+            "按账户名过滤，可重复传递以同时筛选多个账户；"
+            "其中空串表示只看面板级日志；不传则不过滤"
+        ),
     ),
 ):
     """拉取 since_seq 之后的历史日志（支持级别 / 来源 / 账户过滤）。"""
@@ -380,7 +384,7 @@ async def logs_history(
         level_set = {lv.strip().upper() for lv in levels.split(",") if lv.strip()}
     entries, has_more, total = _buffer.get_since(
         since, limit, levels=level_set, plugin_only=(scope == "plugin"),
-        account=account,
+        accounts=account,
     )
     return {
         "entries": entries,
@@ -437,8 +441,8 @@ async def websocket_endpoint(ws: WebSocket):
     # 解析客户端携带的 last_seq 与过滤条件
     last_seq = 0
     level_set: set[str] | None = None
-    # None = 不过滤；"" = 只看面板级日志（非账户上下文）
-    account_filter: str | None = None
+    # None = 不过滤；可重复传递以多选；列表中的空串 = 只看面板级日志（非账户上下文）
+    account_filter: list[str] | None = None
     if ws.query_params:
         try:
             last_seq = int(ws.query_params.get("last_seq", "0"))
@@ -447,7 +451,9 @@ async def websocket_endpoint(ws: WebSocket):
         levels_str = ws.query_params.get("levels", "")
         if levels_str:
             level_set = {lv.strip().upper() for lv in levels_str.split(",") if lv.strip()}
-        account_filter = ws.query_params.get("account")
+        raw_accounts = ws.query_params.getlist("account")
+        if raw_accounts:
+            account_filter = raw_accounts
     _client_levels[cid] = level_set
     _client_accounts[cid] = account_filter
 
@@ -457,7 +463,7 @@ async def websocket_endpoint(ws: WebSocket):
     # 断线补发（按级别与账户过滤，批量单帧）
     if last_seq > 0:
         gap, _, _ = _buffer.get_since(
-            last_seq, limit=500, levels=level_set, account=account_filter,
+            last_seq, limit=500, levels=level_set, accounts=account_filter,
         )
         if gap:
             try:

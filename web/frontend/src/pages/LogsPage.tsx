@@ -2,10 +2,11 @@ import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } fr
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import Convert from 'ansi-to-html';
 import {
-  Terminal, Download, X, ArrowDown, Search, RefreshCw, Package, Loader2, ChevronDown,
+  Terminal, Download, X, ArrowDown, Search, RefreshCw, Package, Loader2,
 } from 'lucide-react';
 import { useLogStream, type LogEntry } from '../hooks/useLogStream';
 import { Button } from '../components/Button';
+import { AccountFilter } from '../components/AccountFilter';
 import { fetchAccounts } from '../api/client';
 import type { AccountSummary } from '../api/types';
 import { showToast } from '../hooks/useToast';
@@ -31,13 +32,13 @@ const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 
 export function LogsPage() {
   const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
-  // 账户筛选：undefined = 不过滤；'' = 只看面板级；其余为账户名
-  const [filterAccount, setFilterAccount] = useState<string | undefined>(undefined);
+  // 账户筛选可多选：空数组 = 不过滤；含 '' 表示只看面板级；其余为账户名
+  const [filterAccounts, setFilterAccounts] = useState<string[]>([]);
   const [accountOptions, setAccountOptions] = useState<AccountSummary[]>([]);
 
   // 级别与账户筛选均下推到后端（源头过滤），变化时 hook 自动重连重拉
   const { entries, connected, authRequired, loading, total, hasMore, loadMore, refresh } =
-    useLogStream([...filterLevels], filterAccount);
+    useLogStream([...filterLevels], filterAccounts);
 
   // 账户列表用于筛选下拉；取自面板账户而非已加载日志，
   // 否则筛选后列表会随日志内容塌缩、无法切回其他账户
@@ -186,32 +187,11 @@ export function LogsPage() {
               className="px-2 py-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors">清除</button>
           )}
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
-          {/* 自身带原生下拉箭头的 <select> 与周围控件风格不一致，故关掉原生外观、
-              改用主题内的 ChevronDown；尺寸对齐同排的 ghost 按钮（h-8 / text-xs / rounded-lg） */}
-          <div className="relative flex">
-            <select
-              value={filterAccount === undefined ? '__all__' : filterAccount}
-              onChange={(e) => {
-                const v = e.target.value;
-                setFilterAccount(v === '__all__' ? undefined : v);
-              }}
-              title="按账户筛选日志（多账户下各账户日志交织在一起）"
-              className="h-8 max-w-[12rem] appearance-none cursor-pointer rounded-lg
-                         border border-gray-300 dark:border-gray-600
-                         bg-transparent text-xs text-gray-700 dark:text-gray-300
-                         pl-3 pr-8
-                         hover:bg-gray-50 dark:hover:bg-gray-800
-                         focus:outline-none focus:ring-2 focus:ring-primary-500
-                         transition-colors">
-              <option value="__all__">全部账户</option>
-              <option value="">面板级</option>
-              {accountOptions.map((a) => (
-                <option key={a.id} value={a.name}>{a.name}</option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2
-                                    w-3.5 h-3.5 text-gray-400 dark:text-gray-500" />
-          </div>
+          <AccountFilter
+            accounts={accountOptions}
+            selected={filterAccounts}
+            onChange={setFilterAccounts}
+          />
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
           <Button variant="ghost" size="sm" icon={<RefreshCw />}
             onClick={refresh}>刷新</Button>

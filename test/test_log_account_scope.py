@@ -64,15 +64,29 @@ def test_entry_carries_account():
     assert by_msg.get("测试消息") == "测试", f"FAIL: {by_msg}"
     print("PASS 2: 日志条目携带正确的账户名")
 
-    # 筛选语义：None=全部 / ""=面板级 / 名字=该账户
+    # 筛选语义：None=全部 / [""]=面板级 / [名字]=该账户 / 多元素=并集
     _, _, n_all = _buffer.get_since(0, 500)
-    _, _, n_none = _buffer.get_since(0, 500, account=None)
-    _, _, n_panel = _buffer.get_since(0, 500, account="")
-    _, _, n_ym = _buffer.get_since(0, 500, account="沅梦")
-    assert n_none == n_all, "FAIL: account=None 应等于不过滤"
+    _, _, n_none = _buffer.get_since(0, 500, accounts=None)
+    _, _, n_panel = _buffer.get_since(0, 500, accounts=[""])
+    _, _, n_ym = _buffer.get_since(0, 500, accounts=["沅梦"])
+    assert n_none == n_all, "FAIL: accounts=None 应等于不过滤"
     assert n_ym == 1, f"FAIL: 沅梦应 1 条, 实际 {n_ym}"
     assert n_panel == n_all - 2, f"FAIL: 面板级应为全部减去两条账户日志, {n_panel}/{n_all}"
     print(f"PASS 3: 筛选语义正确（全部 {n_all} / 面板级 {n_panel} / 沅梦 {n_ym}）")
+
+    # 多选：两个账户的并集
+    _, _, n_both = _buffer.get_since(0, 500, accounts=["沅梦", "测试"])
+    assert n_both == 2, f"FAIL: 两个账户应合计 2 条, 实际 {n_both}"
+    # 多选可与「面板级」混选
+    _, _, n_mix = _buffer.get_since(0, 500, accounts=["", "沅梦"])
+    assert n_mix == n_panel + 1, f"FAIL: 面板级+沅梦 应为 {n_panel + 1}, 实际 {n_mix}"
+    # 不存在的账户名不报错，只是筛空
+    _, _, n_none_hit = _buffer.get_since(0, 500, accounts=["不存在的账户"])
+    assert n_none_hit == 0, f"FAIL: 不存在的账户应为 0 条, 实际 {n_none_hit}"
+    # 空列表 ≠ None：空列表是「什么都不要」，不是「不过滤」
+    _, _, n_empty = _buffer.get_since(0, 500, accounts=[])
+    assert n_empty == 0, f"FAIL: 空列表应为 0 条, 实际 {n_empty}"
+    print(f"PASS 3b: 多选筛选正确（沅梦+测试 {n_both} / 面板级+沅梦 {n_mix} / 未知账户 {n_none_hit}）")
 
 
 def test_api_filter():
@@ -95,6 +109,18 @@ def test_api_filter():
         # 条目必须带 account 字段，前端筛选依赖它
         assert "account" in all_["entries"][0], "FAIL: 条目缺少 account 字段"
         print("PASS 4: /logs/history 的 account 参数过滤正确")
+
+        # 多选：重复传递同名参数
+        both = q(account=["沅梦", "测试"])
+        assert both["total"] == 2, f"FAIL: 多选应 2 条, 实际 {both['total']}"
+        assert {e["account"] for e in both["entries"]} == {"沅梦", "测试"}, \
+            f"FAIL: 多选命中了错误的账户 {[e['account'] for e in both['entries']]}"
+        # 多选可与面板级（空串）混选
+        mixed = q(account=["", "沅梦"])
+        assert mixed["total"] == panel["total"] + 1, \
+            f"FAIL: 面板级+沅梦 应为 {panel['total'] + 1}, 实际 {mixed['total']}"
+        assert any(e["account"] == "沅梦" for e in mixed["entries"])
+        print(f"PASS 4b: 多选筛选正确（两账户 {both['total']} / 混选 {mixed['total']}）")
 
         # 未认证仍被拦截（新增参数不应绕过鉴权）
         assert client.get("/api/logs/history", params={"account": "沅梦"}).status_code == 401
