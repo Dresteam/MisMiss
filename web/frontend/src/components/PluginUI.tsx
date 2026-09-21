@@ -36,12 +36,16 @@ interface ActionPrompt {
   key: string;
   label: string;
   placeholder?: string;
-  /** 输入类型：text | number | select */
+  /** 输入类型：text | number | select | list */
   input_type?: string;
   /** select 的选项 */
   options?: { label: string; value: string }[];
   /** 多字段弹窗中可选填 */
   optional?: boolean;
+  /** list：每项的标签（用于「添加 xxx」按钮） */
+  item_label?: string;
+  /** list：每项输入框的占位符 */
+  item_placeholder?: string;
 }
 interface UISchema {
   // ── 通用 ──
@@ -206,6 +210,8 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   const [promptAction, setPromptAction] = useState<NonNullable<UISchema['actions']>[number] | null>(null);
   const [promptValue, setPromptValue] = useState('');
   const [promptValues, setPromptValues] = useState<Record<string, string>>({});
+  /** list 类型字段的值：key → 多行文本项数组 */
+  const [promptLists, setPromptLists] = useState<Record<string, string[]>>({});
   const [promptRow, setPromptRow] = useState<any>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [roomId, setRoomId] = useState<number>(0);
@@ -287,7 +293,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
   // 操作处理
   // ────────────────────────────────────────────────────────────────
 
-  const closePrompt = () => { setPromptAction(null); setPromptValue(''); setPromptValues({}); setPromptRow(null); };
+  const closePrompt = () => { setPromptAction(null); setPromptValue(''); setPromptValues({}); setPromptLists({}); setPromptRow(null); };
 
   const doFetch = async (url: string, method: string, body?: any) => {
     const token = localStorage.getItem('auth_token');
@@ -310,9 +316,22 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
       let url = rewriteUrl(promptAction.url);
       if (promptRow) url = url.replace('{id}', promptRow.id || '');
       const body: Record<string, any> = {};
+      // 行数据模板（编辑已有条目时需要携带 id 等）
+      if (promptAction.body_template) {
+        for (const [k, v] of Object.entries(promptAction.body_template)) {
+          body[k] = String(v).replace(/\{\{row\.(\w+)}}/g, (_m: string, field: string) => String(promptRow?.[field] ?? ''));
+        }
+      }
       for (const f of fields) {
-        const v = promptValues[f.key] ?? '';
-        body[f.key] = f.input_type === 'number' ? Number(v) : v;
+        if (f.input_type === 'list') {
+          // 多值字段：过滤空项后以数组提交
+          body[f.key] = (promptLists[f.key] ?? [])
+            .map(s => s.trim())
+            .filter(s => s !== '');
+        } else {
+          const v = promptValues[f.key] ?? '';
+          body[f.key] = f.input_type === 'number' ? Number(v) : v;
+        }
       }
       await doFetch(url, promptAction.method, body);
       closePrompt();
@@ -321,10 +340,31 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
     finally { setActionLoading(null); }
   };
 
+  /** 打开输入弹窗：list 字段用行数据预填，普通字段预填字符串 */
+  const openPrompt = (action: NonNullable<UISchema['actions']>[number], row?: any) => {
+    const fields: ActionPrompt[] = action.prompt_fields && action.prompt_fields.length > 0
+      ? action.prompt_fields
+      : action.prompt_field ? [action.prompt_field] : [];
+    const vals: Record<string, string> = {};
+    const lists: Record<string, string[]> = {};
+    for (const f of fields) {
+      const existing = row?.[f.key];
+      if (f.input_type === 'list') {
+        lists[f.key] = Array.isArray(existing) && existing.length > 0
+          ? existing.map((x: any) => String(x))
+          : [''];
+      } else {
+        vals[f.key] = existing != null ? String(existing) : '';
+      }
+    }
+    setPromptAction(action); setPromptValue(''); setPromptValues(vals);
+    setPromptLists(lists); setPromptRow(row || null);
+  };
+
   const handleAction = async (action: NonNullable<UISchema['actions']>[number], row?: any) => {
     if (!action) return;
     if (action.prompt_field || (action.prompt_fields && action.prompt_fields.length > 0)) {
-      setPromptAction(action); setPromptValue(''); setPromptValues({}); setPromptRow(row || null); return;
+      openPrompt(action, row); return;
     }
     setActionLoading(action.label);
     try {
@@ -385,22 +425,55 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
       ? promptAction.prompt_fields
       : promptAction.prompt_field ? [promptAction.prompt_field] : [];
     if (fields.length === 0) return null;
-    const canSubmit = fields.every(f => f.optional || (promptValues[f.key] ?? '').trim() !== '');
+    // list 字段：至少一项非空；普通字段：非空（optional 除外）
+    const fieldOk = (f: ActionPrompt) => {
+      if (f.optional) return true;
+      if (f.input_type === 'list') {
+        return (promptLists[f.key] ?? []).some(s => s.trim() !== '');
+      }
+      return (promptValues[f.key] ?? '').trim() !== '';
+    };
+    const canSubmit = fields.every(fieldOk);
+    const hasList = fields.some(f => f.input_type === 'list');
+    const inputCls = "w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none";
     return (
       <div className="fixed inset-0 z-[70] flex items-center justify-center">
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm animate-fade-in" onClick={closePrompt} />
-        <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-sm mx-4 animate-slide-in-up">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div className={'relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full mx-4 animate-slide-in-up max-h-[85vh] flex flex-col ' + (hasList ? 'max-w-lg' : 'max-w-sm')}>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
             <h3 className="font-semibold text-gray-900 dark:text-white">{promptAction.label}</h3>
             <button onClick={closePrompt} className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"><X className="w-4 h-4" /></button>
           </div>
-          <div className="p-5 space-y-3">
+          <div className="p-5 space-y-3 overflow-y-auto">
             {fields.map((f, idx) => {
               const isSelect = f.input_type === 'select' && f.options;
+              const isList = f.input_type === 'list';
+              const items = promptLists[f.key] ?? [];
+              const setItems = (next: string[]) => setPromptLists(prev => ({ ...prev, [f.key]: next }));
               return (
                 <div key={f.key}>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{f.label}</label>
-                  {isSelect ? (
+                  {isList ? (
+                    <div className="space-y-2">
+                      {items.map((item, i) => (
+                        <div key={i} className="flex gap-2 items-start">
+                          <textarea value={item} rows={2}
+                            onChange={e => { const arr = [...items]; arr[i] = e.target.value; setItems(arr); }}
+                            placeholder={f.item_placeholder || ''}
+                            className={inputCls + ' resize-y font-mono'} />
+                          <button
+                            onClick={() => { const arr = items.filter((_, j) => j !== i); setItems(arr.length > 0 ? arr : ['']); }}
+                            title="删除这一项"
+                            className="mt-1.5 p-1.5 rounded-lg text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                      <Button variant="ghost" size="sm" onClick={() => setItems([...items, ''])}>
+                        + 添加{f.item_label || '一项'}
+                      </Button>
+                    </div>
+                  ) : isSelect ? (
                     <select value={promptValues[f.key] ?? ''}
                       onChange={e => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
                       className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-primary-500">
@@ -411,7 +484,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                     <input type={f.input_type || 'text'} value={promptValues[f.key] ?? ''}
                       onChange={(e) => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
                       placeholder={f.placeholder || ''}
-                      className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                      className={inputCls}
                       onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) submitPrompt(); }} autoFocus={idx === 0} />
                   )}
                 </div>
