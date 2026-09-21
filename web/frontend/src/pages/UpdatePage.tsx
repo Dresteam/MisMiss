@@ -84,6 +84,7 @@ export function UpdatePage() {
   const [notifyEnabled, setNotifyEnabled] = useState(false);
   const [notifyBefore, setNotifyBefore] = useState('');
   const [notifyAfter, setNotifyAfter] = useState('');
+  const [notifySaving, setNotifySaving] = useState(false);
   const notifyMaxLen = info?.notify_max_len || 80;
 
   const api = async (path: string, method = 'GET', body?: any) => {
@@ -145,6 +146,25 @@ export function UpdatePage() {
       showToast('success', `${label}已保存`);
       loadInfo();
     } catch (e: any) { showToast('error', '保存失败', e.message); }
+  };
+
+  /**
+   * 开关点一下即时生效：只提交 notify_enabled 这一个字段。
+   * 后端的 /settings 是「只更新请求体里出现过的键」，所以不会把用户还没点保存的
+   * 其它输入（仓库/镜像/代理/两条文案）顺带写进去。
+   * 成功与否都不调 loadInfo() —— 那会把用户正在编辑的输入框重置回已保存值。
+   */
+  const toggleNotify = async () => {
+    const next = !notifyEnabled;
+    setNotifyEnabled(next); // 先动 UI，点下去立刻有反馈
+    setNotifySaving(true);
+    try {
+      await api('/settings', 'POST', { notify_enabled: next });
+      showToast('success', next ? '更新提示已开启' : '更新提示已关闭');
+    } catch (e: any) {
+      setNotifyEnabled(!next); // 失败回滚开关
+      showToast('error', '切换失败', e.message);
+    } finally { setNotifySaving(false); }
   };
 
   const handleApply = async () => {
@@ -409,10 +429,15 @@ export function UpdatePage() {
             <Megaphone className="w-4 h-4" /> 更新提示消息
           </h2>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500 dark:text-gray-400">启用更新提示</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              启用更新提示{notifySaving && <span className="ml-1 text-gray-400">保存中…</span>}
+            </span>
             <button
-              onClick={() => setNotifyEnabled(!notifyEnabled)}
+              onClick={toggleNotify}
+              disabled={notifySaving}
+              title="点击即时生效，无需再点保存"
               className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
+                disabled:opacity-60 disabled:cursor-wait
                 ${notifyEnabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
               <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
                 ${notifyEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
@@ -420,7 +445,8 @@ export function UpdatePage() {
           </div>
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-          开启后，程序更新时会用各账户的机器人在其绑定的直播间各发一条消息；
+          开关<span className="font-medium text-gray-600 dark:text-gray-300">点击即生效</span>，
+          无需再点保存。开启后，程序更新时会用各账户的机器人在其绑定的直播间各发一条消息；
           <span className="text-gray-400 dark:text-gray-500">
             直播间未启用或未开播的账户自动跳过。
           </span>
@@ -448,7 +474,7 @@ export function UpdatePage() {
         </p>
         <div className="flex justify-end mt-4">
           <Button variant="primary" size="sm" icon={<Megaphone />}
-            onClick={() => saveSettings('更新提示设置')}>保存提示设置</Button>
+            onClick={() => saveSettings('提示文案')}>保存提示文案</Button>
         </div>
       </div>
 

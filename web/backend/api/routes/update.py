@@ -151,10 +151,11 @@ def _load_update_state() -> dict:
 # 更新提示消息
 # ------------------------------------------------------------------ #
 
-def _clip(message: str) -> str:
-    """裁剪提示消息到直播弹幕可接受的长度。"""
-    text = " ".join(str(message).split())
-    return text[:_NOTIFY_MAX_LEN]
+def _clip(message: object) -> str:
+    """裁剪提示消息到直播弹幕可接受的长度（顺带压掉多余空白）。"""
+    if message is None:
+        return ""
+    return " ".join(str(message).split())[:_NOTIFY_MAX_LEN]
 
 
 def _mark_notify_pending(version: str, message: str) -> None:
@@ -773,13 +774,29 @@ async def update_changelog(version: str):
 
 @router.post("/settings", response_model=StatusResponse)
 async def update_settings(body: dict, manager: AccountManager = Depends(get_account_manager)):
-    """保存更新配置（镜像站 / 代理 / 更新提示消息）。"""
-    repo = str(body.get("repo", _GITHUB_REPO)).strip() or _GITHUB_REPO
-    mirror = str(body.get("mirror", "")).strip()
-    proxy = str(body.get("proxy", "")).strip()
-    notify_enabled = bool(body.get("notify_enabled", False))
-    notify_before = _clip(body.get("notify_before", _NOTIFY_BEFORE_DEFAULT))
-    notify_after = _clip(body.get("notify_after", _NOTIFY_AFTER_DEFAULT))
+    """保存更新配置（镜像站 / 代理 / 更新提示消息）。
+
+    只更新请求体里**出现过的**键，未出现的保持原值 —— 面板的「启用更新提示」
+    开关是点一下即时落盘的，不能顺带把用户还没点保存的其它输入一起写进去。
+    """
+    cur = _update_config()
+
+    repo = str(body["repo"]).strip() or _GITHUB_REPO if "repo" in body else cur["repo"]
+    mirror = str(body["mirror"]).strip() if "mirror" in body else cur["mirror"]
+    proxy = str(body["proxy"]).strip() if "proxy" in body else cur["proxy"]
+    notify_enabled = (
+        bool(body["notify_enabled"]) if "notify_enabled" in body
+        else cur["notify_enabled"]
+    )
+    notify_before = (
+        _clip(body["notify_before"]) if "notify_before" in body
+        else cur["notify_before"]
+    )
+    notify_after = (
+        _clip(body["notify_after"]) if "notify_after" in body
+        else cur["notify_after"]
+    )
+
     _save_update_config(
         repo, mirror, proxy, notify_enabled, notify_before, notify_after
     )

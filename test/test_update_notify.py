@@ -247,6 +247,43 @@ with TestClient(app) as c:
           cfg["notify_enabled"] and cfg["notify_before"] == "即将更新"
           and cfg["notify_after"] == "已更新完成", str(cfg))
 
+    # ---- 开关即时生效：只提交 notify_enabled 时不碰其它字段 ----
+    # 面板的「启用更新提示」开关是点一下即时落盘的，请求体里只有这一个键。
+    # 若后端把它当成整份设置覆盖，用户还没点保存的仓库/代理/文案就会被重置。
+    c.post("/api/update/settings", headers=H, json={
+        "repo": "Dresteam/MisMiss", "mirror": "https://gh-proxy.com/",
+        "proxy": "http://127.0.0.1:7890",
+        "notify_enabled": False,
+        "notify_before": "文案甲", "notify_after": "文案乙",
+    })
+    r = c.post("/api/update/settings", headers=H, json={"notify_enabled": True})
+    check("只提交开关也能保存成功", r.status_code == 200, f"{r.status_code} {r.text[:80]}")
+    cfg = upd._update_config()
+    check("开关已生效", cfg["notify_enabled"] is True, str(cfg["notify_enabled"]))
+    check("只提交开关不重置其它字段",
+          cfg["repo"] == "Dresteam/MisMiss"
+          and cfg["mirror"] == "https://gh-proxy.com/"
+          and cfg["proxy"] == "http://127.0.0.1:7890"
+          and cfg["notify_before"] == "文案甲"
+          and cfg["notify_after"] == "文案乙",
+          str(cfg))
+
+    # 反过来：只提交文案时开关保持不动
+    c.post("/api/update/settings", headers=H, json={"notify_before": "文案丙"})
+    cfg = upd._update_config()
+    check("只提交文案时开关保持开启",
+          cfg["notify_enabled"] is True and cfg["notify_before"] == "文案丙",
+          str(cfg))
+
+    # 空字符串是「有效值」（表示跳过该阶段），不能被当成「未提交」而回退成默认文案
+    c.post("/api/update/settings", headers=H, json={"notify_after": ""})
+    check("显式提交空文案可以清空（不回落默认值）",
+          upd._update_config()["notify_after"] == "",
+          repr(upd._update_config()["notify_after"]))
+
+    # 恢复成后续用例期望的状态
+    _set_notify(True, "即将更新", "已更新完成")
+
     # ---- 待发标记与备份信息互不覆盖 ----
     upd._save_update_state({"backup_dir": "/tmp/bak", "backup_version": "1.3.0"})
     upd._mark_notify_pending("1.3.4", "再来一条")
