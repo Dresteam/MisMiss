@@ -45,7 +45,10 @@ services:
       # 权限配置
       - ${MISMISS_HOME:-.}/permissions:/app/permissions
       # 自定义配置（由 deploy.sh 首次部署时从 config.yml.dist 生成）
-      - ${MISMISS_HOME:-.}/config.yml:/app/config.yml:ro
+      # 不能加 :ro —— 面板的「更新源设置 / 更新提示消息 / 日志等级 / 端口」
+      # 都要写回这个文件，只读挂载会让这些端点报 500。更新流程自身会跳过覆盖
+      # config.yml，所以容器可写不会被发布包冲掉用户配置
+      - ${MISMISS_HOME:-.}/config.yml:/app/config.yml
       # 宿主 Docker socket —— 在线更新用（删除此行可禁用在线更新）
       - /var/run/docker.sock:/var/run/docker.sock
       # 部署目录 —— 在线更新下载/解压部署包用（删除此行可禁用在线更新）

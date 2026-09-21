@@ -35,6 +35,10 @@ _GITHUB_REPO = "Dresteam/MisMiss"
 _GITHUB_API = "https://api.github.com"
 _UPDATE_STATE_FILE = Path("data/update_state.json")
 
+# 用户配置文件 —— 与 api/routes/config.py 的 _CONFIG_PATH 指向同一个文件，
+# 提到模块级既便于测试替换，也避免两处各自上溯目录算错
+_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml"
+
 # 更新提示消息的默认文案（config.yml 缺省时使用）
 _NOTIFY_BEFORE_DEFAULT = "机器人即将更新，稍后自动恢复"
 _NOTIFY_AFTER_DEFAULT = "机器人已更新完成，已恢复正常"
@@ -91,15 +95,21 @@ def _save_update_config(
     notify_before: str = "",
     notify_after: str = "",
 ) -> None:
-    """保存 update 配置到 config.yml（原子写入，避免与其他写入并发时损坏）。"""
+    """保存 update 配置到 config.yml（原子写入，避免与其他写入并发时损坏）。
+
+    :raises HTTPException: 读取失败（宁可报错也不能用空字典覆盖写回，
+        那会清掉文件里其余所有配置）或写入失败（如 config.yml 只读挂载）
+    """
     import yaml
-    config_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml"
+    config_path = _CONFIG_PATH
     data: dict = {}
     if config_path.exists():
         try:
             data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            data = {}
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"配置文件读取失败（{config_path}）：{e}"
+            )
     data.setdefault("update", {})
     data["update"]["repo"] = repo
     data["update"]["mirror"] = mirror
@@ -108,8 +118,23 @@ def _save_update_config(
     data["update"]["notify_before"] = notify_before
     data["update"]["notify_after"] = notify_after
     tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
-    tmp_path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
-    os.replace(tmp_path, config_path)
+    try:
+        # sort_keys=False —— 与 /api/config 的写回保持一致，
+        # 否则面板每存一次设置就把用户的 config.yml 键序打乱
+        tmp_path.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, config_path)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"配置文件不可写（{config_path}）：{e}。"
+                "Docker 部署请确认 docker-compose.yml 中 config.yml 的挂载没有 :ro；"
+                "也可以直接在宿主机编辑该文件后重启容器。"
+            ),
+        )
 
 
 def _load_update_state() -> dict:

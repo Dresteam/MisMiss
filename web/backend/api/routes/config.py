@@ -28,6 +28,38 @@ _CONFIG_PATH = str(_HOME / "config.yml")
 _PROJECT_ROOT = _HOME
 
 
+def _read_config_file() -> dict:
+    """读取 config.yml，读不出来时给出可读报错。
+
+    宁可报错也不返回空字典 —— 调用方拿到空字典再写回，会把其余配置全部抹掉。
+    """
+    if not os.path.exists(_CONFIG_PATH):
+        return {}
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as e:
+        raise HTTPException(
+            status_code=500, detail=f"配置文件读取失败（{_CONFIG_PATH}）：{e}"
+        )
+
+
+def _write_config_file(data: dict) -> None:
+    """写回 config.yml，失败时给出可操作的提示而不是裸 500。"""
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"配置文件不可写（{_CONFIG_PATH}）：{e}。"
+                "Docker 部署请确认 docker-compose.yml 中 config.yml 的挂载没有 :ro；"
+                "也可以直接在宿主机编辑该文件后重启容器。"
+            ),
+        )
+
+
 # ================================================================== #
 # GET  /api/config —— 读取完整配置
 # ================================================================== #
@@ -50,20 +82,13 @@ async def get_config():
 async def update_config(body: dict):
     """合并写入配置——仅更新传入的键，其他保持不变。"""
     try:
-        # 读取当前文件内容
-        current: dict = {}
-        if os.path.exists(_CONFIG_PATH):
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-                current = yaml.safe_load(f) or {}
-
+        current = _read_config_file()
         # 深度合并
         _deep_merge(current, body.get("config", {}))
-
-        # 写回
-        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
+        _write_config_file(current)
         return {"success": True, "message": "配置已保存"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -108,6 +133,11 @@ async def set_log_level(body: dict):
     if level_name not in valid:
         raise HTTPException(status_code=400, detail=f"无效的日志等级: {level_name}")
 
+    # 先落盘再改内存 —— 写不进去就直接报错，避免出现「返回 500 但级别其实已经变了」
+    current = _read_config_file()
+    current.setdefault("logging", {})["level"] = level_name
+    _write_config_file(current)
+
     # stdlib
     logging.getLogger().setLevel(valid[level_name])
 
@@ -126,15 +156,6 @@ async def set_log_level(body: dict):
     except Exception:
         pass
 
-    # 持久化到 config.yml
-    current = {}
-    if os.path.exists(_CONFIG_PATH):
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = yaml.safe_load(f) or {}
-    current.setdefault("logging", {})["level"] = level_name
-    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-
     return {"success": True, "message": f"日志等级已设为 {level_name}，已持久化到 config.yml"}
 
 
@@ -150,13 +171,10 @@ async def update_ports(
     api_port = body.get("api_port", 8080)
 
     # 只保存 api_port，web_port 保持不变
-    current: dict = {}
-    if os.path.exists(_CONFIG_PATH):
-        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-            current = yaml.safe_load(f) or {}
+    # 先落盘再停机 —— 写不进去就别把账户全关掉
+    current = _read_config_file()
     current.setdefault("server", {})["api_port"] = api_port
-    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(current, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    _write_config_file(current)
 
     # 关闭全部账户运行时
     await manager.shutdown_all()
