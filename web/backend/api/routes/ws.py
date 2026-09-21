@@ -316,15 +316,15 @@ try:
             account=str(extra.get("account_name", "") or ""),
         ))
 
-    # 从 config.yml 读取持久化的日志等级
-    _initial_level = "DEBUG"
+    # 从 config.yml 读取持久化的日志等级（读不到时与 core.logging 的默认值保持一致）
+    _initial_level = "INFO"
     try:
         import yaml as _y
         _cfg_path = Path(__file__).resolve().parent.parent.parent.parent.parent / "config.yml"
         if _cfg_path.exists():
             with open(_cfg_path, "r", encoding="utf-8") as _f:
                 _cfg = _y.safe_load(_f) or {}
-            _initial_level = _cfg.get("logging", {}).get("level", "DEBUG")
+            _initial_level = _cfg.get("logging", {}).get("level", "INFO")
     except Exception:
         pass
 

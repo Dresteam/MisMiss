@@ -659,13 +659,11 @@ def _server_status(_args: list[str]) -> None:
 
 
 async def _server_shutdown(_args: list[str]) -> None:
-    _log.info("正在关闭...")
     await server.shutdown()
     _log.info("服务器已关闭")
 
 
 async def _server_reload(_args: list[str]) -> None:
-    _log.info("正在重载...")
     await server.reload()
     _log.info("服务器已重载，{} 个插件", len(server.plugins))
 
@@ -752,7 +750,6 @@ async def main() -> None:
         try:
             line = (await loop.run_in_executor(None, input, "miss> ")).strip()
         except (EOFError, KeyboardInterrupt):
-            _log.info("")
             break
 
         if not line:

@@ -36,9 +36,31 @@ class FakeLive:
         self.is_connected = False
 
 
+def _fs_tick(probe: str) -> float:
+    """取当前文件系统时间戳刻度（写一个探针文件再读它的 mtime）。"""
+    with open(probe, "w", encoding="utf-8") as f:
+        f.write("tick")
+    return os.path.getmtime(probe)
+
+
+async def _advance_past(probe: str, stamp: float) -> None:
+    """等到文件系统时间戳越过 ``stamp``。
+
+    ``_ensure_state_fresh`` 靠 mtime 判断状态是否变化，而 Windows 文件时间戳
+    粒度约 15.6ms —— 同一刻度内的两次写入 mtime 完全相同，会被判定为「没变」。
+    本测试里两个实例背靠背写读，不等时钟走过一格，断言的其实是调度运气。
+    """
+    for _ in range(500):
+        if _fs_tick(probe) > stamp:
+            return
+        await asyncio.sleep(0.002)
+    raise AssertionError("文件时间戳未能推进，无法稳定触发跨 worker 同步")
+
+
 async def main():
     tmp = tempfile.mkdtemp(prefix="mismiss-sync-test-")
     state_path = os.path.join(tmp, "server_state.json")
+    probe = os.path.join(tmp, ".mtime-probe")
     s1 = MissevanServer()
     s2 = MissevanServer()
     s1._data_dir = tmp
@@ -84,6 +106,7 @@ async def main():
     s1._bot_available = True
     s1._bot_cookie = "cookie-x"
     s1._bot_permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
+    await _advance_past(probe, s2._state_mtime)
     s1._save_state()
     s2._bot = SimpleNamespace(id=1, enabled=False, timer_interval=60.0)
     s2._ensure_state_fresh()
@@ -94,6 +117,7 @@ async def main():
     s1._bot = SimpleNamespace(id=0, enabled=False, timer_interval=60.0)
     s1._bot_available = False
     s1._bot_cookie = ""
+    await _advance_past(probe, s2._state_mtime)
     s1._save_state()
     s2._ensure_state_fresh()
     assert s2._bot.id == 0 and s2._bot_available is False, "FAIL: Bot 删除未跨 worker 同步"
@@ -107,7 +131,8 @@ async def main():
     s1._enabled_livestreams.add(456)
     s2._enabled_livestreams.add(456)
     s1._save_state()
-    s2._ensure_state_fresh()  # 对齐 baseline
+    s2._ensure_state_fresh()  # 对齐 baseline —— s2._state_mtime 记下此刻
+    await _advance_past(probe, s2._state_mtime)
     s1.disable_livestream(456)
     await asyncio.sleep(0.05)
     s2._ensure_state_fresh()

@@ -194,16 +194,12 @@ class PluginManager:
         self._app = app
         for name, meta in list(self._plugins.items()):
             if not meta.ui_schema_path or not os.path.exists(meta.ui_schema_path):
-                _log.debug("跳过无 UI schema 的插件: {}", name)
                 continue
-            _log.info("注册 UI 路由: {} (inst={}, initialized={})",
-                      name, meta.plugin_instance is not None, meta.initialized)
             if meta.plugin_instance is None:
                 self._ensure_plugin_loaded(meta)
             if meta.plugin_instance is not None and hasattr(meta.plugin_instance, 'register_routes'):
                 # 仅当路由尚未注册时才注册（避免重复注册同一前缀）
                 self._register_routes_if_needed(meta)
-                _log.info("插件已注册 UI 路由: {}", meta)
             else:
                 _log.warning("插件实例不可用或缺少 register_routes: {}", meta)
 
@@ -287,7 +283,7 @@ class PluginManager:
         :return: ``[(dir_name, plugin_dir_path), ...]`` 列表
         """
         if not os.path.exists(self._plugin_dir):
-            _log.info("插件目录不存在，跳过扫描: {}", self._plugin_dir)
+            _log.debug("插件目录不存在，跳过扫描: {}", self._plugin_dir)
             return []
 
         results: list[tuple[str, str]] = []
@@ -298,7 +294,7 @@ class PluginManager:
             if entry.startswith("_") or entry.startswith("."):
                 continue
             if self._find_main_module(full_path) is None:
-                _log.info(
+                _log.debug(
                     "插件目录未找到 main.py 或同名 .py，跳过: {}", entry
                 )
                 continue
@@ -434,14 +430,11 @@ class PluginManager:
         missing: list[str] = []
         for pkg_spec in packages:
             pkg_name = PluginManager._parse_package_name(pkg_spec)
-            if PluginManager._is_package_installed(pkg_name):
-                _log.debug("插件 [{}] 依赖已安装，跳过: {}", plugin_name, pkg_name)
-            else:
+            if not PluginManager._is_package_installed(pkg_name):
                 missing.append(pkg_spec)
                 _log.debug("插件 [{}] 依赖缺失，待安装: {}", plugin_name, pkg_name)
 
         if not missing:
-            _log.info("插件 [{}] 所有 {} 个依赖已安装", plugin_name, len(packages))
             return
 
         _log.info(
@@ -561,15 +554,18 @@ class PluginManager:
 
         在 :meth:`MissevanServer.start` 中调用。
         加载失败的插件会被跳过并记录错误日志，不影响其他插件。
+
+        扫描与逐插件发现均为 DEBUG —— 刷新插件库会扇出到每个账户的
+        PluginManager，逐条 INFO 会淹没真正有用的日志。仅当本次扫描确实
+        发现**新**插件时汇总一条 INFO。
         """
         dirs = self._scan_plugin_dirs()
-        _log.info("发现 {} 个插件目录", len(dirs))
+        _log.debug("发现 {} 个插件目录", len(dirs))
+        known = set(self._plugins)
 
         for dir_name, plugin_path in dirs:
             try:
-                metadata = await self.load_plugin(dir_name, plugin_path)
-                if metadata:
-                    _log.info("插件加载成功: {}", metadata)
+                await self.load_plugin(dir_name, plugin_path)
             except CorePluginLoadException as e:
                 _log.error("插件加载失败 [{}]: {}", dir_name, e)
             except CorePluginMetadataException as e:
@@ -580,6 +576,10 @@ class PluginManager:
                 _log.error(
                     "插件加载失败 [{}]: {} - {}", dir_name, type(e).__name__, e
                 )
+
+        added = sorted(set(self._plugins) - known)
+        if added:
+            _log.info("本次扫描发现 {} 个新插件: {}", len(added), "、".join(added))
 
     async def load_plugin(
         self,
@@ -616,9 +616,9 @@ class PluginManager:
         metadata = self._load_metadata(plugin_path)
         metadata.root_dir_name = dir_name
 
-        # 防止重复加载
+        # 防止重复加载（重复扫描是常态而非异常，故为 DEBUG）
         if metadata.name in self._plugins:
-            _log.warning("插件已加载，跳过: {}", metadata.name)
+            _log.debug("插件已加载，跳过: {}", metadata.name)
             return self._plugins[metadata.name]
 
         # 2. 检查是否存在 _conf_schema.json / _ui_schema.json（仅记录路径）
@@ -645,7 +645,7 @@ class PluginManager:
         # 5. 存入内部字典（仅元数据，不加载代码）
         self._plugins[metadata.name] = metadata
         self._notify_state_changed()
-        _log.info("插件已发现（禁用状态）: {}", metadata)
+        _log.debug("插件已发现（禁用状态）: {}", metadata)
         return metadata
 
     @staticmethod
@@ -881,7 +881,7 @@ class PluginManager:
             instance.register_routes(plugin_router)
             PluginManager._insert_plugin_routes(self._app, plugin_router)
             metadata.routes_registered = True
-            _log.info("插件已注册自定义 UI 路由: {}", metadata.name)
+            _log.debug("插件已注册自定义 UI 路由: {}", metadata.name)
 
         # 初始化前先清掉可能残留的插件定时消息（异常终止的插件不会走 terminate）
         self._purge_plugin_timers(metadata.name)
@@ -931,7 +931,6 @@ class PluginManager:
         """
         metadata = self._get_plugin(plugin_name)
         if metadata.plugin_instance is not None and metadata.enabled:
-            _log.debug("插件已处于启用状态: {}", metadata)
             return
 
         self._disabled_plugins.discard(plugin_name)
@@ -958,8 +957,6 @@ class PluginManager:
                 _log.warning("插件 [{}] on_enable 异常: {}", plugin_name, e)
             await self._notify_bound_livestream(metadata)
 
-        _log.debug("插件已启用: {}", metadata)
-
     async def disable_plugin(self, plugin_name: str) -> None:
         """禁用插件。
 
@@ -972,7 +969,6 @@ class PluginManager:
         """
         metadata = self._get_plugin(plugin_name)
         if not metadata.enabled:
-            _log.debug("插件已处于禁用状态: {}", metadata)
             return
 
         self._disabled_plugins.add(plugin_name)
@@ -991,8 +987,6 @@ class PluginManager:
             # 兜底：插件若未在 terminate 中自行清理，由框架强制回收其定时消息
             self._purge_plugin_timers(plugin_name)
 
-        _log.debug("插件已禁用: {}", metadata)
-
     def suspend_plugin(self, plugin_name: str) -> None:
         """暂停插件——取消事件注册和终止钩子，但不改变 enabled 标记。"""
         metadata = self._get_plugin(plugin_name)
@@ -1006,8 +1000,6 @@ class PluginManager:
             # terminate 是 fire-and-forget，框架同步回收定时消息，
             # 保证暂停后不再广播（也避免把清理塞进异步任务引发状态写入竞态）
             self._purge_plugin_timers(plugin_name)
-        _log.debug("插件已暂停: {}", metadata)
-
     def resume_plugin(self, plugin_name: str) -> None:
         """恢复暂停的插件——全部后台异步执行，不阻塞调用方。"""
         metadata = self._get_plugin(plugin_name)
@@ -1036,8 +1028,6 @@ class PluginManager:
                 loop.create_task(self._call_on_enable(metadata, plugin_name))
             except RuntimeError:
                 pass
-        _log.debug("插件已恢复: {}", metadata)
-
     async def _call_on_enable(self, metadata: PluginMetadata, plugin_name: str) -> None:
         """安全调用插件的 on_enable 钩子，随后补发直播间绑定通知。"""
         try:
@@ -1062,7 +1052,7 @@ class PluginManager:
             inst.register_routes(plugin_router)
             PluginManager._insert_plugin_routes(self._app, plugin_router)
             metadata.routes_registered = True
-            _log.info("插件已补注册 UI 路由: {}", metadata)
+            _log.debug("插件已补注册 UI 路由: {}", metadata)
 
     def _ensure_plugin_loaded(self, metadata: PluginMetadata) -> None:
         """同步加载插件模块并注册路由，不执行 initialize。"""
@@ -1114,7 +1104,7 @@ class PluginManager:
                 instance.register_routes(plugin_router)
                 PluginManager._insert_plugin_routes(self._app, plugin_router)
                 metadata.routes_registered = True
-                _log.info("插件已注册自定义 UI 路由: {}", metadata.name)
+                _log.debug("插件已注册自定义 UI 路由: {}", metadata.name)
             elif hasattr(instance, 'register_routes'):
                 _log.debug("插件 [{}] 有 register_routes 但 _app 未设置，将在 set_app 时补注册", metadata.name)
         except Exception as e:
@@ -1528,13 +1518,12 @@ class PluginManager:
             if metadata.enabled and metadata.plugin_instance is not None:
                 try:
                     await metadata.plugin_instance.terminate()
-                    _log.debug("插件已终止: {}", metadata.name)
                 except Exception as e:
                     _log.warning(
                         "插件 {} 终止异常: {}", metadata.name, e
                     )
 
-        _log.info("所有插件已关闭")
+        _log.debug("所有插件已关闭")
 
     # ------------------------------------------------------------------ #
     # 内部辅助
@@ -1667,4 +1656,3 @@ class PluginManager:
 
         for key in to_remove:
             del sys.modules[key]
-            _log.debug("已清除模块缓存: {}", key)

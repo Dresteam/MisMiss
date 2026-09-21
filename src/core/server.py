@@ -95,7 +95,7 @@ class MissevanServer(ServerInterface):
         :param auto_resume: 为 False 时恢复状态但**不**自动启用 Bot、连接直播间、
             恢复插件（供已过期账户冷启动,由续期流程显式恢复）
         """
-        _log.info("服务器启动中 ...")
+        _log.debug("服务器启动中 ...")
         self._ensure_data_dir()
 
         state = self._load_state() or {}
@@ -125,7 +125,7 @@ class MissevanServer(ServerInterface):
         # 兼容旧状态：enabled=True 但尚未记录的直播间自动纳入
         for lid, live in self._livestreams.items():
             if live.enabled and lid not in self._enabled_livestreams:
-                _log.info("自动纳入已启用直播间: live_id={}", lid)
+                _log.debug("自动纳入已启用直播间: live_id={}", lid)
                 self._enabled_livestreams.add(lid)
         if auto_resume:
             # 自动连接（使用 enable_livestream 确保完整流程）
@@ -133,12 +133,11 @@ class MissevanServer(ServerInterface):
                 if lid in self._livestreams:
                     try:
                         await self.enable_livestream(lid)
-                        _log.info("已自动连接直播间: live_id={}", lid)
                     except Exception as e:
                         _log.warning("自动连接直播间失败 live_id={}: {}", lid, e)
         else:
             # 过期账户冷启动:不连接,实例标记同步为停用
-            _log.info("auto_resume=False,直播间保持断开")
+            _log.debug("auto_resume=False,直播间保持断开")
             for lid, live in self._livestreams.items():
                 live.enabled = False
             self._enabled_livestreams = set()
@@ -175,7 +174,7 @@ class MissevanServer(ServerInterface):
         if self._bot_available and self._bot.enabled:
             pm.resume_all()
         else:
-            _log.info("Bot 未启用，插件标记已恢复（待 Bot 启用后加载）")
+            _log.debug("Bot 未启用，插件标记已恢复（待 Bot 启用后加载）")
         self._save_state()  # 立即持久化当前状态
 
         _log.info(
@@ -186,7 +185,7 @@ class MissevanServer(ServerInterface):
 
     async def shutdown(self) -> None:
         """关闭服务器——先持久化状态再停用所有组件。"""
-        _log.info("服务器关闭中 ...")
+        _log.debug("服务器关闭中 ...")
         self._save_state()  # 先保存当前状态
         await self._plugin_manager.shutdown_all()
         for livestream in self._livestreams.values():
@@ -205,12 +204,16 @@ class MissevanServer(ServerInterface):
         # start() 已通过 self._app 重新注入了 app 引用到新的 PluginManager
 
     async def refresh_plugins(self) -> None:
-        """重新扫描插件目录，加载新插件（已加载的不重载）。"""
+        """重新扫描插件目录，加载新插件（已加载的不重载）。
+
+        刷新会扇出到每个账户，逐账户打 INFO 会刷屏 —— 新插件的汇总
+        日志由 :meth:`PluginManager.load_all` 自己产出。
+        """
         pm = self._require_plugin_manager()
         prev_count = len(pm.list_plugins())
         await pm.load_all()
         new_count = len(pm.list_plugins())
-        _log.info("插件刷新完成: {} → {} 个", prev_count, new_count)
+        _log.debug("插件刷新完成: {} → {} 个", prev_count, new_count)
 
     # ================================================================== #
     # Bot
@@ -395,7 +398,7 @@ class MissevanServer(ServerInterface):
         if self._bot.id == 0:
             bot_state = state.get("bot", {})
             if bot_state:
-                _log.info("bot 状态从磁盘异步恢复（多 worker）")
+                _log.debug("bot 状态从磁盘异步恢复（多 worker）")
                 await self._restore_bot(bot_state)
                 # 恢复定时消息（Bot 恢复完成后）
                 self._bot.restore_timer_state(state.get("timer_messages") or {})
@@ -404,7 +407,7 @@ class MissevanServer(ServerInterface):
         saved_ids = set(state.get("livestreams", []))
         missing_ids = saved_ids - set(self._livestreams.keys())
         for lid in missing_ids:
-            _log.info("直播间 {} 从磁盘异步恢复（多 worker）", lid)
+            _log.debug("直播间 {} 从磁盘异步恢复（多 worker）", lid)
             await self._restore_livestream(lid)
         # 同步启用状态（含实例标记，新恢复的直播间也需对齐）
         enabled = set(state.get("enabled_livestreams", []))
@@ -714,7 +717,6 @@ class MissevanServer(ServerInterface):
         """
         live_id = self._account_room_id()
         if live_id <= 0:
-            _log.info("账户未绑定直播间，插件 {} 的定时消息暂不注册", plugin_name)
             return ""
         return self._bot.register_plugin_timer_message(
             plugin_name, live_id, message, only_when_live=only_when_live
@@ -924,10 +926,10 @@ class MissevanServer(ServerInterface):
             # 恢复启用状态
             if bot_state.get("enabled", False):
                 self._bot.enabled = True
-                _log.info("Bot 已恢复（启用）: {}", self._bot)
+                _log.debug("Bot 已恢复（启用）: {}", self._bot)
             else:
                 self._bot.enabled = False
-                _log.info("Bot 已恢复（禁用）: {}", self._bot)
+                _log.debug("Bot 已恢复（禁用）: {}", self._bot)
         except CoreApiException as e:
             self._bot_available = False
             _log.error("Bot 恢复时发生错误：{}", str(e))
@@ -943,4 +945,4 @@ class MissevanServer(ServerInterface):
         except CoreApiException:
             _log.warning("Livestream 恢复时房间信息获取失败: live_id={}", live_id)
         self._livestreams[live_id] = livestream
-        _log.info("Livestream 已恢复: live_id={}", live_id)
+        _log.debug("Livestream 已恢复: live_id={}", live_id)

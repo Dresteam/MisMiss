@@ -78,7 +78,6 @@ class PluginConfigManager:
         :raises CorePluginConfigException: JSON 解析失败
         """
         if not os.path.exists(schema_path):
-            _log.debug("Schema 文件不存在: {}", schema_path)
             return {}
 
         try:
@@ -154,7 +153,6 @@ class PluginConfigManager:
         """
         path = self._config_path(plugin_name)
         if not os.path.exists(path):
-            _log.debug("配置文件不存在，返回空字典: {}", path)
             return {}
 
         try:
@@ -197,11 +195,6 @@ class PluginConfigManager:
         # 这样用户手动修改的值不会被重置
         missing_keys = [k for k in defaults if k not in saved]
         if missing_keys:
-            _log.debug(
-                "插件 [{}] 配置发现新字段 {}，自动补充",
-                plugin_name,
-                missing_keys,
-            )
             self.save_config(plugin_name, merged)
 
         return merged

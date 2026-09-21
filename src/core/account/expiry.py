@@ -24,7 +24,7 @@ class ExpiryScheduler:
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.get_event_loop().create_task(self._run())
-            _log.info("账户到期调度器已启动 (每 {}s 检查)", self._interval)
+            _log.debug("账户到期调度器已启动 (每 {}s 检查)", self._interval)
 
     def stop(self) -> None:
         if self._task is not None and not self._task.done():
@@ -55,4 +55,4 @@ class ExpiryScheduler:
         except asyncio.CancelledError:
             pass
         finally:
-            _log.info("账户到期调度器已停止")
+            _log.debug("账户到期调度器已停止")

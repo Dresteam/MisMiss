@@ -124,7 +124,7 @@ class PluginPermissionManager:
             # 首次加载 — 使用默认值
             merged = deepcopy(defaults)
             self.save_permissions(plugin_name, merged)
-            _log.info(
+            _log.debug(
                 "插件 [{}] 首次加载，已分配默认权限: {}",
                 plugin_name,
                 [k for k, v in merged.items() if v],

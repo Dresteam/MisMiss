@@ -16,4 +16,4 @@ update:
   notify_after: 机器人已更新完成，已恢复正常
 logging:
   dir: logs
-  level: DEBUG
+  level: INFO

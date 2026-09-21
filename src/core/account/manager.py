@@ -237,7 +237,7 @@ class AccountManager:
                 return
         os.makedirs(self._accounts_dir, exist_ok=True)
         self._save_panel()
-        _log.info("面板初始化完成(无账户)")
+        _log.debug("面板初始化完成(无账户)")
 
     # ================================================================== #
     # app 注入与库级插件
@@ -320,7 +320,7 @@ class AccountManager:
                         await server.create_bot(
                             cookie, permissions=BotPermission.SEND_LIVESTREAM_MESSAGE
                         )
-                        _log.info("账户 {} 已使用公共 Cookie 创建 Bot", rec.name)
+                        _log.debug("账户 {} 已使用公共 Cookie 创建 Bot", rec.name)
                     except CoreCookieException as e:
                         _log.warning("公共 Cookie 无效,账户 {} Bot 未创建: {}", rec.name, e)
             return server
@@ -912,7 +912,6 @@ class AccountManager:
             "bot_available": True,
         })
         self._save_panel()
-        _log.info("公共 Cookie Bot 资料已刷新: {}", bot)
         return self.get_public_bot()
 
     async def verify_public_bot(self) -> dict[str, Any]:
@@ -963,8 +962,6 @@ class AccountManager:
                 failed.append({"account_id": rec.id, "error": str(e)})
         if failed:
             _log.warning("公共 Cookie 下发部分失败: {}", failed)
-        else:
-            _log.info("公共 Cookie 已下发到全部 public 账户")
         return {"failed": failed}
 
     # ================================================================== #
@@ -972,14 +969,26 @@ class AccountManager:
     # ================================================================== #
 
     async def refresh_library(self) -> None:
-        """刷新插件库并同步各账户(仅扫描,不改变启用状态)。"""
+        """刷新插件库并同步各账户(仅扫描,不改变启用状态)。
+
+        扫描会扇出到库与每个账户的 PluginManager，逐账户打日志会刷屏，
+        故此处只在结束时汇总一条；单次扫描发现的新插件由
+        :meth:`PluginManager.load_all` 各自汇总。
+        """
         pm = self.get_library_pm()
+        prev_count = len(pm.list_plugins())
         await pm.load_all()
+        synced = 0
         for rec in self.list_records():
             server = self._servers.get(rec.id)
             if server is not None:
                 await server.refresh_plugins()
-        _log.info("插件库已刷新: {} 个插件", len(pm.list_plugins()))
+                synced += 1
+        new_count = len(pm.list_plugins())
+        _log.info(
+            "插件库已刷新: {} 个插件(新增 {}),已同步 {} 个账户",
+            new_count, max(0, new_count - prev_count), synced,
+        )
 
     def list_library_plugins(self) -> list[dict[str, Any]]:
         """库级插件列表(含被哪些账户启用)。"""
@@ -1195,11 +1204,6 @@ class AccountManager:
             for name in result["updated"]
         ]
         result["dry_run"] = dry_run
-        _log.info(
-            "账户 {} 一键更新{}: 更新 {} / 跳过 {} / 失败 {}",
-            account_id, "预览" if dry_run else "",
-            len(result["updated"]), len(result["skipped"]), len(result["failed"]),
-        )
         return result
 
     async def push_plugin_to_accounts(
@@ -1227,11 +1231,6 @@ class AccountManager:
             skipped += [f"{n}@{rec.name}" for n in res["skipped"]]
             failed += [f"{n}@{rec.name}" for n in res["failed"]]
 
-        _log.info(
-            "插件推送{}: 更新 {} / 跳过 {} / 失败 {}",
-            "预览" if dry_run else "完成",
-            len(updated), len(skipped), len(failed),
-        )
         return {
             "updated": updated, "skipped": skipped, "failed": failed,
             "dry_run": dry_run,
@@ -1296,8 +1295,6 @@ class AccountManager:
                 applied.append(name)
             except Exception as e:
                 _log.warning("账户 {} 应用默认插件 {} 失败: {}", account_id, name, e)
-        if applied:
-            _log.info("账户 {} 已启用默认插件: {}", account_id, applied)
         return applied
 
     async def apply_default_plugins(self, dry_run: bool = False) -> dict[str, Any]:

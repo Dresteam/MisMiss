@@ -38,6 +38,10 @@ _LOG_FORMAT: str = (
 
 _initialized: bool = False
 
+_VALID_LEVELS: frozenset[str] = frozenset(
+    {"TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"}
+)
+
 
 # ================================================================ #
 # 账户上下文
@@ -199,9 +203,31 @@ def _match_level(actual: str, required: str) -> bool:
 # 公共 API
 # ================================================================ #
 
+def _config_defaults() -> tuple[str, str]:
+    """从 ``config.yml`` 读取日志目录与级别。
+
+    读取失败（文件缺失 / 解析异常 / 取值非法）时回退到内置默认值，
+    日志系统本身不应因为配置问题而起不来。
+
+    :return: ``(log_dir, level)``
+    """
+    log_dir, level = "logs", "INFO"
+    try:
+        from core.config import ServerConfig
+
+        cfg = ServerConfig.load()
+        log_dir = cfg.get_str("logging.dir", log_dir) or log_dir
+        level = cfg.get_str("logging.level", level).upper()
+    except Exception:
+        return log_dir, level
+    if level not in _VALID_LEVELS:
+        level = "INFO"
+    return log_dir, level
+
+
 def init(
-    log_dir: str | Path = "logs",
-    level: str = "DEBUG",
+    log_dir: str | Path | None = None,
+    level: str | None = None,
     rotation: str = "10 MB",
     retention: str = "7 days",
     console: bool = True,
@@ -210,8 +236,10 @@ def init(
 
     应在程序入口处调用一次。
 
-    :param log_dir: 日志文件存放目录
-    :param level: 最低输出级别（DEBUG / INFO / WARNING / ERROR）
+    :param log_dir: 日志文件存放目录；``None`` 时取 ``config.yml`` 的
+        ``logging.dir``（缺省 ``logs``）
+    :param level: 最低输出级别（DEBUG / INFO / WARNING / ERROR）；``None`` 时取
+        ``config.yml`` 的 ``logging.level``（缺省 ``INFO``）
     :param rotation: 日志分割策略，例如 ``"10 MB"``、``"00:00"``（每天零点）
     :param retention: 日志保留时长，例如 ``"7 days"``、``"1 week"``
     :param console: 是否同时输出到控制台
@@ -220,6 +248,11 @@ def init(
 
     if _initialized:
         return
+
+    if log_dir is None or level is None:
+        cfg_dir, cfg_level = _config_defaults()
+        log_dir = cfg_dir if log_dir is None else log_dir
+        level = cfg_level if level is None else level
 
     global _LOG_DIR
     _LOG_DIR = Path(log_dir)
