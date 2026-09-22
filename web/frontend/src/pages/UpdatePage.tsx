@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
+import { Select } from '../components/Select';
 import { Switch } from '../components/Switch';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ChangelogDialog } from '../components/ChangelogDialog';
@@ -385,10 +386,9 @@ export function UpdatePage() {
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">镜像站（可选，加速 API 与下载）</label>
-            <select
+            <Select
               value={mirrorCustom ? 'custom' : (MIRROR_PRESETS.some(m => m.url === mirror) ? mirror : '')}
-              onChange={e => {
-                const v = e.target.value;
+              onChange={v => {
                 if (v === 'custom') {
                   setMirrorCustom(true); // 切换到自定义模式，输入框继续编辑原值
                 } else {
@@ -396,13 +396,15 @@ export function UpdatePage() {
                   setMirror(v);
                 }
               }}
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm outline-none focus:ring-2 focus:ring-primary-500">
-              <option value="">直连 GitHub（不使用镜像）</option>
-              {MIRROR_PRESETS.map(m => (
-                <option key={m.url} value={m.url}>{m.name}（{m.url}）</option>
-              ))}
-              <option value="custom">自定义地址...</option>
-            </select>
+              placeholder="直连 GitHub（不使用镜像）"
+              ariaLabel="镜像站"
+              className="w-full"
+              options={[
+                { value: '', label: '直连 GitHub（不使用镜像）' },
+                ...MIRROR_PRESETS.map(m => ({ value: m.url, label: `${m.name}（${m.url}）` })),
+                { value: 'custom', label: '自定义地址...' },
+              ]}
+            />
             {mirrorCustom && (
               <input value={mirror} onChange={e => setMirror(e.target.value)}
                 placeholder="如 https://gh-proxy.com/"

@@ -2,6 +2,7 @@ import {useCallback, useEffect, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {ExternalLink, Loader2, RefreshCw, Trash2, X} from 'lucide-react';
 import {Button} from './Button';
+import {Select} from './Select';
 import {ConfirmDialog} from './ConfirmDialog';
 
 // =====================================================================
@@ -474,12 +475,16 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                       </Button>
                     </div>
                   ) : isSelect ? (
-                    <select value={promptValues[f.key] ?? ''}
-                      onChange={e => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
-                      className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm outline-none focus:ring-2 focus:ring-primary-500">
-                      <option value="">-- 请选择 --</option>
-                      {f.options!.map((o: {label: string; value: string}) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                    </select>
+                    <Select
+                      value={promptValues[f.key] ?? ''}
+                      onChange={v => setPromptValues(prev => ({ ...prev, [f.key]: v }))}
+                      placeholder="-- 请选择 --"
+                      ariaLabel={f.label}
+                      className="w-full"
+                      options={f.options!.map((o: { label: string; value: string }) => ({
+                        value: o.value, label: o.label,
+                      }))}
+                    />
                   ) : (
                     <input type={f.input_type || 'text'} value={promptValues[f.key] ?? ''}
                       onChange={(e) => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
@@ -736,10 +741,16 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
         {/* Toolbar */}
         <div className="flex items-center gap-2 flex-wrap">
           {rooms.length > 1 && (
-            <select value={roomId} onChange={e => setRoomId(Number(e.target.value))}
-              className="w-full sm:w-auto px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-700 dark:text-gray-300">
-              {rooms.map((r: any) => <option key={r.room_id} value={r.room_id}>{r.room_name} ({r.count}条)</option>)}
-            </select>
+            <Select
+              value={String(roomId)}
+              onChange={v => setRoomId(Number(v))}
+              size="sm"
+              ariaLabel="选择直播间"
+              className="w-full sm:w-auto"
+              options={rooms.map((r: any) => ({
+                value: String(r.room_id), label: `${r.room_name} (${r.count}条)`,
+              }))}
+            />
           )}
           {rooms.length === 1 && <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{rooms[0].room_name}</span>}
           <Button variant="ghost" size="sm" icon={<RefreshCw />} onClick={load}>刷新</Button>
@@ -968,11 +979,16 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
 
             {/* select */}
             {f.type === 'select' && f.options && (
-              <select value={formValues[f.key] ?? ''} onChange={e => updateField(f.key, e.target.value)}
-                required={f.required} className={inputCls}>
-                <option value="">-- 请选择 --</option>
-                {f.options.map((o: {label: string; value: string}) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+              <Select
+                value={formValues[f.key] ?? ''}
+                onChange={v => updateField(f.key, v)}
+                placeholder="-- 请选择 --"
+                ariaLabel={f.label}
+                className="w-full"
+                options={f.options.map((o: { label: string; value: string }) => ({
+                  value: o.value, label: o.label,
+                }))}
+              />
             )}
 
             {/* switch */}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Save, RotateCcw, Plus, X, ChevronDown, ChevronUp } from 'lucide-react';
 import type { ConfigFieldSchema } from '../api/types';
 import { Button } from './Button';
+import { Select } from './Select';
 
 interface Props {
   schema: Record<string, ConfigFieldSchema>;
@@ -140,18 +141,16 @@ export function DynamicConfigForm({ schema, values, onSave, loading }: Props) {
             {label}
           </label>
           <p className="text-[10px] text-surface-400">{key}</p>
-          <select
+          <Select
             value={String(value ?? '')}
-            onChange={(e) => handleChange(key, e.target.value)}
-            className="input"
-          >
-            <option value="">-- 选择 --</option>
-            {field.options.map((opt) => (
-              <option key={String(opt.value)} value={String(opt.value)}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => handleChange(key, v)}
+            placeholder="-- 选择 --"
+            ariaLabel={label || key}
+            className="w-full"
+            options={field.options.map((opt) => ({
+              value: String(opt.value), label: String(opt.label),
+            }))}
+          />
         </div>
       );
     }

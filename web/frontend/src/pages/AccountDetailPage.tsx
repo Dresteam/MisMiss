@@ -26,6 +26,7 @@ import type {
   TimerData, TimerMessageItem, BulkGroup, RenewRequest,
 } from '../api/types';
 import { Button } from '../components/Button';
+import { Select } from '../components/Select';
 import { Switch } from '../components/Switch';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
@@ -362,10 +363,13 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
             <div className="flex gap-2 pt-3 border-t border-gray-100 dark:border-gray-700">
               <input value={msgText} onChange={(e) => setMsgText(e.target.value)}
                 className="input flex-1" placeholder="输入要发送的弹幕..." />
-              <select value={msgPriority} onChange={(e) => setMsgPriority(Number(e.target.value))} className="input w-28">
-                <option value={0}>普通</option>
-                <option value={1}>优先</option>
-              </select>
+              <Select
+                value={String(msgPriority)}
+                onChange={(v) => setMsgPriority(Number(v))}
+                options={[{ value: '0', label: '普通' }, { value: '1', label: '优先' }]}
+                ariaLabel="弹幕优先级"
+                className="w-28 shrink-0"
+              />
               <Button icon={<Send className="w-4 h-4" />} loading={processing === 'send'} disabled={btn('send')}
                 onClick={() => act('send', () => sendAccountLiveMessage(acc.id, msgText, msgPriority).then(() => setMsgText('')), '消息已发送')}>
                 发送
