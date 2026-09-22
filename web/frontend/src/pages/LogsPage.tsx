@@ -3,6 +3,7 @@ import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import Convert from 'ansi-to-html';
 import {
   Terminal, Download, X, ArrowDown, Search, RefreshCw, Package, Loader2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useLogStream, type LogEntry } from '../hooks/useLogStream';
 import { Button } from '../components/Button';
@@ -35,6 +36,9 @@ export function LogsPage() {
   // 账户筛选可多选：空数组 = 不过滤；含 '' 表示只看面板级；其余为账户名
   const [filterAccounts, setFilterAccounts] = useState<string[]>([]);
   const [accountOptions, setAccountOptions] = useState<AccountSummary[]>([]);
+  // 窄屏下筛选区默认折叠（sm 起常驻展开，由 CSS 控制）
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilterCount = filterLevels.size + filterAccounts.length;
 
   // 级别与账户筛选均下推到后端（源头过滤），变化时 hook 自动重连重拉
   const { entries, connected, authRequired, loading, total, hasMore, loadMore, refresh } =
@@ -169,23 +173,30 @@ export function LogsPage() {
             {filtered.length !== entries.length && `（筛选后 ${filtered.length} 条）`}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-1">
-          {levels.map((lv) => {
-            const active = filterLevels.has(lv);
-            return (
-              <button key={lv} onClick={() => toggleLevel(lv)}
-                className={`px-2 py-1 text-[11px] font-medium rounded transition-colors
-                  ${active
-                    ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
-                    : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
-                {lv}
-              </button>
-            );
-          })}
-          {filterLevels.size > 0 && (
-            <button onClick={() => setFilterLevels(new Set())}
-              className="px-2 py-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors">清除</button>
-          )}
+        {/* 窄屏收起筛选：日志页的主角是日志本身，6 个级别 + 账户 + 3 个操作
+            能占掉三行。折叠后默认只留搜索行，点「筛选」展开。 */}
+        <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex
+                         flex-wrap items-center gap-1 w-full sm:w-auto`}>
+          {/* 级别药丸独占一行并横向滚动，避免窄屏折成两行且不挤压其它控件 */}
+          <div className="flex items-center gap-1 overflow-x-auto max-w-full sm:max-w-none
+                          shrink-0 pb-0.5 sm:pb-0">
+            {levels.map((lv) => {
+              const active = filterLevels.has(lv);
+              return (
+                <button key={lv} onClick={() => toggleLevel(lv)}
+                  className={`px-2 py-1 text-[11px] font-medium rounded transition-colors shrink-0
+                    ${active
+                      ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
+                      : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                  {lv}
+                </button>
+              );
+            })}
+            {filterLevels.size > 0 && (
+              <button onClick={() => setFilterLevels(new Set())}
+                className="px-2 py-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors shrink-0">清除</button>
+            )}
+          </div>
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
           <AccountFilter
             accounts={accountOptions}
@@ -193,30 +204,51 @@ export function LogsPage() {
             onChange={setFilterAccounts}
           />
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
+          {/* 次要操作窄屏只留图标（display:none 的子节点不占 flex 间距） */}
           <Button variant="ghost" size="sm" icon={<RefreshCw />}
-            onClick={refresh}>刷新</Button>
+            title="刷新" aria-label="刷新" onClick={refresh}>
+            <span className="hidden sm:inline">刷新</span>
+          </Button>
           <Button variant="ghost" size="sm" icon={<Package />}
-            onClick={() => setPipOpen(true)}>安装包</Button>
+            title="安装包" aria-label="安装包" onClick={() => setPipOpen(true)}>
+            <span className="hidden sm:inline">安装包</span>
+          </Button>
           <Button variant="ghost" size="sm" icon={<Download />}
-            onClick={handleExport}>导出</Button>
+            title="导出" aria-label="导出" onClick={handleExport}>
+            <span className="hidden sm:inline">导出</span>
+          </Button>
         </div>
       </div>
 
-      {/* Search bar */}
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
+      {/* Search bar：窄屏与「筛选」开关同一行 */}
+      <div className="flex items-center gap-2 mb-2">
         <Search className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 shrink-0" />
         <input type="text" value={keyword} onChange={(e) => setKeyword(e.target.value)}
           placeholder="搜索日志关键词..."
-          className="flex-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700
+          className="flex-1 min-w-0 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700
                      rounded-md px-3 py-1.5 text-xs
                      text-gray-900 dark:text-gray-300 placeholder-gray-400 dark:placeholder-gray-600
                      focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 transition-colors" />
         {keyword && (
           <button onClick={() => setKeyword('')}
-            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500">
+            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500 shrink-0">
             <X className="w-3 h-3" />
           </button>
         )}
+        <button onClick={() => setFiltersOpen((v) => !v)}
+          aria-expanded={filtersOpen}
+          className={`sm:hidden shrink-0 flex items-center gap-1 h-7 px-2.5 rounded-md text-xs
+                      border transition-colors
+            ${filtersOpen || activeFilterCount > 0
+              ? 'border-primary-400 dark:border-primary-600 text-primary-600 dark:text-primary-400'
+              : 'border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400'}`}>
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          筛选
+          {activeFilterCount > 0 && (
+            <span className="min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white
+                             text-[10px] leading-4 text-center">{activeFilterCount}</span>
+          )}
+        </button>
       </div>
 
       {/* Log area */}

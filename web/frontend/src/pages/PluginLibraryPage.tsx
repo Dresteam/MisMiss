@@ -257,19 +257,24 @@ export function PluginLibraryPage() {
 
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl">
-      <div className="flex items-center justify-between">
-        <div>
+      {/* 窄屏下标题与操作分两行：操作组独占整行才不会挤成三行 */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">插件库</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             面板级统一安装管理,各账户按需启用 · {plugins.length} 个插件
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />}
+        {/* 次要操作在窄屏只留图标（display:none 的元素不占 flex 间距，
+            故不会多出一段空隙），5 个操作仍排得下一行；sm 起恢复文字 */}
+        <div className="flex flex-wrap gap-1.5 sm:gap-2">
+          <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />}
+            title="刷新" aria-label="刷新"
             onClick={async () => { await refreshPlugins(); load(); showToast('success', '已刷新', ''); }}>
-            刷新
+            <span className="hidden sm:inline">刷新</span>
           </Button>
-          <Button variant="secondary" icon={<Send className="w-4 h-4" />}
+          <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />}
+            title="推送全部到账户" aria-label="推送全部到账户"
             loading={processing === '__push_all__'} disabled={!!processing}
             onClick={() => askBulk({
               key: '__push_all__',
@@ -280,9 +285,10 @@ export function PluginLibraryPage() {
               preview: () => pushAllPlugins(true),
               run: async () => (await pushAllPlugins(false)).message,
             })}>
-            推送全部到账户
+            <span className="hidden sm:inline">推送全部到账户</span>
           </Button>
-          <Button variant="secondary" icon={<Sparkles className="w-4 h-4" />}
+          <Button variant="secondary" size="sm" icon={<Sparkles className="w-4 h-4" />}
+            title="应用默认插件" aria-label="应用默认插件"
             loading={processing === '__apply_defaults__'} disabled={!!processing}
             onClick={() => askBulk({
               key: '__apply_defaults__',
@@ -293,13 +299,14 @@ export function PluginLibraryPage() {
               preview: () => applyDefaultPlugins(true),
               run: async () => (await applyDefaultPlugins(false)).message,
             })}>
-            应用默认插件
+            <span className="hidden sm:inline">应用默认插件</span>
           </Button>
-          <Button variant="ghost" icon={<ScrollText className="w-4 h-4" />}
+          <Button variant="ghost" size="sm" icon={<ScrollText className="w-4 h-4" />}
+            title="插件日志" aria-label="插件日志"
             onClick={() => { setLogHint(''); setLogOpen(true); }}>
-            插件日志
+            <span className="hidden sm:inline">插件日志</span>
           </Button>
-          <Button variant="primary" icon={<Upload className="w-4 h-4" />}
+          <Button variant="primary" size="sm" icon={<Upload className="w-4 h-4" />}
             onClick={() => fileRef.current?.click()}>
             安装插件
           </Button>
