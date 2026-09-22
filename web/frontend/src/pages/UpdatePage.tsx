@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
+import { Switch } from '../components/Switch';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ChangelogDialog } from '../components/ChangelogDialog';
 import { MarkdownRenderer } from '../components/MarkdownRenderer';
@@ -306,15 +307,13 @@ export function UpdatePage() {
           <h2 className="text-sm font-semibold text-gray-900 dark:text-white">版本列表</h2>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-500 dark:text-gray-400">显示预发布版本</span>
-            <button
-              onClick={() => { setShowPre(!showPre); setPage(1); }}
+            <Switch
+              checked={showPreEffective}
+              onChange={() => { setShowPre(!showPre); setPage(1); }}
               disabled={stableReleases.length === 0}
+              label="显示预发布版本"
               title={stableReleases.length === 0 ? '暂无正式版本' : undefined}
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed
-                ${showPreEffective ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-              <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
-                ${showPreEffective ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
-            </button>
+            />
           </div>
         </div>
         {pageReleases.length === 0 ? (
@@ -432,16 +431,13 @@ export function UpdatePage() {
             <span className="text-xs text-gray-500 dark:text-gray-400">
               启用更新提示{notifySaving && <span className="ml-1 text-gray-400">保存中…</span>}
             </span>
-            <button
-              onClick={toggleNotify}
+            <Switch
+              checked={notifyEnabled}
+              onChange={toggleNotify}
               disabled={notifySaving}
+              label="启用更新提示"
               title="点击即时生效，无需再点保存"
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
-                disabled:opacity-60 disabled:cursor-wait
-                ${notifyEnabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}>
-              <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
-                ${notifyEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
-            </button>
+            />
           </div>
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">

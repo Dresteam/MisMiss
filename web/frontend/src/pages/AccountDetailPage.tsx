@@ -26,6 +26,7 @@ import type {
   TimerData, TimerMessageItem, BulkGroup, RenewRequest,
 } from '../api/types';
 import { Button } from '../components/Button';
+import { Switch } from '../components/Switch';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -1407,14 +1408,21 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <label
-            title="开启后，从插件库安装插件会立即启用它；默认关闭（安装后保持停用）"
-            className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none">
-            <input type="checkbox" checked={autoEnable} disabled={savingPref}
-              onChange={(e) => toggleAutoEnable(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary-600 focus:ring-primary-500 disabled:opacity-50" />
-            安装后自动启用
-          </label>
+          {/* 开关按下即通过 /accounts/{id}/preferences 落盘（乐观更新，失败回滚），
+              无需再点保存；保存期间显示 spinner 并禁用，避免连点 */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600 dark:text-gray-300 select-none">
+              安装后自动启用
+            </span>
+            {savingPref && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+            <Switch
+              checked={autoEnable}
+              onChange={toggleAutoEnable}
+              disabled={savingPref}
+              label="安装后自动启用"
+              title="开启后，从插件库安装插件会立即启用它；默认关闭（安装后保持停用）。点击即保存"
+            />
+          </div>
           <Button variant="secondary" icon={<RefreshCw className="w-4 h-4" />}
             onClick={() => { setLoading(true); load(); }}>
             刷新
