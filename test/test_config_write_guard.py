@@ -11,6 +11,7 @@
 
 运行： .venv/Scripts/python.exe test/test_config_write_guard.py
 """
+import errno
 import os
 import stat
 import sys
@@ -28,6 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from web.backend.main import app  # noqa: E402
 from api.routes import config as cfgmod  # noqa: E402
 from api.routes import update as upd  # noqa: E402
+from core.config import write_text_resilient  # noqa: E402
 
 res: list[tuple[str, bool, str]] = []
 
@@ -49,6 +51,47 @@ update:
   repo: Dresteam/MisMiss
   mirror: ''
 """
+
+# ---------------------------------------------------------------- #
+# 单文件 bind mount：os.replace 到挂载点是 EBUSY，必须能退回直接覆写
+# （Docker 的 config.yml 就是单文件挂载 —— 「写临时文件再原子替换」在那里必然失败）
+# ---------------------------------------------------------------- #
+
+_mnt = Path(tempfile.mkdtemp(prefix="mismiss-mountpoint-")) / "config.yml"
+_mnt.write_text("server:\n  api_port: 1\n", encoding="utf-8")
+
+_real_replace = os.replace
+
+
+def _busy_replace(src, dst, **kw):
+    """模拟 rename 到挂载点：内核返回 EBUSY。"""
+    raise OSError(errno.EBUSY, "Device or resource busy", str(dst))
+
+
+def _perm_replace(src, dst, **kw):
+    raise OSError(errno.EACCES, "Permission denied", str(dst))
+
+
+os.replace = _busy_replace          # type: ignore[assignment]
+try:
+    write_text_resilient(_mnt, "server:\n  api_port: 2\n")
+    check("EBUSY 时退回直接覆写（内容已更新）",
+          _mnt.read_text(encoding="utf-8") == "server:\n  api_port: 2\n",
+          repr(_mnt.read_text(encoding="utf-8")))
+    check("退回覆写后不留临时文件",
+          not (_mnt.parent / "config.yml.tmp").exists(),
+          str([q.name for q in _mnt.parent.iterdir()]))
+
+    # 非 EBUSY 的错误不能被吞掉（权限不足之类应照常报错）
+    os.replace = _perm_replace      # type: ignore[assignment]
+    try:
+        write_text_resilient(_mnt, "server:\n  api_port: 3\n")
+        check("非 EBUSY 错误应当抛出", False, "却静默成功了")
+    except OSError as e:
+        check("非 EBUSY 错误照常抛出", e.errno == errno.EACCES, str(e))
+finally:
+    os.replace = _real_replace      # type: ignore[assignment]
+
 
 _tmp = Path(tempfile.mkdtemp(prefix="mismiss-cfg-file-"))
 _cfg = _tmp / "config.yml"

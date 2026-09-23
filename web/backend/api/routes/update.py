@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -21,7 +20,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.account import BROADCAST_MAX_LEN, AccountManager, clip_broadcast
-from core.config import ServerConfig
+from core.config import ServerConfig, write_text_resilient
 from core.logging import get_logger
 from core.version import CURRENT_VERSION
 from api.deps import get_account_manager
@@ -111,15 +110,13 @@ def _save_update_config(
     data["update"]["notify_enabled"] = bool(notify_enabled)
     data["update"]["notify_before"] = notify_before
     data["update"]["notify_after"] = notify_after
-    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
     try:
         # sort_keys=False —— 与 /api/config 的写回保持一致，
         # 否则面板每存一次设置就把用户的 config.yml 键序打乱
-        tmp_path.write_text(
+        write_text_resilient(
+            config_path,
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
         )
-        os.replace(tmp_path, config_path)
     except OSError as e:
         raise HTTPException(
             status_code=500,

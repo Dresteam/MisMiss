@@ -13,7 +13,7 @@ import yaml
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.account import AccountManager
-from core.config import ServerConfig
+from core.config import ServerConfig, write_text_resilient
 from api.deps import get_account_manager
 
 router = APIRouter()
@@ -47,8 +47,10 @@ def _read_config_file() -> dict:
 def _write_config_file(data: dict) -> None:
     """写回 config.yml，失败时给出可操作的提示而不是裸 500。"""
     try:
-        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        write_text_resilient(
+            _CONFIG_PATH,
+            yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        )
     except OSError as e:
         raise HTTPException(
             status_code=500,

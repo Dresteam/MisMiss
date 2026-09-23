@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 from pathlib import Path
@@ -173,9 +174,7 @@ class ServerConfig:
         node[keys[-1]] = value
 
     def save(self) -> None:
-        """将当前配置原子写回加载时使用的配置文件。
-
-        先写临时文件再替换，防止写一半崩溃导致文件损坏。
+        """将当前配置写回加载时使用的配置文件。
 
         :raises OSError: 写入失败（如目录不可写）
         """
@@ -188,10 +187,42 @@ class ServerConfig:
                 path = str(
                     Path(__file__).resolve().parent.parent.parent / "config.yml"
                 )
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            yaml.dump(self._data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        os.replace(tmp_path, path)
+        text = yaml.dump(
+            self._data, allow_unicode=True, default_flow_style=False, sort_keys=False,
+        )
+        write_text_resilient(path, text)
+
+
+def write_text_resilient(path: str | Path, text: str) -> None:
+    """尽量原子地写文本文件；原子替换不可行时退回直接覆写。
+
+    常规安装走「写临时文件 + ``os.replace``」，保证写一半崩溃也不会毁掉原文件。
+    但 **Docker 把 config.yml 以单文件 bind mount 挂进容器**时，目标本身是个挂载点，
+    ``rename`` 到挂载点会返回 ``EBUSY`` —— 此时只能退回直接覆写：牺牲原子性换取可用性
+    （不这么做的话，面板里所有写配置的入口在 Docker 下都会失败）。
+
+    :param path: 目标文件
+    :param text: 完整的新内容
+    :raises OSError: 两种方式都失败时抛出（保留原始错误）
+    """
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, p)
+        return
+    except OSError as e:
+        # 清理可能残留的临时文件，避免下次写入读到脏数据
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if e.errno != errno.EBUSY:
+            raise
+
+    # 挂载点：只能在目标上直接写。非原子，但总好过完全写不了
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(text)
 
     # ------------------------------------------------------------------ #
     # dunder
