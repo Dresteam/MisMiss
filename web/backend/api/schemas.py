@@ -65,7 +65,10 @@ class BotCookieResponse(BaseModel):
 class LiveAddRequest(BaseModel):
     """添加直播间请求。"""
 
-    live_id: int = Field(..., gt=0, description="直播间 ID")
+    live_id: int | str = Field(
+        ...,
+        description="直播间 ID，或直播间链接（如 https://fm.missevan.com/live/869198039）",
+    )
 
 
 class LiveMessageRequest(BaseModel):
@@ -292,6 +295,8 @@ class AccountSummary(BaseModel):
     bot_public: bool = False
     room_connected: bool = False
     room_enabled: bool = False
+    # 该账户直播间当前是否开播中（与「已连接」是两件事：连着但没开播是常态）
+    room_streaming: bool = False
     room_name: str = ""
     plugin_count: int = 0
     # 操作结果提示(如「永久账户无需续期」),仅写操作返回,供前端弹 toast
@@ -309,6 +314,9 @@ class PanelOverview(BaseModel):
 
     accounts: list[AccountSummary] = []
     total: int = 0
+    # 下一个账户 id —— 前端据此预填默认用户名 user_{num}。
+    # 必须由后端给：删过账户后 id 会跳号，前端按 max(id)+1 算会对不上
+    next_account_id: int = 1
     expired_count: int = 0
     running_count: int = 0
     public_bot_configured: bool = False

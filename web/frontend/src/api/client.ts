@@ -579,7 +579,9 @@ export async function fetchAccountLive(id: number): Promise<LivestreamInfo | nul
   return request<LivestreamInfo | null>(`/accounts/${id}/live/`);
 }
 
-export async function addAccountLive(id: number, liveId: number): Promise<LivestreamInfo> {
+export async function addAccountLive(
+  id: number, liveId: number | string,
+): Promise<LivestreamInfo> {
   return request<LivestreamInfo>(`/accounts/${id}/live/add`, {
     method: 'POST',
     body: JSON.stringify({ live_id: liveId }),

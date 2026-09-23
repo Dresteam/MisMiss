@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from './Button';
 import type { AccountCreateRequest, RenewRequest } from '../api/types';
+import { parseLiveId } from '../utils/live';
 
 // ================================================================== //
 // 创建账户对话框
@@ -12,9 +13,11 @@ interface CreateAccountDialogProps {
   loading?: boolean;
   onConfirm: (data: AccountCreateRequest) => void;
   onCancel: () => void;
+  /** 下一个账户 id —— 用于预填默认用户名 user_{num} */
+  nextAccountId?: number;
 }
 
-export function CreateAccountDialog({ open, loading, onConfirm, onCancel }: CreateAccountDialogProps) {
+export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAccountId }: CreateAccountDialogProps) {
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [botMode, setBotMode] = useState<'private' | 'public'>('public');
@@ -24,13 +27,30 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel }: Crea
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
+  // 打开时预填默认凭据（仍可改）。用 useEffect 而非 useState 初值：
+  // nextAccountId 是异步取到的，弹窗挂载时可能还没有
+  useEffect(() => {
+    if (!open) return;
+    setName('');
+    setRoomId('');
+    setBotMode('public');
+    setCookie('');
+    setDurationDays('-1');
+    setUsername(nextAccountId ? `user_${nextAccountId}` : '');
+    setPassword('user123');
+    setError('');
+  }, [open, nextAccountId]);
+
   if (!open) return null;
 
   const submit = () => {
     if (!name.trim()) { setError('请输入账户名称'); return; }
     if (!username.trim()) { setError('登录用户名必填'); return; }
-    const rid = roomId.trim() ? Number(roomId) : null;
-    if (roomId.trim() && (!Number.isInteger(rid!) || rid! <= 0)) { setError('直播间 ID 必须为正整数'); return; }
+    const rid = roomId.trim() ? parseLiveId(roomId) : null;
+    if (roomId.trim() && rid === null) {
+      setError('直播间 ID 或链接无法识别，请粘贴形如 https://fm.missevan.com/live/869198039 的链接');
+      return;
+    }
     const days = Number(durationDays);
     if (!Number.isInteger(days)) { setError('有效时长必须为整数(天),-1 表示永久'); return; }
     if (botMode === 'private' && !cookie.trim()) { setError('私有模式必须填写 Cookie'); return; }
@@ -63,9 +83,9 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel }: Crea
               className="input w-full" placeholder="如:主播A-场控" />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">直播间 ID(可选)</label>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">直播间 ID 或链接(可选)</label>
             <input value={roomId} onChange={(e) => setRoomId(e.target.value)}
-              className="input w-full" placeholder="如 869198039" inputMode="numeric" />
+              className="input w-full" placeholder="如 869198039，或粘贴直播间链接" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Bot 模式</label>
@@ -112,7 +132,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel }: Crea
                 登录密码
               </label>
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                className="input w-full" placeholder="至少 4 位,留空随机生成" />
+                className="input w-full" placeholder="至少 4 位,默认 user123" />
             </div>
           </div>
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}

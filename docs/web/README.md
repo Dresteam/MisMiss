@@ -225,7 +225,7 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/accounts/{id}/live/` | 直播间信息 |
-| POST | `/api/accounts/{id}/live/add` | 绑定/更换直播间 |
+| POST | `/api/accounts/{id}/live/add` | 绑定/更换直播间（`live_id` 可传数字或直播间链接） |
 | DELETE | `/api/accounts/{id}/live/` | 解除绑定 |
 | POST | `/api/accounts/{id}/live/refresh` | 刷新房间信息 |
 | POST | `/api/accounts/{id}/live/enable` | 启用（自动进入直播间） |
@@ -336,6 +336,16 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | GET | `/api/logs/history?since=&limit=&levels=&scope=&account=` | 历史日志分页查询（`scope=plugin` 仅返回插件相关日志） |
 | GET | `/api/logs/gap?from_seq=&to_seq=` | 断线补发（数据被淘汰时返回 `status: expired`） |
 | GET | `/api/logs/stats` | 环形缓冲区统计（容量 10000 条） |
+
+**直播间的绑定与跳转**：
+
+- 绑定/更换直播间时 `live_id` 既接受裸数字，也接受**直播间链接**（`fm.missevan.com/live/<id>`，
+  带协议头、`www`、结尾斜杠、查询串、锚点都可以）；解析不出来返回 400 并说明原因。
+  规则在 `core.network.urls.parse_live_id`，前端 `utils/live.ts` 有一份等价实现用于即时校验
+- 账户总览的 `room_streaming` 表示该账户直播间**是否开播中**，与 `room_connected`
+  （WS 是否连着）是两件事 —— 连着但没开播是常态，两者分别展示
+- 开播状态由平台的 WS 开播/下播通知**同步**更新（`LiveOpenEvent`/`LiveCloseEvent`），
+  不再依赖异步的房间信息接口；后者只用来补齐人数、封面等展示字段
 
 **日志的账户筛选**：`account` 参数**可重复传递以多选**（`?account=甲&account=乙`），
 WebSocket 实时推送用同一套参数；其中**空串表示只看面板级日志**，不传该参数则不过滤。

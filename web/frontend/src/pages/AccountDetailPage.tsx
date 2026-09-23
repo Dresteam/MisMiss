@@ -37,6 +37,7 @@ import { UninstallDialog } from '../components/UninstallDialog';
 import { PluginLogDialog } from '../components/PluginLogDialog';
 import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
+import { livePageUrl, parseLiveId } from '../utils/live';
 
 const PERM_NAMES = ['SEND_LIVESTREAM_MESSAGE', 'SEND_PRIVATE_MESSAGE', 'SEND_BACKPACK_GIFT', 'SEND_GIFT', 'EXPOSE_COOKIE'];
 const PERM_LABELS: Record<string, string> = {
@@ -161,6 +162,18 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
     return act('retry', () => addAccountLive(acc.id, rid), '直播间信息已重新加载');
   };
 
+  /**
+   * 把输入框内容解析成直播间 id。
+   * 既接受裸 ID，也接受粘贴的直播间链接；解析失败抛错，由 act 统一弹提示。
+   */
+  const resolveLiveInput = () => {
+    const id = parseLiveId(liveIdInput);
+    if (id === null) {
+      throw new Error('请填写直播间 ID，或粘贴形如 https://fm.missevan.com/live/869198039 的链接');
+    }
+    return id;
+  };
+
   return (
     <div className="space-y-4">
       {loading && !room ? (
@@ -170,9 +183,9 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
           <div className="card-body">
             <div className="flex gap-2">
               <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
-                className="input flex-1" placeholder="输入直播间 ID..." inputMode="numeric" />
+                className="input flex-1" placeholder="输入直播间 ID 或粘贴直播间链接" />
               <Button loading={processing === 'add'} disabled={btn('add')}
-                onClick={() => act('add', () => addAccountLive(acc.id, Number(liveIdInput)), '直播间已绑定')}>
+                onClick={() => act('add', () => addAccountLive(acc.id, resolveLiveInput()), '直播间已绑定')}>
                 绑定
               </Button>
             </div>
@@ -201,7 +214,7 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
                   <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
                     className="input flex-1" placeholder="输入新的直播间 ID..." inputMode="numeric" autoFocus />
                   <Button loading={processing === 'switch'} disabled={btn('switch')}
-                    onClick={() => act('switch', () => addAccountLive(acc.id, Number(liveIdInput)).then(() => {
+                    onClick={() => act('switch', () => addAccountLive(acc.id, resolveLiveInput()).then(() => {
                       setSwitching(false);
                       setLiveIdInput('');
                     }), '直播间已更换')}>
@@ -239,7 +252,7 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
                 <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
                   className="input flex-1" placeholder="输入新的直播间 ID..." inputMode="numeric" autoFocus />
                 <Button loading={processing === 'switch'} disabled={btn('switch')}
-                  onClick={() => act('switch', () => addAccountLive(acc.id, Number(liveIdInput)).then(() => {
+                  onClick={() => act('switch', () => addAccountLive(acc.id, resolveLiveInput()).then(() => {
                     setSwitching(false);
                     setLiveIdInput('');
                   }), '直播间已更换')}>
@@ -277,10 +290,18 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
                 </span>
               </div>
               {/* 房间名 */}
-              <div className="absolute bottom-3 left-4 right-4">
-                <p className="text-white font-semibold text-lg drop-shadow">
+              <div className="absolute bottom-3 left-4 right-4 flex items-center gap-2">
+                <p className="text-white font-semibold text-lg drop-shadow truncate">
                   {room.room_name} ({room.live_id})
                 </p>
+                <a href={livePageUrl(room.live_id)} target="_blank" rel="noopener noreferrer"
+                  title="在猫耳打开直播间"
+                  className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg
+                             bg-black/30 hover:bg-black/50 text-white text-xs
+                             backdrop-blur-sm transition-colors">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  打开
+                </a>
               </div>
             </div>
           )}

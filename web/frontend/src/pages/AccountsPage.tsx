@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
-  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus,
+  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
@@ -16,6 +16,7 @@ import { CreateAccountDialog, RenewDialog, CredentialsDialog } from '../componen
 import { CompensateDialog } from '../components/CompensateDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { showToast } from '../hooks/useToast';
+import { livePageUrl } from '../utils/live';
 
 export function AccountsPage() {
   const navigate = useNavigate();
@@ -204,11 +205,28 @@ export function AccountsPage() {
                   <div className="flex justify-end">
                     <StatusBadge status={acc.bot_enabled && acc.bot_available ? 'enabled' : 'disabled'} label="Bot" />
                   </div>
-                  <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
-                    <Radio className="w-4 h-4" />
+                  <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300 min-w-0">
+                    <Radio className="w-4 h-4 shrink-0" />
                     <span className="truncate">{acc.room_name || (acc.room_id ? `房间 ${acc.room_id}` : '未绑定房间')}</span>
+                    {/* 外链要 relative z-10：卡片标题用 after:inset-0 铺了整卡点击层，
+                        不抬高层级的话这个链接会被那层盖住，点了会进账户页 */}
+                    {acc.room_id != null && (
+                      <a href={livePageUrl(acc.room_id)} target="_blank" rel="noopener noreferrer"
+                        title={`在猫耳打开直播间 ${acc.room_id}`}
+                        aria-label="打开直播间"
+                        className="relative z-10 shrink-0 p-0.5 rounded text-gray-400 hover:text-primary-600
+                                   dark:text-gray-500 dark:hover:text-primary-400 transition-colors">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
                   </div>
-                  <div className="flex justify-end">
+                  <div className="flex justify-end items-center gap-1.5">
+                    {/* 开播状态与「已连接」是两件事：连着但没开播是常态 */}
+                    {acc.room_id != null && (
+                      <StatusBadge
+                        status={acc.room_streaming ? 'online' : 'offline'}
+                        label={acc.room_streaming ? '开播中' : '未开播'} />
+                    )}
                     <StatusBadge status={acc.room_connected ? 'online' : 'offline'} label={acc.room_connected ? '已连接' : '未连接'} />
                   </div>
                 </div>
@@ -261,6 +279,7 @@ export function AccountsPage() {
         loading={creating}
         onConfirm={handleCreate}
         onCancel={() => setCreateOpen(false)}
+        nextAccountId={overview?.next_account_id}
       />
       <CompensateDialog
         open={compensateOpen}

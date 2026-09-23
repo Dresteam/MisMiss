@@ -508,6 +508,8 @@ class AccountManager:
                 "bot_public": rec.bot_mode == "public",
                 "room_connected": bool(room and room.is_connected),
                 "room_enabled": bool(room and room.enabled),
+                # 是否开播中：总览页要直接看出来，不必点进详情
+                "room_streaming": bool(room and getattr(room, "is_streaming", False)),
                 "room_name": (room.room_name or "") if room else "",
                 "plugin_count": len(server._plugin_manager.list_plugins()),
                 "enabled_plugin_count": sum(
@@ -522,6 +524,7 @@ class AccountManager:
                 "bot_enabled": False, "bot_available": False, "bot_name": "",
                 "bot_public": rec.bot_mode == "public",
                 "room_connected": False, "room_enabled": False, "room_name": "",
+                "room_streaming": False,
                 "plugin_count": 0, "enabled_plugin_count": 0,
                 "timer_message_count": 0,
                 "normal_timer_message_count": 0,
@@ -537,6 +540,10 @@ class AccountManager:
             "total": len(accounts),
             "expired_count": sum(1 for a in accounts if a["expired"]),
             "running_count": sum(1 for a in accounts if not a["expired"] and a["bot_enabled"]),
+            # 下一个账户 id —— 前端据此预填默认用户名 user_{num}。
+            # 必须由后端给：删过账户后 id 会跳号（存在 panel.json 里的计数器不回退），
+            # 前端按 max(id)+1 算会与真实分配值对不上
+            "next_account_id": self._next_account_id,
             "public_bot_configured": bool(self._public_bot.get("cookie")),
             "library_plugin_count": len(self.list_library_plugins()),
             "license_unused": sum(

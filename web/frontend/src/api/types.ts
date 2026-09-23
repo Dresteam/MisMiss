@@ -205,6 +205,8 @@ export interface AccountSummary {
   bot_public: boolean;
   room_connected: boolean;
   room_enabled: boolean;
+  /** 该账户直播间当前是否开播中 */
+  room_streaming: boolean;
   room_name: string;
   plugin_count: number;
   enabled_plugin_count: number;
@@ -223,6 +225,8 @@ export interface AccountSummary {
 export interface PanelOverview {
   accounts: AccountSummary[];
   total: number;
+  /** 下一个账户 id —— 用于预填默认用户名 user_{num} */
+  next_account_id: number;
   expired_count: number;
   running_count: number;
   public_bot_configured: boolean;

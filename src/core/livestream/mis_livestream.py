@@ -347,10 +347,18 @@ class MissevanLivestream(Livestream):
         from .handler import Live
         return Live(self)
 
+    def _refresh_soon(self) -> None:
+        """在事件循环里排一次房间信息刷新（无循环时静默跳过）。"""
+        import asyncio
+        try:
+            asyncio.get_running_loop().create_task(self._refresh())
+        except RuntimeError:
+            pass  # 无事件循环（如启动阶段），放弃本次异步刷新
+
     def _create_internal_listener(self) -> Listener:
         """创建内部事件监听器。
 
-        监听开播/下播事件以自动更新创建者在线状态。
+        监听开播/下播事件，同步更新开播状态与创建者在线状态。
 
         :return: 监听器实例
         """
@@ -359,25 +367,22 @@ class MissevanLivestream(Livestream):
         class _InternalListener(Listener):
             @event_handler
             def on_open(self, event: LiveOpenEvent) -> None:
+                # 开播/下播由平台经 WebSocket 明确告知，是最权威的信号 ——
+                # 必须**同步**改掉 is_streaming。此前只异步跑 _refresh() 去查
+                # room.status.open，于是会出现「主播已开播但仍显示未开播」：
+                # refresh 是另一个任务、还要发一次 API 请求，天然慢一拍；
+                # 万一请求失败就永远停在旧值，只有手动刷新才对得上。
+                livestream_ref._is_streaming = True
                 if livestream_ref._creator and hasattr(livestream_ref._creator, "set_online"):
                     livestream_ref._creator.set_online(True)
-                # 开播时刷新数据
-                import asyncio
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(livestream_ref._refresh())
-                except RuntimeError:
-                    pass
+                # 其余展示字段（人数、封面等）仍由接口补齐
+                livestream_ref._refresh_soon()
 
             @event_handler
             def on_close(self, event: LiveCloseEvent) -> None:
+                livestream_ref._is_streaming = False
                 if livestream_ref._creator and hasattr(livestream_ref._creator, "set_online"):
                     livestream_ref._creator.set_online(False)
-                import asyncio
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(livestream_ref._refresh())
-                except RuntimeError:
-                    pass
+                livestream_ref._refresh_soon()
 
         return _InternalListener()
