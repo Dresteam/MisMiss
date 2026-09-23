@@ -313,18 +313,18 @@ export interface BulkGroup {
   items: string[];
 }
 
-/** 批量补偿时长的筛选条件 */
+/** 批量补偿时长：目标账户默认全选，下列字段全部用于**排除** */
 export interface CompensateParams {
   /** 补偿天数（正整数） */
   days: number;
-  /** 是否包含已过期的账户 */
-  include_expired: boolean;
-  /** 是否包含未过期的账户 */
-  include_active: boolean;
-  /** 只补偿剩余天数 ≤ 该值的账户；null 表示不限 */
-  max_days_left?: number | null;
-  /** 只补偿这些账户 id；空/省略表示「符合条件的全选」 */
-  account_ids?: number[];
+  /** 排除已过期的账户 */
+  exclude_expired: boolean;
+  /** 排除未过期的账户 */
+  exclude_active: boolean;
+  /** 排除剩余天数多于该值的账户；null 表示不排除 */
+  exclude_over_days_left?: number | null;
+  /** 排除这些账户 id（手动取消勾选） */
+  exclude_ids?: number[];
   /** true = 只预览不动手 */
   dry_run?: boolean;
 }

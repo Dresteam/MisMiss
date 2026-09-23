@@ -177,18 +177,19 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 | DELETE | `/api/panel/licenses/{code}` | 撤销未使用的授权码 |
 
 **批量补偿时长**：`POST /api/panel/accounts/compensate`，请求体
-`{days, include_expired, include_active, max_days_left?, account_ids?, dry_run?}`。
+`{days, exclude_expired?, exclude_active?, exclude_over_days_left?, exclude_ids?, dry_run?}`。
 
-- 筛选条件之间取**并集**（勾了「已过期」和「未过期」就是两者合集）；两个都不勾
-  则没有候选，避免手滑把全部账户补一遍。`max_days_left` 再收窄为「剩余 ≤ N 天」，
-  `account_ids` 再收窄为「在这批 id 里」（手动勾选）
-- **永久账户始终排除**，并显式计入 `skipped`（管理员能看出为什么没补它）
+- 目标账户**默认全选**，所有参数都是**排除**项 —— 补偿通常面向全体，逐个勾选太费事：
+  `exclude_expired` / `exclude_active` 剔掉对应到期状态的账户（两个都开就没候选了），
+  `exclude_over_days_left` 剔掉剩余天数多于 N 的（只留快到期的；已过期账户剩余 ≤ 0，
+  天然在保留范围内），`exclude_ids` 剔掉手动取消勾选的账户
+- **永久账户始终排除**，无需参数，并显式计入 `skipped`（管理员能看出为什么没补它）
 - 叠加规则与单账户续期完全一致：从 `max(现在, 原到期时间)` 起算，
   所以已过期的账户补完即从今天续上；补完是否自动恢复运行沿用账户自身的
   `auto_resume_on_renew` 偏好，不引入第二套语义
 - 面板走「预览（`dry_run=true`）→ 二次确认列出将要补谁 → 执行」两段式，
   返回体带 `groups`（按 已过期 / 未过期 分组）与 `message` 供弹窗直接展示
-- `days` 非正整数、`max_days_left` 非整数、`account_ids` 含非整数均返回 400
+- `days` 非正整数、`exclude_over_days_left` 非整数、`exclude_ids` 含非整数均返回 400
 | GET | `/api/panel/public-bot` | 公共 Bot 信息（不含 Cookie） |
 | GET | `/api/panel/public-bot/cookie` | 公共 Bot 的明文 Cookie |
 | PUT | `/api/panel/public-bot` | 保存公共 Cookie（仅保存，不下发） |

@@ -1014,41 +1014,40 @@ class AccountManager:
     def select_compensation_targets(
         self,
         *,
-        include_expired: bool = True,
-        include_active: bool = True,
-        max_days_left: int | None = None,
-        account_ids: list[int] | None = None,
+        exclude_expired: bool = False,
+        exclude_active: bool = False,
+        exclude_over_days_left: int | None = None,
+        exclude_ids: list[int] | None = None,
     ) -> list[AccountRecord]:
-        """按筛选条件挑出可补偿的账户（不改变任何状态）。
+        """挑出可补偿的账户（不改变任何状态）。
 
-        筛选条件之间是**并集**：勾了「已过期」和「未过期」就是两者的合集。
-        都不勾则没有任何候选 —— 这是刻意的，避免手滑把全部账户补一遍。
+        **默认全选，参数用于排除** —— 补偿通常面向全体，逐个勾选太费事，
+        所以这里的每个参数都是「把谁剔出去」：
 
-        - 永久账户始终排除：加天数对它们没有意义
-        - ``max_days_left`` 非 ``None`` 时额外收窄为「剩余天数 ≤ N」
-        - ``account_ids`` 非空时再收窄为「在这批 id 里」，供手动勾选
+        - 永久账户始终排除（加天数对它们没有意义），无需参数
+        - ``exclude_expired`` / ``exclude_active`` 剔掉对应到期状态的账户；
+          两个都开就没有候选了，这是自然结果而非特例
+        - ``exclude_over_days_left`` 剔掉剩余天数多于 N 的（即只留「快到期」的）；
+          已过期账户的剩余天数 ≤ 0，天然落在保留范围内
+        - ``exclude_ids`` 剔掉指定账户，供手动取消勾选
 
-        :param include_expired: 是否包含已过期的账户
-        :param include_active: 是否包含未过期的账户
-        :param max_days_left: 仅补偿剩余天数不超过该值的账户
-        :param account_ids: 仅补偿这些账户 id（``None`` / 空列表表示不按 id 收窄）
         :return: 命中的账户记录（按 id 升序）
         """
-        picked = set(account_ids or [])
+        excluded = set(exclude_ids or [])
         result: list[AccountRecord] = []
         for rec in self.list_records():
             if rec.is_permanent:
                 continue  # 永久账户无需补偿
-            if picked and rec.id not in picked:
+            if rec.id in excluded:
                 continue
             if rec.expired:
-                if not include_expired:
+                if exclude_expired:
                     continue
-            elif not include_active:
+            elif exclude_active:
                 continue
-            if max_days_left is not None:
+            if exclude_over_days_left is not None:
                 left = rec.days_left
-                if left is None or left > max_days_left:
+                if left is None or left > exclude_over_days_left:
                     continue
             result.append(rec)
         return result
@@ -1057,10 +1056,10 @@ class AccountManager:
         self,
         days: int,
         *,
-        include_expired: bool = True,
-        include_active: bool = True,
-        max_days_left: int | None = None,
-        account_ids: list[int] | None = None,
+        exclude_expired: bool = False,
+        exclude_active: bool = False,
+        exclude_over_days_left: int | None = None,
+        exclude_ids: list[int] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         """给筛选出的账户各补偿 ``days`` 天时长。
@@ -1069,6 +1068,9 @@ class AccountManager:
         ``max(现在, 当前到期时间)`` 起算，所以已过期的账户补完即从今天续上；
         补完是否自动恢复运行也沿用账户自身的 ``auto_resume_on_renew`` 偏好 ——
         不引入第二套语义。
+
+        目标账户**默认全选**，各 ``exclude_*`` 参数用于排除，语义见
+        :meth:`select_compensation_targets`。
 
         :param dry_run: 只挑人不动手，供二次确认弹窗预览「将要补谁」
         :return: ``{"compensated": [...], "skipped": [...], "failed": [...],
@@ -1087,10 +1089,10 @@ class AccountManager:
         failed: list[str] = []
 
         for rec in self.select_compensation_targets(
-            include_expired=include_expired,
-            include_active=include_active,
-            max_days_left=max_days_left,
-            account_ids=account_ids,
+            exclude_expired=exclude_expired,
+            exclude_active=exclude_active,
+            exclude_over_days_left=exclude_over_days_left,
+            exclude_ids=exclude_ids,
         ):
             # 归组要用**补偿前**的状态：renew_days 会就地改写 rec.expires_at，
             # 补完之后再看 rec.expired 永远是 False

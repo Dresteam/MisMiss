@@ -1,7 +1,8 @@
 """批量补偿时长测试（无网络）。
 
 覆盖：
-- 筛选取并集：已过期 / 未过期 / 剩余天数 ≤ N / 手动勾选
+- **默认全选**：不带任何排除参数时，除永久账户外全部命中
+- 排除项：排除已过期 / 排除未过期 / 排除剩余天数多于 N 的 / 排除指定 id
 - 永久账户始终排除，且显式计入「跳过」（管理员能看出为什么没补它）
 - dry_run 只预览不改库，且给出与实补一致的分组明细
 - 实补按 renew_days 语义叠加：已过期从「现在」起算，未过期在原到期时间上顺延
@@ -66,7 +67,8 @@ with TestClient(app) as c:
     perm = mk("永久账户", expires=None)
 
     def post(**body):
-        payload = {"days": 3, "include_expired": True, "include_active": True}
+        # 默认不带任何排除参数 = 全选（永久账户除外）
+        payload = {"days": 3}
         payload.update(body)
         return c.post("/api/panel/accounts/compensate", headers=H, json=payload)
 
@@ -81,17 +83,18 @@ with TestClient(app) as c:
           str(post(days=0).status_code))
     check("天数为负 -> 400", post(days=-3).status_code == 400)
     check("天数非整数 -> 400", post(days="abc").status_code == 400)
-    check("max_days_left 非整数 -> 400", post(max_days_left="x").status_code == 400)
-    check("account_ids 含非整数 -> 400", post(account_ids=["a"]).status_code == 400)
+    check("exclude_over_days_left 非整数 -> 400",
+          post(exclude_over_days_left="x").status_code == 400)
+    check("exclude_ids 含非整数 -> 400", post(exclude_ids=["a"]).status_code == 400)
     check("未认证 -> 401", c.post(
         "/api/panel/accounts/compensate", json={"days": 3}).status_code == 401)
 
-    # ---- 2. dry_run 只预览、不改库 ----
+    # ---- 2. 默认全选 + dry_run 只预览、不改库 ----
     before = {aid: left(aid) for aid in (far, near, mid, exp1, exp2, perm)}
     r = post(dry_run=True)
     check("dry_run 返回 200", r.status_code == 200, f"{r.status_code} {r.text[:80]}")
-    check("dry_run 预览到 5 个目标（永久排除）", len(r.json()["compensated"]) == 5,
-          str(r.json()["compensated"]))
+    check("不带排除参数 = 除永久外全部命中（5 个）",
+          len(r.json()["compensated"]) == 5, str(r.json()["compensated"]))
     check("dry_run 不动库", {aid: left(aid) for aid in before} == before,
           f"{before} -> " + str({aid: left(aid) for aid in before}))
     check("dry_run 标记为真", r.json()["dry_run"] is True)
@@ -103,25 +106,35 @@ with TestClient(app) as c:
           len(groups) == 2 and len(sum(groups.values(), [])) == 5,
           str({k: len(v) for k, v in groups.items()}))
 
-    # ---- 3. 筛选取并集 ----
-    check("只勾已过期 -> 只有 2 个过期账户",
-          names(post(dry_run=True, include_active=False)) == {"已过期甲", "已过期乙"},
-          str(names(post(dry_run=True, include_active=False))))
-    check("只勾未过期 -> 3 个未过期账户",
-          names(post(dry_run=True, include_expired=False)) == {"远未到期", "三天后到期", "半月后到期"},
-          str(names(post(dry_run=True, include_expired=False))))
-    check("两个都不勾 -> 无候选",
-          names(post(dry_run=True, include_expired=False, include_active=False)) == set(),
-          str(names(post(dry_run=True, include_expired=False, include_active=False))))
-    check("剩余 ≤ 5 天 -> 三天后到期 + 两个已过期",
-          names(post(dry_run=True, max_days_left=5)) == {"三天后到期", "已过期甲", "已过期乙"},
-          str(names(post(dry_run=True, max_days_left=5))))
-    check("手动勾选只补指定账户",
-          names(post(dry_run=True, account_ids=[far, exp1])) == {"远未到期", "已过期甲"},
-          str(names(post(dry_run=True, account_ids=[far, exp1]))))
-    check("手动勾选与筛选取交集（勾了不满足条件的则不补）",
-          names(post(dry_run=True, include_active=False, account_ids=[far])) == set(),
-          str(names(post(dry_run=True, include_active=False, account_ids=[far]))))
+    # ---- 3. 排除项 ----
+    check("排除已过期 -> 剩 3 个未过期账户",
+          names(post(dry_run=True, exclude_expired=True))
+          == {"远未到期", "三天后到期", "半月后到期"},
+          str(names(post(dry_run=True, exclude_expired=True))))
+    check("排除未过期 -> 剩 2 个已过期账户",
+          names(post(dry_run=True, exclude_active=True)) == {"已过期甲", "已过期乙"},
+          str(names(post(dry_run=True, exclude_active=True))))
+    check("两个都排除 -> 无候选",
+          names(post(dry_run=True, exclude_expired=True, exclude_active=True)) == set(),
+          str(names(post(dry_run=True, exclude_expired=True, exclude_active=True))))
+    check("排除剩余多于 5 天 -> 留「三天后到期」与两个已过期",
+          names(post(dry_run=True, exclude_over_days_left=5))
+          == {"三天后到期", "已过期甲", "已过期乙"},
+          str(names(post(dry_run=True, exclude_over_days_left=5))))
+    check("已过期账户不受「排除剩余多于 N」影响（剩余 ≤ 0 天然在内）",
+          "已过期甲" in names(post(dry_run=True, exclude_over_days_left=1)),
+          str(names(post(dry_run=True, exclude_over_days_left=1))))
+    check("排除指定 id -> 其余照常命中",
+          names(post(dry_run=True, exclude_ids=[far, exp1]))
+          == {"三天后到期", "半月后到期", "已过期乙"},
+          str(names(post(dry_run=True, exclude_ids=[far, exp1]))))
+    check("排除项可叠加",
+          names(post(dry_run=True, exclude_expired=True, exclude_ids=[far]))
+          == {"三天后到期", "半月后到期"},
+          str(names(post(dry_run=True, exclude_expired=True, exclude_ids=[far]))))
+    check("排除项覆盖全部候选 -> 无候选",
+          names(post(dry_run=True, exclude_ids=[far, near, mid, exp1, exp2])) == set(),
+          str(names(post(dry_run=True, exclude_ids=[far, near, mid, exp1, exp2]))))
 
     # ---- 4. 实补：叠加语义 ----
     r = post(days=10)
@@ -148,6 +161,10 @@ with TestClient(app) as c:
         mgr.get_server(aid).bot.enabled = False
         mgr._save_panel()
 
+    def only(aid: int) -> dict:
+        """只补这一个账户 —— 排除式语义下等于「把其余全部排除」。"""
+        return {"exclude_ids": [r.id for r in mgr.list_records() if r.id != aid]}
+
     # 记录 resume_after_renew 是否被调用（真实实现要联网，测试里只关心「有没有尝试」）
     calls: list[int] = []
     real_resume = mgr.resume_after_renew
@@ -165,7 +182,7 @@ with TestClient(app) as c:
           and mgr.get_record(quiet).paused_reason == "expiry",
           f"{mgr.get_server(quiet).bot.enabled} / {mgr.get_record(quiet).paused_reason}")
     calls.clear()
-    post(days=5, include_active=False, account_ids=[quiet])
+    post(days=5, **only(quiet))
     check("偏好关闭时只加时长、不尝试恢复", calls == [], str(calls))
     check("偏好关闭时并非自动启用 Bot",
           mgr.get_server(quiet).bot.enabled is False,
@@ -178,7 +195,7 @@ with TestClient(app) as c:
     loud = mk("自动恢复", expires=None, auto_resume=True)
     mark_expired_stopped(loud)
     calls.clear()
-    r = post(days=5, include_active=False, account_ids=[loud])
+    r = post(days=5, **only(loud))
     check("偏好开启时补偿成功", r.status_code == 200, f"{r.status_code} {r.text[:80]}")
     check("偏好开启时会尝试恢复运行", calls == [loud], str(calls))
     check("补上时长", (left(loud) or 0) >= 4, str(left(loud)))

@@ -26,10 +26,11 @@ const DEFAULT_DAYS = 3;
  */
 export function CompensateDialog({ open, accounts, onClose, onDone }: Props) {
   const [days, setDays] = useState(String(DEFAULT_DAYS));
-  const [includeExpired, setIncludeExpired] = useState(true);
-  const [includeActive, setIncludeActive] = useState(false);
-  const [maxDaysLeft, setMaxDaysLeft] = useState('');   // 空 = 不限
-  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [excludeExpired, setExcludeExpired] = useState(false);
+  const [excludeActive, setExcludeActive] = useState(false);
+  const [overDaysLeft, setOverDaysLeft] = useState('');   // 空 = 不排除
+  // 被**取消勾选**的账户 id（默认一个都不排除，即全补）
+  const [unpicked, setUnpicked] = useState<Set<number>>(new Set());
   const [preview, setPreview] = useState<CompensateResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [listOpen, setListOpen] = useState(false);
@@ -39,46 +40,43 @@ export function CompensateDialog({ open, accounts, onClose, onDone }: Props) {
     if (!open) return;
     // 每次打开都回到初始状态，避免上次的选择残留
     setDays(String(DEFAULT_DAYS));
-    setIncludeExpired(true);
-    setIncludeActive(false);
-    setMaxDaysLeft('');
-    setPicked(new Set());
+    setExcludeExpired(false);
+    setExcludeActive(false);
+    setOverDaysLeft('');
+    setUnpicked(new Set());
     setPreview(null);
     setListOpen(false);
     setError('');
   }, [open]);
 
-  const limit = maxDaysLeft.trim() === '' ? null : Number(maxDaysLeft);
+  const limit = overDaysLeft.trim() === '' ? null : Number(overDaysLeft);
   const limitInvalid = limit !== null && (!Number.isInteger(limit) || limit < 0);
 
   /** 与后端 select_compensation_targets 同规则的前端预演，用于勾选列表 */
   const candidates = useMemo(() => {
-    if (!includeExpired && !includeActive) return [];
     return accounts.filter((a) => {
       if (a.expires_at === null) return false;          // 永久账户不参与
-      if (a.expired ? !includeExpired : !includeActive) return false;
+      if (a.expired ? excludeExpired : excludeActive) return false;
       if (limit !== null && !limitInvalid) {
         if (a.days_left === null || a.days_left > limit) return false;
       }
       return true;
     });
-  }, [accounts, includeExpired, includeActive, limit, limitInvalid]);
+  }, [accounts, excludeExpired, excludeActive, limit, limitInvalid]);
 
   const daysNum = Number(days);
   const daysInvalid = !Number.isInteger(daysNum) || daysNum <= 0;
+  const allExcluded = excludeExpired && excludeActive;
+  const willCompensate = candidates.filter((a) => !unpicked.has(a.id));
   const canPreview = !daysInvalid && !limitInvalid
-    && (includeExpired || includeActive) && candidates.length > 0;
-
-  const targetIds = picked.size > 0
-    ? [...picked]
-    : candidates.map((a) => a.id);
+    && willCompensate.length > 0;
 
   const params = (dryRun: boolean) => ({
     days: daysNum,
-    include_expired: includeExpired,
-    include_active: includeActive,
-    max_days_left: limitInvalid ? null : limit,
-    account_ids: targetIds,
+    exclude_expired: excludeExpired,
+    exclude_active: excludeActive,
+    exclude_over_days_left: limitInvalid ? null : limit,
+    exclude_ids: [...unpicked],
     dry_run: dryRun,
   });
 
@@ -152,63 +150,70 @@ export function CompensateDialog({ open, accounts, onClose, onDone }: Props) {
             </p>
           </div>
 
-          {/* 筛选 */}
-          <div className="rounded-lg border border-gray-200 dark:border-gray-700 divide-y
-                          divide-gray-100 dark:divide-gray-700/60 px-3">
-            <label className={rowCls + ' cursor-pointer'}>
-              <span className="text-sm text-gray-700 dark:text-gray-200">已过期</span>
-              <input type="checkbox" checked={includeExpired}
-                onChange={(e) => setIncludeExpired(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 dark:border-gray-600
-                           text-primary-600 focus:ring-primary-500" />
-            </label>
-            <label className={rowCls + ' cursor-pointer'}>
-              <span className="text-sm text-gray-700 dark:text-gray-200">未过期</span>
-              <input type="checkbox" checked={includeActive}
-                onChange={(e) => setIncludeActive(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 dark:border-gray-600
-                           text-primary-600 focus:ring-primary-500" />
-            </label>
-            <div className={rowCls}>
-              <span className="text-sm text-gray-700 dark:text-gray-200">
-                剩余天数不足
-                <span className="text-xs text-gray-400 dark:text-gray-500 ml-1">留空则不限</span>
-              </span>
-              <div className="flex items-center gap-1.5">
-                <input value={maxDaysLeft} onChange={(e) => setMaxDaysLeft(e.target.value)}
-                  inputMode="numeric" placeholder="不限" aria-label="剩余天数上限"
-                  className="input w-20 py-1 text-sm" />
-                <span className="text-xs text-gray-400">天</span>
+          {/* 排除项：默认全补，这里用来把某些账户剔出去 */}
+          <div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">
+              默认补偿全部账户（永久账户除外），以下用于排除。
+            </p>
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 divide-y
+                            divide-gray-100 dark:divide-gray-700/60 px-3">
+              <label className={rowCls + ' cursor-pointer'}>
+                <span className="text-sm text-gray-700 dark:text-gray-200">排除已过期</span>
+                <input type="checkbox" checked={excludeExpired}
+                  onChange={(e) => setExcludeExpired(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600
+                             text-primary-600 focus:ring-primary-500" />
+              </label>
+              <label className={rowCls + ' cursor-pointer'}>
+                <span className="text-sm text-gray-700 dark:text-gray-200">排除未过期</span>
+                <input type="checkbox" checked={excludeActive}
+                  onChange={(e) => setExcludeActive(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600
+                             text-primary-600 focus:ring-primary-500" />
+              </label>
+              <div className={rowCls}>
+                <span className="text-sm text-gray-700 dark:text-gray-200">
+                  排除剩余天数多于
+                  <span className="text-xs text-gray-400 dark:text-gray-500 ml-1">留空则不排除</span>
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <input value={overDaysLeft} onChange={(e) => setOverDaysLeft(e.target.value)}
+                    inputMode="numeric" placeholder="不限" aria-label="排除剩余天数多于"
+                    className="input w-20 py-1 text-sm" />
+                  <span className="text-xs text-gray-400">天</span>
+                </div>
               </div>
             </div>
+            {limitInvalid && <p className="text-xs text-red-500 mt-1">剩余天数需为非负整数</p>}
           </div>
-          {limitInvalid && <p className="text-xs text-red-500 -mt-2">剩余天数需为非负整数</p>}
 
-          {/* 命中预览 + 手动勾选 */}
+          {/* 命中预览 + 逐个取消勾选 */}
           <div>
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-600 dark:text-gray-300">
-                符合条件 <span className="font-semibold text-gray-900 dark:text-white">
-                  {candidates.length}</span> 个账户
-                {picked.size > 0 && <> · 已手选 {picked.size} 个</>}
+                将补偿 <span className="font-semibold text-gray-900 dark:text-white">
+                  {willCompensate.length}</span> 个账户
+                {unpicked.size > 0 && <> · 已排除 {unpicked.size} 个</>}
               </span>
               {candidates.length > 0 && (
                 <button type="button" onClick={() => setListOpen((v) => !v)}
                   className="flex items-center gap-1 text-xs text-primary-600
                              dark:text-primary-400 hover:underline">
                   {listOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                  {listOpen ? '收起' : '手动挑选'}
+                  {listOpen ? '收起' : '逐个查看'}
                 </button>
               )}
             </div>
-            {candidates.length === 0 && (includeExpired || includeActive) && (
+            {candidates.length === 0 && (
               <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                没有符合当前条件的账户。永久账户无需补偿，不会出现在这里。
+                {allExcluded
+                  ? '「排除已过期」与「排除未过期」同时勾选，没有账户可选了。'
+                  : '没有符合当前条件的账户。永久账户无需补偿，不会出现在这里。'}
               </p>
             )}
-            {!includeExpired && !includeActive && (
+            {candidates.length > 0 && willCompensate.length === 0 && (
               <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                请至少勾选「已过期」或「未过期」。
+                已把全部候选账户取消勾选，没有可补偿的账户。
               </p>
             )}
             {listOpen && candidates.length > 0 && (
@@ -216,16 +221,17 @@ export function CompensateDialog({ open, accounts, onClose, onDone }: Props) {
                               border-gray-200 dark:border-gray-700 divide-y
                               divide-gray-100 dark:divide-gray-700/60">
                 <div className="flex items-center justify-between px-3 py-1.5">
-                  <button type="button" onClick={() => setPicked(new Set(candidates.map((a) => a.id)))}
+                  <button type="button" onClick={() => setUnpicked(new Set())}
                     className="text-[11px] text-primary-600 dark:text-primary-400 hover:underline">全选</button>
-                  <button type="button" onClick={() => setPicked(new Set())}
-                    className="text-[11px] text-gray-400 hover:text-red-500 transition-colors">清空</button>
+                  <button type="button"
+                    onClick={() => setUnpicked(new Set(candidates.map((a) => a.id)))}
+                    className="text-[11px] text-gray-400 hover:text-red-500 transition-colors">全不选</button>
                 </div>
                 {candidates.map((a) => (
                   <label key={a.id}
                     className="flex items-center gap-2 px-3 py-1.5 cursor-pointer
                                hover:bg-gray-50 dark:hover:bg-gray-700/40">
-                    <input type="checkbox" checked={picked.has(a.id)}
+                    <input type="checkbox" checked={!unpicked.has(a.id)}
                       onChange={() => togglePick(a.id)}
                       className="h-3.5 w-3.5 rounded border-gray-300 dark:border-gray-600
                                  text-primary-600 focus:ring-primary-500" />
@@ -241,7 +247,7 @@ export function CompensateDialog({ open, accounts, onClose, onDone }: Props) {
               </div>
             )}
             <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-              不手选时，符合条件的一律补偿。
+              默认全部勾选；取消勾选即把该账户排除。
             </p>
           </div>
 

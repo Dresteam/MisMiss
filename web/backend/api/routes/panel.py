@@ -228,21 +228,24 @@ async def accounts_redeem(
 
 @router.post("/accounts/compensate")
 async def accounts_compensate(body: dict, manager: AccountManager = _DEP):
-    """为筛选出的账户批量补偿时长（面板级）。
+    """为账户批量补偿时长（面板级）。
+
+    目标账户**默认全选**，下列参数全部用于**排除**（补偿通常面向全体，
+    逐个勾选太费事）：
 
     请求体::
 
         {
-          "days": 3,                 # 必填，正整数
-          "include_expired": true,   # 勾选「已过期」
-          "include_active": true,    # 勾选「未过期」
-          "max_days_left": 7,        # 可选：只补剩余天数 ≤ N 的
-          "account_ids": [1, 3],     # 可选：只补这几个（手动勾选）
-          "dry_run": true            # 只预览不动手，供二次确认弹窗列明细
+          "days": 3,                     # 必填，正整数
+          "exclude_expired": false,      # 排除已过期的
+          "exclude_active": false,       # 排除未过期的
+          "exclude_over_days_left": 7,   # 排除剩余天数多于 N 的（只留快到期的）
+          "exclude_ids": [1, 3],         # 排除这几个账户（手动取消勾选）
+          "dry_run": true                # 只预览不动手，供二次确认弹窗列明细
         }
 
-    筛选条件之间取并集；永久账户始终排除。叠加天数与恢复行为完全复用单账户续期的
-    规则（``renew_days`` 从 ``max(现在, 到期时间)`` 起算 + 账户自身的
+    永久账户始终排除，无需参数。叠加天数与恢复行为完全复用单账户续期的规则
+    （``renew_days`` 从 ``max(现在, 到期时间)`` 起算 + 账户自身的
     ``auto_resume_on_renew`` 决定是否自动跑起来）。
     """
     try:
@@ -259,21 +262,21 @@ async def accounts_compensate(body: dict, manager: AccountManager = _DEP):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail=f"{key} 必须是整数")
 
-    raw_ids = body.get("account_ids")
-    account_ids: list[int] | None = None
+    raw_ids = body.get("exclude_ids")
+    exclude_ids: list[int] | None = None
     if isinstance(raw_ids, list) and raw_ids:
         try:
-            account_ids = [int(i) for i in raw_ids]
+            exclude_ids = [int(i) for i in raw_ids]
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="account_ids 必须是整数数组")
+            raise HTTPException(status_code=400, detail="exclude_ids 必须是整数数组")
 
     try:
         result = await manager.compensate_accounts(
             days,
-            include_expired=bool(body.get("include_expired", False)),
-            include_active=bool(body.get("include_active", False)),
-            max_days_left=_opt_int("max_days_left"),
-            account_ids=account_ids,
+            exclude_expired=bool(body.get("exclude_expired", False)),
+            exclude_active=bool(body.get("exclude_active", False)),
+            exclude_over_days_left=_opt_int("exclude_over_days_left"),
+            exclude_ids=exclude_ids,
             dry_run=bool(body.get("dry_run", False)),
         )
     except ValueError as e:
