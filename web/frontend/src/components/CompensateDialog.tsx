@@ -103,8 +103,9 @@ export function CompensateDialog({ open, accounts, onClose, onDone }: Props) {
     } finally { setBusy(false); }
   };
 
+  /** 勾选 = 参与补偿；取消勾选 = 加入排除集合 */
   const togglePick = (id: number) => {
-    setPicked((prev) => {
+    setUnpicked((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;

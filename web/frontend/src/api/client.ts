@@ -354,7 +354,7 @@ export async function shutdownServer(): Promise<StatusResponse> {
 export async function broadcastServer(message: string): Promise<StatusResponse> {
   return request<StatusResponse>('/server/broadcast', {
     method: 'POST',
-    body: { message },
+    body: JSON.stringify({ message }),
   });
 }
 
