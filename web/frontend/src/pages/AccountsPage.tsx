@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
-  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass,
+  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
@@ -13,6 +13,7 @@ import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
+import { CompensateDialog } from '../components/CompensateDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { showToast } from '../hooks/useToast';
 
@@ -29,6 +30,7 @@ export function AccountsPage() {
   const [deleting, setDeleting] = useState(false);
   const [credTarget, setCredTarget] = useState<AccountSummary | null>(null);
   const [credBusy, setCredBusy] = useState(false);
+  const [compensateOpen, setCompensateOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -126,9 +128,15 @@ export function AccountsPage() {
             {overview && ` · ${overview.total} 个账户 · ${overview.expired_count} 个已过期`}
           </p>
         </div>
-        <Button variant="primary" icon={<Plus className="w-4 h-4" />} onClick={() => setCreateOpen(true)}>
-          创建账户
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" icon={<CalendarPlus className="w-4 h-4" />}
+            onClick={() => setCompensateOpen(true)}>
+            批量补偿
+          </Button>
+          <Button variant="primary" icon={<Plus className="w-4 h-4" />} onClick={() => setCreateOpen(true)}>
+            创建账户
+          </Button>
+        </div>
       </div>
 
       {/* 公共 Bot 提示 */}
@@ -253,6 +261,12 @@ export function AccountsPage() {
         loading={creating}
         onConfirm={handleCreate}
         onCancel={() => setCreateOpen(false)}
+      />
+      <CompensateDialog
+        open={compensateOpen}
+        accounts={overview?.accounts ?? []}
+        onClose={() => setCompensateOpen(false)}
+        onDone={load}
       />
       <RenewDialog
         open={renewTarget !== null}

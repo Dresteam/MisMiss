@@ -226,6 +226,72 @@ async def accounts_redeem(
     return _summary(manager, rec.id)
 
 
+@router.post("/accounts/compensate")
+async def accounts_compensate(body: dict, manager: AccountManager = _DEP):
+    """为筛选出的账户批量补偿时长（面板级）。
+
+    请求体::
+
+        {
+          "days": 3,                 # 必填，正整数
+          "include_expired": true,   # 勾选「已过期」
+          "include_active": true,    # 勾选「未过期」
+          "max_days_left": 7,        # 可选：只补剩余天数 ≤ N 的
+          "account_ids": [1, 3],     # 可选：只补这几个（手动勾选）
+          "dry_run": true            # 只预览不动手，供二次确认弹窗列明细
+        }
+
+    筛选条件之间取并集；永久账户始终排除。叠加天数与恢复行为完全复用单账户续期的
+    规则（``renew_days`` 从 ``max(现在, 到期时间)`` 起算 + 账户自身的
+    ``auto_resume_on_renew`` 决定是否自动跑起来）。
+    """
+    try:
+        days = int(body.get("days", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="天数必须是整数")
+
+    def _opt_int(key: str) -> int | None:
+        raw = body.get(key)
+        if raw is None or raw == "":
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} 必须是整数")
+
+    raw_ids = body.get("account_ids")
+    account_ids: list[int] | None = None
+    if isinstance(raw_ids, list) and raw_ids:
+        try:
+            account_ids = [int(i) for i in raw_ids]
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="account_ids 必须是整数数组")
+
+    try:
+        result = await manager.compensate_accounts(
+            days,
+            include_expired=bool(body.get("include_expired", False)),
+            include_active=bool(body.get("include_active", False)),
+            max_days_left=_opt_int("max_days_left"),
+            account_ids=account_ids,
+            dry_run=bool(body.get("dry_run", False)),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    done = len(result["compensated"])
+    verb = "将补偿" if result["dry_run"] else "已补偿"
+    if done:
+        message = f"{verb} {done} 个账户 · 各 +{result['days']} 天"
+        if result["skipped"]:
+            message += f"，跳过 {len(result['skipped'])} 个"
+        if result["failed"]:
+            message += f"，失败 {len(result['failed'])} 个"
+    else:
+        message = result["failed"][0] if result["failed"] else "没有符合条件的账户"
+    return {**result, "message": message}
+
+
 @router.get("/licenses", response_model=list[LicenseInfo])
 async def licenses_list(manager: AccountManager = _DEP):
     """授权码列表。"""

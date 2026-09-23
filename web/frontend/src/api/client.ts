@@ -20,6 +20,8 @@ import type {
   PluginPushResult,
   ApplyDefaultsResult,
   AccountUpdateAllResult,
+  CompensateParams,
+  CompensateResult,
 } from './types';
 
 // ================================================================== //
@@ -46,6 +48,18 @@ async function request<T>(
 ): Promise<T> {
   const url = `${BASE}${path}`;
   const token = localStorage.getItem('auth_token');
+  // 传普通对象时自动 JSON 序列化：fetch 对非 BodyInit 的对象会转成字符串
+  // "[object Object]" 发出去，服务端必然解析失败，而浏览器里几乎看不出异常。
+  // 已序列化的字符串 / FormData / Blob 等原样透传。
+  const body = options.body;
+  const normalizedBody = (
+    body !== null && typeof body === 'object'
+    && !(body instanceof FormData)
+    && !(body instanceof Blob)
+    && !(body instanceof URLSearchParams)
+    && !(body instanceof ArrayBuffer)
+  ) ? JSON.stringify(body) : body;
+
   const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
@@ -53,6 +67,7 @@ async function request<T>(
       ...options.headers,
     },
     ...options,
+    body: normalizedBody,
   });
 
   if (!res.ok) {
@@ -711,6 +726,16 @@ export async function updateAccountPreferences(
   return request<AccountSummary>(`/accounts/${id}/preferences`, {
     method: 'POST',
     body: JSON.stringify({ auto_enable_on_install: autoEnableOnInstall }),
+  });
+}
+
+/** 为筛选出的账户批量补偿时长（dry_run=true 只预览）。 */
+export async function compensateAccounts(
+  params: CompensateParams,
+): Promise<CompensateResult> {
+  return request<CompensateResult>('/panel/accounts/compensate', {
+    method: 'POST',
+    body: JSON.stringify(params),
   });
 }
 

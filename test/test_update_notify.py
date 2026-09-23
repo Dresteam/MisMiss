@@ -52,6 +52,7 @@ from web.backend.main import app  # noqa: E402
 from api.deps import get_account_manager  # noqa: E402
 from api.routes import update as upd  # noqa: E402
 from core.account import BROADCAST_MAX_LEN, clip_broadcast  # noqa: E402
+from core.config import ServerConfig  # noqa: E402
 
 res: list[tuple[str, bool, str]] = []
 
@@ -234,10 +235,27 @@ with TestClient(app) as c:
           clip_broadcast("  \n\t ") == "", repr(clip_broadcast("  \n\t ")))
 
     # ---- 接口契约：默认值 + 保存往返 ----
+    # 内置默认值（不读 config.yml）：默认关闭 + 文案非空。
+    # 注意**不要**断言接口返回的 notify_enabled 为 False —— 那是在断言开发机
+    # config.yml 里的当前取值，一旦本地打开过这个开关，测试就会无辜失败。
+    _builtin = ServerConfig({})
+    check("内置默认：更新提示默认关闭",
+          _builtin.get_bool("update.notify_enabled", True) is False,
+          str(_builtin.get_bool("update.notify_enabled", True)))
+    check("内置默认：两条文案都非空",
+          bool(_builtin.get_str("update.notify_before"))
+          and bool(_builtin.get_str("update.notify_after")),
+          f"{_builtin.get_str('update.notify_before')!r}")
+
     info = c.get("/api/update/info", headers=H).json()
-    check("默认关闭更新提示", info["notify_enabled"] is False,
-          str(info["notify_enabled"]))
-    check("默认文案非空", bool(info["notify_before"]) and bool(info["notify_after"]),
+    check("接口按约定返回三个字段",
+          isinstance(info["notify_enabled"], bool)
+          and isinstance(info["notify_before"], str)
+          and isinstance(info["notify_after"], str),
+          str({k: type(info[k]).__name__ for k in
+               ("notify_enabled", "notify_before", "notify_after")}))
+    check("接口返回的两条文案都非空",
+          bool(info["notify_before"]) and bool(info["notify_after"]),
           f"{info['notify_before']!r} / {info['notify_after']!r}")
     check("接口返回字符上限", isinstance(info.get("notify_max_len"), int)
           and info["notify_max_len"] > 0, str(info.get("notify_max_len")))

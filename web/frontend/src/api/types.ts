@@ -313,6 +313,37 @@ export interface BulkGroup {
   items: string[];
 }
 
+/** 批量补偿时长的筛选条件 */
+export interface CompensateParams {
+  /** 补偿天数（正整数） */
+  days: number;
+  /** 是否包含已过期的账户 */
+  include_expired: boolean;
+  /** 是否包含未过期的账户 */
+  include_active: boolean;
+  /** 只补偿剩余天数 ≤ 该值的账户；null 表示不限 */
+  max_days_left?: number | null;
+  /** 只补偿这些账户 id；空/省略表示「符合条件的全选」 */
+  account_ids?: number[];
+  /** true = 只预览不动手 */
+  dry_run?: boolean;
+}
+
+/** 批量补偿结果 */
+export interface CompensateResult {
+  success?: boolean;
+  /** 实际（或将要）补偿的账户名 */
+  compensated: string[];
+  skipped: string[];
+  failed: string[];
+  /** 供二次确认弹窗展示的明细分组 */
+  groups: BulkGroup[];
+  /** 一句话摘要 */
+  message: string;
+  days: number;
+  dry_run: boolean;
+}
+
 /** 批量推送结果（插件库 → 各账户副本） */
 export interface PluginPushResult {
   /** 更新（dry_run 时为「将更新」）的条目，形如 `插件名@账户名` */

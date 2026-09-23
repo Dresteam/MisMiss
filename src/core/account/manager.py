@@ -1008,6 +1008,125 @@ class AccountManager:
         )
 
     # ================================================================== #
+    # 批量补偿时长
+    # ================================================================== #
+
+    def select_compensation_targets(
+        self,
+        *,
+        include_expired: bool = True,
+        include_active: bool = True,
+        max_days_left: int | None = None,
+        account_ids: list[int] | None = None,
+    ) -> list[AccountRecord]:
+        """按筛选条件挑出可补偿的账户（不改变任何状态）。
+
+        筛选条件之间是**并集**：勾了「已过期」和「未过期」就是两者的合集。
+        都不勾则没有任何候选 —— 这是刻意的，避免手滑把全部账户补一遍。
+
+        - 永久账户始终排除：加天数对它们没有意义
+        - ``max_days_left`` 非 ``None`` 时额外收窄为「剩余天数 ≤ N」
+        - ``account_ids`` 非空时再收窄为「在这批 id 里」，供手动勾选
+
+        :param include_expired: 是否包含已过期的账户
+        :param include_active: 是否包含未过期的账户
+        :param max_days_left: 仅补偿剩余天数不超过该值的账户
+        :param account_ids: 仅补偿这些账户 id（``None`` / 空列表表示不按 id 收窄）
+        :return: 命中的账户记录（按 id 升序）
+        """
+        picked = set(account_ids or [])
+        result: list[AccountRecord] = []
+        for rec in self.list_records():
+            if rec.is_permanent:
+                continue  # 永久账户无需补偿
+            if picked and rec.id not in picked:
+                continue
+            if rec.expired:
+                if not include_expired:
+                    continue
+            elif not include_active:
+                continue
+            if max_days_left is not None:
+                left = rec.days_left
+                if left is None or left > max_days_left:
+                    continue
+            result.append(rec)
+        return result
+
+    async def compensate_accounts(
+        self,
+        days: int,
+        *,
+        include_expired: bool = True,
+        include_active: bool = True,
+        max_days_left: int | None = None,
+        account_ids: list[int] | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """给筛选出的账户各补偿 ``days`` 天时长。
+
+        叠加规则与单账户续期完全一致（:meth:`renew_days`）：从
+        ``max(现在, 当前到期时间)`` 起算，所以已过期的账户补完即从今天续上；
+        补完是否自动恢复运行也沿用账户自身的 ``auto_resume_on_renew`` 偏好 ——
+        不引入第二套语义。
+
+        :param dry_run: 只挑人不动手，供二次确认弹窗预览「将要补谁」
+        :return: ``{"compensated": [...], "skipped": [...], "failed": [...],
+            "groups": [...], "dry_run": bool, "days": int}``
+        """
+        if days <= 0:
+            raise ValueError("补偿天数必须大于 0")
+
+        expired_names: list[str] = []
+        active_names: list[str] = []
+        # 永久账户显式汇报成「跳过」：否则管理员会奇怪某个账户为什么没被补上
+        skipped: list[str] = [
+            f"{rec.name}（永久账户，无需补偿）"
+            for rec in self.list_records() if rec.is_permanent
+        ]
+        failed: list[str] = []
+
+        for rec in self.select_compensation_targets(
+            include_expired=include_expired,
+            include_active=include_active,
+            max_days_left=max_days_left,
+            account_ids=account_ids,
+        ):
+            # 归组要用**补偿前**的状态：renew_days 会就地改写 rec.expires_at，
+            # 补完之后再看 rec.expired 永远是 False
+            was_expired = rec.expired
+            try:
+                if not dry_run:
+                    await self.renew_days(rec.id, days)
+            except Exception as e:
+                _log.warning("账户 {} 补偿时长失败: {}", rec.name, e)
+                failed.append(f"{rec.name}（{e}）")
+                continue
+            (expired_names if was_expired else active_names).append(rec.name)
+
+        groups: list[dict[str, Any]] = []
+        if expired_names:
+            groups.append({"label": "已过期（补后按偏好恢复运行）", "items": expired_names})
+        if active_names:
+            groups.append({"label": "未过期（在现有到期时间上顺延）", "items": active_names})
+
+        total = len(expired_names) + len(active_names)
+        if not dry_run:
+            _log.info(
+                "批量补偿时长: {} 个账户各 +{} 天（跳过 {} / 失败 {}）",
+                total, days, len(skipped), len(failed),
+            )
+
+        return {
+            "compensated": expired_names + active_names,
+            "skipped": skipped,
+            "failed": failed,
+            "groups": groups,
+            "days": days,
+            "dry_run": dry_run,
+        }
+
+    # ================================================================== #
     # 全局消息
     # ================================================================== #
 
