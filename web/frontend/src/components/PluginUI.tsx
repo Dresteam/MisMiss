@@ -37,12 +37,14 @@ interface ActionPrompt {
   key: string;
   label: string;
   placeholder?: string;
-  /** 输入类型：text | number | select | list */
+  /** 输入类型：text | number | select | textarea | list */
   input_type?: string;
   /** select 的选项 */
   options?: { label: string; value: string }[];
   /** 多字段弹窗中可选填 */
   optional?: boolean;
+  /** textarea：行数（默认 3） */
+  rows?: number;
   /** list：每项的标签（用于「添加 xxx」按钮） */
   item_label?: string;
   /** list：每项输入框的占位符 */
@@ -449,6 +451,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
             {fields.map((f, idx) => {
               const isSelect = f.input_type === 'select' && f.options;
               const isList = f.input_type === 'list';
+              const isTextarea = f.input_type === 'textarea';
               const items = promptLists[f.key] ?? [];
               const setItems = (next: string[]) => setPromptLists(prev => ({ ...prev, [f.key]: next }));
               return (
@@ -460,6 +463,7 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                         <div key={i} className="flex gap-2 items-start">
                           <textarea value={item} rows={2}
                             onChange={e => { const arr = [...items]; arr[i] = e.target.value; setItems(arr); }}
+                            onKeyDown={e => e.stopPropagation()}
                             placeholder={f.item_placeholder || ''}
                             className={inputCls + ' resize-y font-mono'} />
                           <button
@@ -474,6 +478,16 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                         + 添加{f.item_label || '一项'}
                       </Button>
                     </div>
+                  ) : isTextarea ? (
+                    <textarea value={promptValues[f.key] ?? ''} rows={f.rows || 3}
+                      onChange={e => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
+                      onKeyDown={e => {
+                        // 回车用于换行（阻止冒泡，避免被外层的提交逻辑截获）
+                        e.stopPropagation();
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing && (e.ctrlKey || e.metaKey) && canSubmit) submitPrompt();
+                      }}
+                      placeholder={(f.placeholder || '') + '（回车换行，Ctrl+Enter 提交）'}
+                      className={inputCls + ' resize-y'} autoFocus={idx === 0} />
                   ) : isSelect ? (
                     <Select
                       value={promptValues[f.key] ?? ''}
@@ -490,7 +504,10 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                       onChange={(e) => setPromptValues(prev => ({ ...prev, [f.key]: e.target.value }))}
                       placeholder={f.placeholder || ''}
                       className={inputCls}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) submitPrompt(); }} autoFocus={idx === 0} />
+                      onKeyDown={(e) => {
+                        // isComposing：中文输入法确认候选词的回车不应触发提交
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing && canSubmit) submitPrompt();
+                      }} autoFocus={idx === 0} />
                   )}
                 </div>
               );
@@ -886,7 +903,9 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
                   <input type={pf.input_type || 'text'} value={promptValue} onChange={e => setPromptValue(e.target.value)}
                     placeholder={pf.placeholder || ''}
                     className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
-                    onKeyDown={e => { if (e.key === 'Enter') plSubmitPrompt(); }} autoFocus />
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) plSubmitPrompt();
+                    }} autoFocus />
                   <div className="flex justify-end gap-2 pt-1">
                     <Button variant="ghost" size="sm" onClick={closePrompt}>取消</Button>
                     <Button variant="primary" size="sm" onClick={plSubmitPrompt} loading={actionLoading === promptAction.label} disabled={!promptValue.trim()}>确定</Button>
