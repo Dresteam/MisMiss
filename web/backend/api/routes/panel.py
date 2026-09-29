@@ -212,6 +212,21 @@ async def accounts_renew(
     return _summary(manager, rec.id, notice=notice)
 
 
+@router.post("/accounts/{account_id}/expire", response_model=AccountSummary)
+async def accounts_expire(account_id: int, manager: AccountManager = _DEP):
+    """把账户设为立即过期并停用（到期时间置为过去，运行时立刻停止）。
+
+    与「等它自己到期」的结果一致，只是立刻生效、不等调度器的下一轮 tick。
+    之后照常可以续期恢复，恢复行为仍由账户自身的 ``auto_resume_on_renew`` 决定。
+    永久账户同样可被这样收回。
+    """
+    try:
+        rec = await manager.expire_account(account_id)
+    except CoreAccountNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _summary(manager, rec.id, notice="已设为过期停用")
+
+
 @router.post("/accounts/{account_id}/redeem", response_model=AccountSummary)
 async def accounts_redeem(
     account_id: int, req: RedeemRequest, manager: AccountManager = _DEP

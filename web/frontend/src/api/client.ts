@@ -430,6 +430,11 @@ export async function renewAccount(id: number, data: RenewRequest): Promise<Acco
   });
 }
 
+/** 把账户设为立即过期并停用（到期时间置为过去，运行时立刻停止）。 */
+export async function expireAccount(id: number): Promise<AccountSummary> {
+  return request<AccountSummary>(`/panel/accounts/${id}/expire`, { method: 'POST' });
+}
+
 export async function redeemAccount(id: number, code: string): Promise<AccountSummary> {
   return request<AccountSummary>(`/panel/accounts/${id}/redeem`, {
     method: 'POST',

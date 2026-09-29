@@ -4,7 +4,7 @@ import {
   ArrowLeft, Bot as BotIcon, Radio, Puzzle, Clock, Send, RefreshCw,
   Plus, Trash2, Pencil, ChevronUp, ChevronDown, SkipForward, Loader2, Eye, EyeOff,
   Power, XCircle, CalendarClock, KeyRound, ExternalLink, Hourglass, Download,
-  AlertTriangle,
+  AlertTriangle, CalendarCog,
 } from 'lucide-react';
 import {
   fetchAccountSummary, fetchAccountBot, createAccountBot, refreshAccountBot,
@@ -19,7 +19,7 @@ import {
   fetchAccountPluginReadme, fetchAccountPluginConfig, updateAccountPluginConfig,
   getAccountBotCookie, uninstallAccountPluginFromAccount, fetchAccountLibrary,
   installAccountPlugin, updateAccountPlugin, updateAllAccountPlugins,
-  updateAccountPreferences,
+  updateAccountPreferences, expireAccount,
 } from '../api/client';
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
@@ -52,7 +52,7 @@ const PERM_LABELS: Record<string, string> = {
 // 概览 Tab
 // ================================================================== //
 
-export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; onRenew: (mode: 'days' | 'code' | 'set' | 'permanent') => void; panelMode?: boolean }) {
+export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; onRenew: (mode: 'days' | 'code' | 'set' | 'permanent' | 'expire') => void; panelMode?: boolean }) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <div className="card">
@@ -98,15 +98,9 @@ export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; 
           {panelMode !== false && (
             <div className="flex flex-wrap gap-2">
               <Button size="sm" icon={<CalendarClock className="w-4 h-4" />} onClick={() => onRenew('days')}>续期</Button>
-              <Button size="sm" variant="secondary" icon={<KeyRound className="w-4 h-4" />} onClick={() => onRenew('code')}>兑换授权码</Button>
-              {acc.expires_at ? (
-                <>
-                  <Button size="sm" variant="ghost" onClick={() => onRenew('set')}>设置剩余天数</Button>
-                  <Button size="sm" variant="ghost" onClick={() => onRenew('permanent')}>设为永久</Button>
-                </>
-              ) : (
-                <Button size="sm" variant="ghost" onClick={() => onRenew('set')}>改为限时</Button>
-              )}
+              {/* 其余时长操作集中在这个入口里，打开后可自由切换 */}
+              <Button size="sm" variant="secondary" icon={<CalendarCog className="w-4 h-4" />}
+                onClick={() => onRenew('set')}>时长管理</Button>
             </div>
           )}
         </div>
@@ -1579,7 +1573,7 @@ export function AccountDetailPage() {
   });
   const [loading, setLoading] = useState(true);
   const [renewOpen, setRenewOpen] = useState(false);
-  const [renewMode, setRenewMode] = useState<'days' | 'code' | 'set' | 'permanent'>('days');
+  const [renewMode, setRenewMode] = useState<'days' | 'code' | 'set' | 'permanent' | 'expire'>('days');
   const [renewing, setRenewing] = useState(false);
 
   const load = useCallback(async () => {
@@ -1622,6 +1616,18 @@ export function AccountDetailPage() {
       </div>
     );
   }
+
+  const handleExpire = async (aid: number) => {
+    setRenewing(true);
+    try {
+      const res = await expireAccount(aid);
+      showToast('success', res.notice || '已设为过期停用', '');
+      setRenewOpen(false);
+      load();
+    } catch (e: any) {
+      showToast('error', '设置失败', e.message);
+    } finally { setRenewing(false); }
+  };
 
   const handleRenew = async (aid: number, data: RenewRequest) => {
     setRenewing(true);
@@ -1718,6 +1724,7 @@ export function AccountDetailPage() {
         loading={renewing}
         onRenew={handleRenew}
         onRedeem={handleRedeem}
+        onExpire={handleExpire}
         onCancel={() => setRenewOpen(false)}
       />
     </div>

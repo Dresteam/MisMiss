@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
-  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink,
+  Plus, Trash2, CalendarClock, Bot as BotIcon,
+  Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink, CalendarCog,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
-  resetAccountCredentials,
+  resetAccountCredentials, expireAccount,
 } from '../api/client';
 import type { AccountSummary, AccountCreateRequest, PanelOverview, RenewRequest } from '../api/types';
 import { Button } from '../components/Button';
@@ -25,7 +25,7 @@ export function AccountsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [renewTarget, setRenewTarget] = useState<AccountSummary | null>(null);
-  const [renewMode, setRenewMode] = useState<'days' | 'set' | 'code'>('days');
+  const [renewMode, setRenewMode] = useState<'days' | 'set' | 'code' | 'permanent' | 'expire'>('days');
   const [renewing, setRenewing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AccountSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -88,6 +88,20 @@ export function AccountsPage() {
       load();
     } catch (e: any) {
       showToast('error', '兑换失败', e.message);
+    } finally {
+      setRenewing(false);
+    }
+  };
+
+  const handleExpire = async (id: number) => {
+    setRenewing(true);
+    try {
+      await expireAccount(id);
+      showToast('success', '已设为过期停用', '');
+      setRenewTarget(null);
+      load();
+    } catch (e: any) {
+      showToast('error', '设置失败', e.message);
     } finally {
       setRenewing(false);
     }
@@ -273,10 +287,11 @@ export function AccountsPage() {
                   <div className="relative z-10 flex gap-1">
                     <Button variant="ghost" size="sm" icon={<CalendarClock className="w-4 h-4" />}
                       tooltip="续期" onClick={() => { setRenewMode('days'); setRenewTarget(acc); }} />
-                    <Button variant="ghost" size="sm" icon={<Hourglass className="w-4 h-4" />}
-                      tooltip="设置剩余天数" onClick={() => { setRenewMode('set'); setRenewTarget(acc); }} />
-                    <Button variant="ghost" size="sm" icon={<KeyRound className="w-4 h-4" />}
-                      tooltip="兑换授权码" onClick={() => { setRenewMode('code'); setRenewTarget(acc); }} />
+                    {/* 剩余天数 / 兑换授权码 / 设为永久 / 设为停用 合并进同一个对话框，
+                        卡片上只留一个入口 —— 图标行不再随功能增加而膨胀 */}
+                    <Button variant="ghost" size="sm" icon={<CalendarCog className="w-4 h-4" />}
+                      tooltip="时长管理（剩余天数 / 授权码 / 永久 / 停用）"
+                      onClick={() => { setRenewMode('set'); setRenewTarget(acc); }} />
                     <Button variant="ghost" size="sm" icon={<Lock className="w-4 h-4" />}
                       tooltip="重置登录凭据" onClick={() => setCredTarget(acc)} />
                     <Button variant="ghost" size="sm" icon={<Trash2 className="w-4 h-4 text-red-500" />}
@@ -309,6 +324,7 @@ export function AccountsPage() {
         mode={renewMode}
         loading={renewing}
         onRenew={handleRenew}
+        onExpire={handleExpire}
         onRedeem={handleRedeem}
         onCancel={() => setRenewTarget(null)}
       />

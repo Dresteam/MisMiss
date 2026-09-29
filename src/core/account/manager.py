@@ -768,6 +768,29 @@ class AccountManager:
     # 到期与续期
     # ================================================================== #
 
+    async def expire_account(self, account_id: int) -> AccountRecord:
+        """把账户设为「立即过期」并停用其运行时（面板级的强制停用）。
+
+        到期时间置为**稍早于现在**而不是正好等于：``expired`` 用的是
+        ``now >= 到期时间``，落到同一毫秒会踩边界。随后立刻走一遍
+        :meth:`stop_for_expiry`，不等调度器的下一轮 tick（默认 60 秒）——
+        管理员点了「设为过期」，就该马上停。
+
+        之后照常可以续期恢复：恢复行为仍由账户自身的 ``auto_resume_on_renew``
+        决定，与自然到期完全一致，不引入第二套语义。
+
+        :return: 更新后的账户记录
+        """
+        rec = self.get_record(account_id)
+        rec.expires_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat()
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        await self.stop_for_expiry(account_id)
+        _log.info("账户 {} 已被设为过期停用", rec.name)
+        return rec
+
     async def stop_for_expiry(self, account_id: int) -> None:
         """到期强制停用(幂等):停 Bot → 断房间 → 暂停插件(保留启用标记)。"""
         rec = self.get_record(account_id)

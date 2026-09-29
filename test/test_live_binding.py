@@ -5,6 +5,7 @@
 - 绑定直播间时 ``live_id`` 传链接等价于传数字（同一个房间）
 - 账户总览下发 ``room_streaming``（开播状态），供列表直接展示；且不再下发
   内部计数器 next_account_id（默认用户名由前端按「账户总数 + 1」算）
+- 管理端可把账户设为「过期停用」：到期时间置为过去 + 立刻停用，续期即可恢复
 
 运行： .venv/Scripts/python.exe test/test_live_binding.py
 """
@@ -146,6 +147,60 @@ with TestClient(app) as c:
     check("总览仍带账户列表（前端据此算总数与避让重名）",
           isinstance(ov.get("accounts"), list) and len(ov["accounts"]) >= 1,
           str(len(ov.get("accounts") or [])))
+
+# ---------------------------------------------------------------- #
+# 2b. 管理端可把账户设为「过期停用」
+# ---------------------------------------------------------------- #
+
+with TestClient(app) as c:
+    tok = c.post(
+        "/api/auth/login", json={"username": "MisMiss", "password": "MisMiss"},
+    ).json()["token"]
+    H = {"Authorization": f"Bearer {tok}"}
+    mgr = get_account_manager()
+
+    r = c.post("/api/panel/accounts", headers=H, json={
+        "name": "待停用", "bot_mode": "private", "cookie": "",
+        "username": "toexpire", "password": "pw123456", "duration_days": 30,
+    })
+    aid = r.json()["id"]
+    rec = mgr.get_record(aid)
+    check("前置：账户未过期", not rec.expired and rec.days_left > 0,
+          f"expired={rec.expired} left={rec.days_left}")
+
+    r = c.post(f"/api/panel/accounts/{aid}/expire", headers=H)
+    check("设为过期停用 -> 200", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+    rec = mgr.get_record(aid)
+    check("到期时间被置为过去（已过期）", rec.expired, f"expires_at={rec.expires_at}")
+    check("标记为到期暂停", rec.paused_reason == "expiry", str(rec.paused_reason))
+    check("Bot 立刻被停用（不等调度器下一轮 tick）",
+          mgr.get_server(aid).bot.enabled is False,
+          str(mgr.get_server(aid).bot.enabled))
+    check("接口回执说明已停用", "过期" in r.json().get("notice", ""),
+          str(r.json().get("notice")))
+
+    # 永久账户同样可被这样收回
+    r = c.post("/api/panel/accounts", headers=H, json={
+        "name": "永久待收回", "bot_mode": "private", "cookie": "",
+        "username": "perm2expire", "password": "pw123456", "duration_days": -1,
+    })
+    pid = r.json()["id"]
+    check("前置：账户为永久", mgr.get_record(pid).is_permanent)
+    r = c.post(f"/api/panel/accounts/{pid}/expire", headers=H)
+    check("永久账户也能被设为过期", r.status_code == 200 and mgr.get_record(pid).expired,
+          f"{r.status_code} expired={mgr.get_record(pid).expired}")
+
+    # 续期即可恢复（与自然到期后的行为一致）
+    r = c.post(f"/api/panel/accounts/{aid}/renew", headers=H, json={"days": 7})
+    check("续期可恢复", r.status_code == 200 and not mgr.get_record(aid).expired,
+          f"{r.status_code} expired={mgr.get_record(aid).expired}")
+    check("恢复后暂停标记被清除", mgr.get_record(aid).paused_reason is None,
+          str(mgr.get_record(aid).paused_reason))
+
+    check("不存在的账户 -> 404",
+          c.post("/api/panel/accounts/99999/expire", headers=H).status_code == 404)
+    check("未认证 -> 401",
+          c.post(f"/api/panel/accounts/{aid}/expire").status_code == 401)
 
 # ---------------------------------------------------------------- #
 # 3. 开播状态必须由 WS 事件**同步**更新
