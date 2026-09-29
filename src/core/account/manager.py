@@ -540,10 +540,6 @@ class AccountManager:
             "total": len(accounts),
             "expired_count": sum(1 for a in accounts if a["expired"]),
             "running_count": sum(1 for a in accounts if not a["expired"] and a["bot_enabled"]),
-            # 下一个账户 id —— 前端据此预填默认用户名 user_{num}。
-            # 必须由后端给：删过账户后 id 会跳号（存在 panel.json 里的计数器不回退），
-            # 前端按 max(id)+1 算会与真实分配值对不上
-            "next_account_id": self._next_account_id,
             "public_bot_configured": bool(self._public_bot.get("cookie")),
             "library_plugin_count": len(self.list_library_plugins()),
             "license_unused": sum(

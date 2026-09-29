@@ -314,9 +314,6 @@ class PanelOverview(BaseModel):
 
     accounts: list[AccountSummary] = []
     total: int = 0
-    # 下一个账户 id —— 前端据此预填默认用户名 user_{num}。
-    # 必须由后端给：删过账户后 id 会跳号，前端按 max(id)+1 算会对不上
-    next_account_id: int = 1
     expired_count: int = 0
     running_count: int = 0
     public_bot_configured: bool = False

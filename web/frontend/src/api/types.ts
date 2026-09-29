@@ -225,8 +225,6 @@ export interface AccountSummary {
 export interface PanelOverview {
   accounts: AccountSummary[];
   total: number;
-  /** 下一个账户 id —— 用于预填默认用户名 user_{num} */
-  next_account_id: number;
   expired_count: number;
   running_count: number;
   public_bot_configured: boolean;

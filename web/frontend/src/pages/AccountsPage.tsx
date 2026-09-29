@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, KeyRound, CalendarClock, Bot as BotIcon,
@@ -108,6 +108,23 @@ export function AccountsPage() {
     }
   };
 
+  const accounts = overview?.accounts ?? [];
+
+  /**
+   * 默认用户名 `user_{账户总数 + 1}`。
+   *
+   * 用**总数**而不是账户 id：id 是单调递增的计数器，删过账户就会跳号，
+   * 于是 3 个账户可能默认出 user_7，看着莫名其妙。
+   * 顺带跳过已占用的名字 —— 删掉中间某个账户后，总数+1 可能正好撞上现存的用户名，
+   * 那样一打开弹窗就是个注定失败的默认值。
+   */
+  const defaultUsername = useMemo(() => {
+    const taken = new Set(accounts.map((a) => a.username).filter(Boolean));
+    let n = accounts.length + 1;
+    while (taken.has(`user_${n}`)) n += 1;
+    return `user_${n}`;
+  }, [accounts]);
+
   if (loading && !overview) {
     return (
       <div className="flex justify-center py-24">
@@ -115,8 +132,6 @@ export function AccountsPage() {
       </div>
     );
   }
-
-  const accounts = overview?.accounts ?? [];
 
   return (
     <div className="space-y-6 animate-fade-in max-w-6xl">
@@ -279,7 +294,7 @@ export function AccountsPage() {
         loading={creating}
         onConfirm={handleCreate}
         onCancel={() => setCreateOpen(false)}
-        nextAccountId={overview?.next_account_id}
+        defaultUsername={defaultUsername}
       />
       <CompensateDialog
         open={compensateOpen}

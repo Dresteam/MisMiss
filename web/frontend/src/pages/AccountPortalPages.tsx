@@ -330,16 +330,19 @@ export function AccountPasswordPage() {
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">原密码</label>
             <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+              autoComplete="current-password"
               className="input w-full" placeholder="当前使用的密码" autoFocus />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">新密码</label>
             <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+              autoComplete="new-password"
               className="input w-full" placeholder="至少 4 位" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">确认新密码</label>
             <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              autoComplete="new-password"
               className="input w-full" placeholder="再次输入新密码"
               onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} />
           </div>

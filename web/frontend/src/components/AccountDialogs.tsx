@@ -13,11 +13,11 @@ interface CreateAccountDialogProps {
   loading?: boolean;
   onConfirm: (data: AccountCreateRequest) => void;
   onCancel: () => void;
-  /** 下一个账户 id —— 用于预填默认用户名 user_{num} */
-  nextAccountId?: number;
+  /** 预填的默认用户名（调用方按「账户总数 + 1」算好，并避开已占用的名字） */
+  defaultUsername?: string;
 }
 
-export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAccountId }: CreateAccountDialogProps) {
+export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaultUsername }: CreateAccountDialogProps) {
   const [name, setName] = useState('');
   const [roomId, setRoomId] = useState('');
   const [botMode, setBotMode] = useState<'private' | 'public'>('public');
@@ -28,7 +28,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
   const [error, setError] = useState('');
 
   // 打开时预填默认凭据（仍可改）。用 useEffect 而非 useState 初值：
-  // nextAccountId 是异步取到的，弹窗挂载时可能还没有
+  // 账户列表是异步取到的，弹窗挂载时可能还没有
   useEffect(() => {
     if (!open) return;
     setName('');
@@ -36,10 +36,10 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
     setBotMode('public');
     setCookie('');
     setDurationDays('-1');
-    setUsername(nextAccountId ? `user_${nextAccountId}` : '');
+    setUsername(defaultUsername ?? '');
     setPassword('user123');
     setError('');
-  }, [open, nextAccountId]);
+  }, [open, defaultUsername]);
 
   if (!open) return null;
 
@@ -79,12 +79,12 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
         <div className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">账户名称 *</label>
-            <input value={name} onChange={(e) => setName(e.target.value)}
+            <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off"
               className="input w-full" placeholder="如:主播A-场控" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">直播间 ID 或链接(可选)</label>
-            <input value={roomId} onChange={(e) => setRoomId(e.target.value)}
+            <input value={roomId} onChange={(e) => setRoomId(e.target.value)} autoComplete="off"
               className="input w-full" placeholder="如 869198039，或粘贴直播间链接" />
           </div>
           <div>
@@ -106,7 +106,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
           {botMode === 'private' && (
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Cookie *</label>
-              <textarea value={cookie} onChange={(e) => setCookie(e.target.value)} rows={2}
+              <textarea value={cookie} onChange={(e) => setCookie(e.target.value)} rows={2} autoComplete="off"
                 className="input w-full font-mono text-xs" placeholder="粘贴 Missevan Cookie..." />
             </div>
           )}
@@ -115,7 +115,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
               有效时长(天)
             </label>
             <input value={durationDays} onChange={(e) => setDurationDays(e.target.value)}
-              className="input w-full" inputMode="numeric"
+              className="input w-full" inputMode="numeric" autoComplete="off"
               placeholder="30 表示 30 天;-1 表示永久" />
             <p className="text-xs text-gray-400 mt-1">填 30 表示有效 30 天,填 -1 表示永久</p>
           </div>
@@ -124,7 +124,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                 登录用户名 *
               </label>
-              <input value={username} onChange={(e) => setUsername(e.target.value)}
+              <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off"
                 className="input w-full" placeholder="必填,用于账户分辨,不可重复" />
             </div>
             <div>
@@ -132,6 +132,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, nextAc
                 登录密码
               </label>
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                autoComplete="new-password"
                 className="input w-full" placeholder="至少 4 位,默认 user123" />
             </div>
           </div>
@@ -285,12 +286,13 @@ export function CredentialsDialog({
         <div className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">用户名</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)}
+            <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off"
               className="input w-full" placeholder="留空保持不变" />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">新密码</label>
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
               className="input w-full" placeholder="至少 4 位" />
           </div>
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}

@@ -3,8 +3,8 @@
 覆盖：
 - ``parse_live_id`` 接受裸数字与各种形态的直播间链接，非法输入报错
 - 绑定直播间时 ``live_id`` 传链接等价于传数字（同一个房间）
-- 账户总览下发 ``room_streaming``（开播状态），供列表直接展示
-- 总览下发 ``next_account_id``，用于预填默认用户名
+- 账户总览下发 ``room_streaming``（开播状态），供列表直接展示；且不再下发
+  内部计数器 next_account_id（默认用户名由前端按「账户总数 + 1」算）
 
 运行： .venv/Scripts/python.exe test/test_live_binding.py
 """
@@ -67,7 +67,7 @@ check("链接模板正确",
 
 
 # ---------------------------------------------------------------- #
-# 2. 接口层：绑定、开播状态、下一个 id
+# 2. 接口层：绑定、开播状态
 # ---------------------------------------------------------------- #
 
 with TestClient(app) as c:
@@ -129,7 +129,7 @@ with TestClient(app) as c:
           r.status_code == 400 and "直播间" in r.json().get("detail", ""),
           f"{r.status_code} {r.text[:120]}")
 
-    # 总览：开播状态 + 下一个账户 id
+    # 总览：开播状态
     ov = c.get("/api/panel/overview", headers=H).json()
     mine = next(a for a in ov["accounts"] if a["id"] == aid)
     check("总览下发 room_streaming", mine.get("room_streaming") is True,
@@ -139,15 +139,13 @@ with TestClient(app) as c:
     check("未绑定直播间的账户 room_streaming 为 False",
           all(a["room_streaming"] is False for a in ov["accounts"] if a["room_id"] is None),
           str([(a["name"], a["room_streaming"], a["room_id"]) for a in ov["accounts"]]))
-    check("总览下发 next_account_id",
-          isinstance(ov.get("next_account_id"), int) and ov["next_account_id"] > aid,
-          f"next={ov.get('next_account_id')} aid={aid}")
-
-    # next_account_id 必须等于后端真实分配的下一个 id（删过账户后会跳号，
-    # 前端按 max(id)+1 算会对不上）
-    expect = mgr._next_account_id
-    check("next_account_id 与后端分配器一致", ov["next_account_id"] == expect,
-          f"{ov['next_account_id']} vs {expect}")
+    # 默认用户名由前端按「账户总数 + 1」算（见 AccountsPage），不再由后端下发 id ——
+    # 所以总览里**不该**再出现 next_account_id（它是内部计数器，留在 panel.json 里）
+    check("总览不再下发 next_account_id（默认用户名改由前端按总数算）",
+          "next_account_id" not in ov, str(ov.get("next_account_id")))
+    check("总览仍带账户列表（前端据此算总数与避让重名）",
+          isinstance(ov.get("accounts"), list) and len(ov["accounts"]) >= 1,
+          str(len(ov.get("accounts") or [])))
 
 # ---------------------------------------------------------------- #
 # 3. 开播状态必须由 WS 事件**同步**更新
