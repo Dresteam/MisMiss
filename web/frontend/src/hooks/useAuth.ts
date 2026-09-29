@@ -14,13 +14,16 @@ interface AuthState {
   /** 角色:admin(面板管理员) | account(账户持有者) */
   role: 'admin' | 'account';
   accountId: number | null;
+  /** 账户仍用着新建时预填的默认密码 —— 必须先改密才能用面板 */
+  mustChangePassword: boolean;
   /** 服务器更新后首次登录时非空,关闭弹窗并 ack 后清空 */
   pendingChangelog: PendingChangelog | null;
 }
 
 const EMPTY_STATE = {
   token: null, username: null, firstLogin: false,
-  role: 'admin' as const, accountId: null, pendingChangelog: null,
+  role: 'admin' as const, accountId: null, mustChangePassword: false,
+  pendingChangelog: null,
 };
 
 interface AuthContextType extends AuthState {
@@ -52,6 +55,7 @@ export function useAuthState(): AuthContextType {
               firstLogin: d.first_login,
               role: d.role === 'account' ? 'account' : 'admin',
               accountId: d.account_id ?? null,
+              mustChangePassword: !!d.must_change_password,
               pendingChangelog: d.pending_changelog ?? null,
             }));
           } else {
@@ -80,6 +84,7 @@ export function useAuthState(): AuthContextType {
       firstLogin: data.first_login,
       role: data.role === 'account' ? 'account' : 'admin',
       accountId: data.account_id ?? null,
+      mustChangePassword: !!data.must_change_password,
       pendingChangelog: data.pending_changelog ?? null,
     });
   };

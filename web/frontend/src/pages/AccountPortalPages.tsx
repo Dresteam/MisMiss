@@ -7,7 +7,6 @@ import {
 import { Bot as BotIcon, Radio, Puzzle, Clock, Loader2, KeyRound } from 'lucide-react';
 import {
   fetchAccountSummary, enableAccountBot, disableAccountBot, redeemAccountCode,
-  changeAccountPassword,
 } from '../api/client';
 import type { AccountSummary } from '../api/types';
 import { Button } from '../components/Button';
@@ -15,6 +14,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { RenewDialog } from '../components/AccountDialogs';
 import { useAuth } from '../hooks/useAuth';
+import { AccountPasswordForm } from '../components/AccountPasswordForm';
 import { showToast } from '../hooks/useToast';
 import {
   OverviewTab, LiveTab, BotTab, TimerTab, PluginsTab, LibraryTab,
@@ -292,34 +292,8 @@ export function AccountPluginsPage() {
   }
   return <PageShell title="插件"><PluginsTab acc={acc} /></PageShell>;
 }
-
 export function AccountPasswordPage() {
   const auth = useAuth();
-  const [current, setCurrent] = useState('');
-  const [next, setNext] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const submit = async () => {
-    if (!auth.accountId) return;
-    if (!current) { setError('请输入原密码'); return; }
-    if (next.length < 4) { setError('新密码至少 4 位'); return; }
-    if (next !== confirm) { setError('两次输入的新密码不一致'); return; }
-    setBusy(true);
-    setError('');
-    try {
-      await changeAccountPassword(auth.accountId, current, next, confirm);
-      showToast('success', '密码已修改,请重新登录', '');
-      // 稍候再登出,让成功提示可见(服务端 token 已立即失效)
-      setTimeout(() => auth.logout(), 1200);
-    } catch (e: any) {
-      setError(e.message || '修改失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <PageShell title="修改密码">
       <div className="card max-w-md">
@@ -327,29 +301,11 @@ export function AccountPasswordPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             修改后需使用新密码重新登录
           </p>
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">原密码</label>
-            <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
-              autoComplete="current-password"
-              className="input w-full" placeholder="当前使用的密码" autoFocus />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">新密码</label>
-            <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
-              autoComplete="new-password"
-              className="input w-full" placeholder="至少 4 位" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">确认新密码</label>
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
-              autoComplete="new-password"
-              className="input w-full" placeholder="再次输入新密码"
-              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }} />
-          </div>
-          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-          <Button className="w-full" onClick={submit} loading={busy}>
-            修改密码
-          </Button>
+          {/* 表单与「强制修改默认密码」界面共用，校验规则只此一份 */}
+          <AccountPasswordForm
+            accountId={auth.accountId ?? 0}
+            onDone={() => setTimeout(() => auth.logout(), 1200)}
+          />
         </div>
       </div>
     </PageShell>

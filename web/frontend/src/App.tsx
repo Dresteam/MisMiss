@@ -15,6 +15,7 @@ import { PluginPageView } from './pages/PluginPageView';
 import { UpdatePage } from './pages/UpdatePage';
 import { LoginPage } from './pages/LoginPage';
 import { AccountSetup } from './components/AccountSetup';
+import { ForcePasswordChange } from './components/ForcePasswordChange';
 import { ChangelogDialog } from './components/ChangelogDialog';
 import { useToast, type Toast as ToastType } from './hooks/useToast';
 import { AuthContext, useAuthState } from './hooks/useAuth';
@@ -99,6 +100,22 @@ function App() {
     toasts,
     onRemoveToast: removeToast,
   };
+
+  // 账户还在用默认密码：全屏挡住，改完为止。
+  // 放在最前面且直接 return —— 不发更新日志、不渲染面板，避免「先关弹窗再改」
+  // 或从侧边栏绕过。改密成功后服务端会作废该账户的 token，这里清掉本地登录态
+  // 回到登录页用新密码登一次。
+  if (auth.role === 'account' && auth.mustChangePassword && auth.accountId != null) {
+    const handleForcedDone = () => {
+      localStorage.removeItem('auth_token');
+      window.location.reload();
+    };
+    return (
+      <AuthContext.Provider value={auth}>
+        <ForcePasswordChange accountId={auth.accountId} onDone={handleForcedDone} />
+      </AuthContext.Provider>
+    );
+  }
 
   return (
     <AuthContext.Provider value={auth}>

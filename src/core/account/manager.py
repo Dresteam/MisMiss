@@ -44,6 +44,11 @@ _SCHEMA_VERSION = 1
 # 直播弹幕有长度上限，超出会被平台拒绝，故统一在入库前裁剪
 BROADCAST_MAX_LEN = 80
 
+# 新建账户时预填的默认登录密码。仍是这个密码的账户会被要求登录后立即修改
+# （见 api/routes/auth.py 的登录标记）—— 默认密码人人皆知，留着等于没设防。
+# 前端预填的也是这个值，改动时两处要一起改（components/AccountDialogs.tsx）
+DEFAULT_ACCOUNT_PASSWORD = "user123"
+
 # 等待消息队列排空的秒数：调用方可能紧接着要重启进程，必须等真正发出去
 BROADCAST_DRAIN_TIMEOUT = 15.0
 

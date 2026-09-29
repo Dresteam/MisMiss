@@ -2,6 +2,7 @@
 
 from core.account.manager import (
     BROADCAST_MAX_LEN,
+    DEFAULT_ACCOUNT_PASSWORD,
     AccountManager,
     AccountRecord,
     clip_broadcast,
@@ -18,4 +19,5 @@ __all__ = [
     "migrate_legacy_data",
     "BROADCAST_MAX_LEN",
     "clip_broadcast",
+    "DEFAULT_ACCOUNT_PASSWORD",
 ]

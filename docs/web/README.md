@@ -384,6 +384,15 @@ WebSocket 实时推送用同一套参数；其中**空串表示只看面板级�
 | GET | `/api/auth/check` | 验证 token（返回 role / account_id） |
 | POST | `/api/auth/skip-first-login` | 跳过首次登录引导 |
 
+**默认密码强制改密**：新建账户的密码预填 `user123`（`core.account.DEFAULT_ACCOUNT_PASSWORD`），
+人人都知道，等于没设防。账户用它登录时，`/auth/login` 与 `/auth/check` 都会返回
+`must_change_password: true`，面板据此全屏挡住（不可跳过），改完为止。
+
+- 判据是「提交的密码是否等于默认值」—— 改密过后自然不再标记，改回去会重新标记
+- 标记**存在 token 里**：只在登录那一刻判得出来（要拿明文比对），只放登录响应里的话
+  刷新页面就绕过去了
+- 仅对 `role=account` 生效；面板管理员有自己那套首次登录引导（`first_login`）
+
 ### 配置
 
 | 方法 | 路径 | 说明 |

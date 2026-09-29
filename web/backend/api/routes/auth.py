@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import JSONResponse
 
+from core.account import DEFAULT_ACCOUNT_PASSWORD
 from core.version import CURRENT_VERSION, load_changelog
 
 router = APIRouter()
@@ -50,8 +51,13 @@ TOKEN_DIR.mkdir(parents=True, exist_ok=True)
 def _save_token(
     token: str, username: str, expires: float,
     role: str = "admin", account_id: int | None = None,
+    must_change_password: bool = False,
 ) -> None:
-    """持久化 token 到文件(含角色与账户 ID)。"""
+    """持久化 token 到文件(含角色、账户 ID 与「须改默认密码」标记)。
+
+    ``must_change_password`` 必须写进 token：改密要求只在登录那一刻判得出来
+    （要拿明文密码比对），若只放在登录响应里，用户刷新一下页面就绕过去了。
+    """
     TOKEN_DIR.mkdir(parents=True, exist_ok=True)
     path = TOKEN_DIR / token
     with open(path, "w", encoding="utf-8") as f:
@@ -60,6 +66,7 @@ def _save_token(
             "expires": expires,
             "role": role,
             "account_id": account_id,
+            "must_change_password": bool(must_change_password),
         }, f)
 
 
@@ -202,6 +209,7 @@ async def login(body: dict):
     role = "admin"
     account_id: int | None = None
     first_login = False
+    must_change_password = False
 
     auth = _load_auth()
     if username == auth["username"] and _hash(password) == auth["password"]:
@@ -218,9 +226,16 @@ async def login(body: dict):
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         role = "account"
         account_id = rec.id
+        # 账户仍用着新建时预填的默认密码 —— 密码人人皆知，等于没设防，要求立刻改
+        if password == DEFAULT_ACCOUNT_PASSWORD:
+            must_change_password = True
 
     token = secrets.token_hex(32)
-    _save_token(token, username, time.time() + TOKEN_TTL, role=role, account_id=account_id)
+    _save_token(
+        token, username, time.time() + TOKEN_TTL,
+        role=role, account_id=account_id,
+        must_change_password=must_change_password,
+    )
 
     return {
         "token": token,
@@ -228,6 +243,7 @@ async def login(body: dict):
         "first_login": first_login,
         "role": role,
         "account_id": account_id,
+        "must_change_password": must_change_password,
         "pending_changelog": _pending_changelog(role, account_id),
     }
 
@@ -284,6 +300,11 @@ async def check_auth(authorization: str = Header(default="")):
         # first_login 存于 data/auth.json，是面板管理员的全局标志；
         # 账户角色的凭据在 panel.json，没有这个引导，必须回报 False
         "first_login": auth.get("first_login", False) if role == "admin" else False,
+        # 账户仍在使用默认密码；存在 token 里，刷新页面也绕不过去
+        "must_change_password": (
+            bool((info or {}).get("must_change_password", False))
+            if role == "account" else False
+        ),
         "role": role,
         "account_id": account_id,
         "pending_changelog": _pending_changelog(role, account_id),
