@@ -58,8 +58,8 @@ from core.account import AccountManager, ExpiryScheduler, migrate_legacy_data
 from core.config import ServerConfig
 from api.deps import set_account_manager
 from api.routes import (
-    account, account_plugins, auth, bot, config, live, panel, plugin, proxy,
-    server, timer, update, ws,
+    account, account_plugins, auth, bot, config, cookie_login, live, panel,
+    plugin, proxy, server, timer, update, ws,
 )
 
 _log = get_logger("web.api")
@@ -132,7 +132,13 @@ app.add_middleware(
 # 认证中间件 —— 保护所有 /api/* 路由（/api/auth/* 和 /api/health 除外）
 # ------------------------------------------------------------------ #
 
-PUBLIC_PATHS = {"/api/auth/login", "/api/auth/check", "/api/auth/skip-first-login", "/api/health"}
+PUBLIC_PATHS = {
+    "/api/auth/login", "/api/auth/check", "/api/auth/skip-first-login", "/api/health",
+    # 书签助手回传：书签跑在 www.missevan.com 的页面里，带不了面板的
+    # Authorization 头，只能靠 URL 里那个一次性 token 授权。刻意用**精确路径**
+    # 而非 PUBLIC_PREFIXES —— 前缀匹配是对未归一化路径做裸 startswith，口子太宽。
+    "/api/helper/cookie",
+}
 # 仅保留确需匿名访问的入口：
 #   /api/auth/   登录与令牌校验本身
 #   /api/proxy/  图片代理——<img> 无法携带 Authorization header,故以「域名白名单 +
@@ -191,6 +197,14 @@ async def auth_middleware(request: Request, call_next):
 
 app.include_router(panel.router, prefix="/api/panel", tags=["Panel"])
 app.include_router(account.router, prefix="/api/accounts/{account_id}", tags=["Account"])
+# 私有 Cookie 自助登录：账户级部分是 /api/accounts/{id}/helper/* 与 /sms/*，
+# 另有一个匿名回传端点挂在 /api/helper（书签跑在猫耳页面上，带不了面板令牌）
+app.include_router(
+    cookie_login.router,
+    prefix="/api/accounts/{account_id}",
+    tags=["Account-CookieLogin"],
+)
+app.include_router(cookie_login.public_router, prefix="/api/helper", tags=["CookieLogin"])
 app.include_router(bot.router, prefix="/api/accounts/{account_id}/bot", tags=["Account-Bot"])
 app.include_router(live.router, prefix="/api/accounts/{account_id}/live", tags=["Account-Live"])
 app.include_router(timer.router, prefix="/api/accounts/{account_id}/timer", tags=["Account-Timer"])

@@ -60,6 +60,8 @@ def _bot_to_response(s: MissevanServer) -> BotInfoResponse:
         available=s.bot_available,
         permissions=[p.name for p in BotPermission if bot.permissions & p],
         cookie_length=len(bot.get_cookie()) if _has_permission(bot, BotPermission.EXPOSE_COOKIE) else 0,
+        # 公共模式下 state 里仍存着上次的自有 Cookie，前端据此给出「填入」按钮
+        has_saved_cookie=bool(s.saved_private_cookie),
     )
 
 
@@ -166,6 +168,22 @@ async def bot_cookie(account_id: int, s: MissevanServer = Depends(require_accoun
         raise HTTPException(status_code=403, detail=str(e))
     except CoreDisabledException as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/saved-cookie", response_model=BotCookieResponse)
+async def bot_saved_cookie(
+    account_id: int, s: MissevanServer = Depends(require_account)
+):
+    """取回切到公共模式时留存的自有 Cookie（没有则返回空串）。
+
+    刻意**不**套 ``_reject_public_cookie_op``：那条规则保护的是**面板的公共
+    Cookie**（账户内不可查看），而这里返回的是账户自己的东西，本来就在
+    「查看 Cookie」的可见范围内 —— 只不过它现在不在用、「查看 Cookie」在
+    公共模式下又是 403，所以需要单独一个入口把它取回来。
+    """
+    await s._ensure_bot_restored()
+    cookie = s.saved_private_cookie
+    return BotCookieResponse(cookie=cookie, length=len(cookie))
 
 
 @router.post("/verify", response_model=StatusResponse)

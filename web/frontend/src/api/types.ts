@@ -27,6 +27,8 @@ export interface BotInfo {
   available: boolean;
   permissions: string[];
   cookie_length: number;
+  /** 公共模式下是否还留着上次的自有 Cookie */
+  has_saved_cookie: boolean;
 }
 
 export interface BotCookieResponse {
@@ -208,6 +210,9 @@ export interface AccountSummary {
   /** 该账户直播间当前是否开播中 */
   room_streaming: boolean;
   room_name: string;
+  room_description: string;
+  creator_name: string;
+  creator_intro: string;
   plugin_count: number;
   enabled_plugin_count: number;
   /** 定时消息总数（普通 + 插件） */
@@ -220,6 +225,18 @@ export interface AccountSummary {
   notice?: string | null;
   /** 账户级偏好：从插件库安装插件后是否自动启用（默认关闭） */
   auto_enable_on_install: boolean;
+}
+
+export interface HelperTokenResponse {
+  token: string;
+  expires_at: number;
+}
+
+export type HelperState = 'waiting' | 'done' | 'failed';
+
+export interface HelperStatusResponse {
+  state: HelperState;
+  message: string;
 }
 
 export interface PanelOverview {

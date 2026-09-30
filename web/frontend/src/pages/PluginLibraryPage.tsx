@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, RefreshCw, Trash2, BookOpen, Loader2, Users, AlertTriangle, History, Star, Send, Sparkles, ChevronDown, ChevronUp, ScrollText } from 'lucide-react';
 import {
   fetchLibraryPlugins, refreshPlugins, uninstallPlugin,
@@ -7,6 +7,7 @@ import {
 } from '../api/client';
 import type { LibraryPlugin, AccountSummary, BulkGroup } from '../api/types';
 import { Button } from '../components/Button';
+import { SearchInput, FilterChips } from '../components/ListControls';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { UpdateDialog } from '../components/UpdateDialog';
 import { PluginDrawer } from '../components/PluginDrawer';
@@ -49,6 +50,23 @@ function IconBtn({ icon, label, onClick, loading, disabled }: {
 /** 插件库页 —— 面板级安装/更新/卸载,各账户从库中启用。 */
 export function PluginLibraryPage() {
   const [plugins, setPlugins] = useState<LibraryPlugin[]>([]);
+  // ---- 列表筛选（纯前端；插件库规模用不上分页） ----
+  const [kw, setKw] = useState('');
+  const [libFilter, setLibFilter] = useState<'all' | 'default' | 'used'>('all');
+
+  const filtered = useMemo(() => {
+    const k = kw.trim().toLowerCase();
+    return plugins.filter((p) => {
+      if (libFilter === 'default' && !p.is_default) return false;
+      // 用 || []兜底：类型上 used_by_accounts 是必填，但少一个字段就让整个
+      // 页面白屏，代价太大（本次就是被这个绊了一次）
+      if (libFilter === 'used' && (p.used_by_accounts || []).length === 0) return false;
+      if (!k) return true;
+      // 名称 / 显示名 / 作者 / 简介都搜 —— 记得住哪个就搜哪个
+      return [p.name, p.display_name, p.desc, p.author, p.short_desc]
+        .some((x) => (x || '').toLowerCase().includes(k));
+    });
+  }, [plugins, kw, libFilter]);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
@@ -319,8 +337,29 @@ export function PluginLibraryPage() {
           插件库为空 —— 点击右上角「安装插件」上传 zip 包
         </div></div>
       ) : (
+        /* 控件与网格是兄弟节点，三元分支里必须用 Fragment 包住 */
+        <>
+        <div className="space-y-2">
+          <SearchInput value={kw} onChange={setKw} placeholder="搜索插件名 / 作者 / 简介…" />
+          <FilterChips
+            options={[
+              { id: 'all', label: '全部', count: plugins.length },
+              { id: 'default', label: '默认插件',
+                count: plugins.filter((p) => p.is_default).length },
+              { id: 'used', label: '使用中',
+                count: plugins.filter((p) => (p.used_by_accounts || []).length > 0).length },
+            ] as const}
+            value={libFilter} onChange={setLibFilter} />
+        </div>
+
+        {filtered.length === 0 && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">
+            没有符合条件的插件
+          </p>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {plugins.map((p) => (
+          {filtered.map((p) => (
             <div key={p.name}
               className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
               <div className="p-5 flex-1">
@@ -420,6 +459,7 @@ export function PluginLibraryPage() {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {/* 版本更新确认 */}

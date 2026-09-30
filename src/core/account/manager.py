@@ -63,6 +63,17 @@ def clip_broadcast(message: object) -> str:
     return " ".join(str(message).split())[:BROADCAST_MAX_LEN]
 
 
+def _safe_creator_intro(room: Any) -> str:
+    """取主播简介；creator 缺失或平台字段异常时返回空串。
+
+    总览是每个账户都要走的高频路径，不能因为一个房间信息不完整就整页报错。
+    """
+    try:
+        return (room.creator.introduction or "") if room and room.creator else ""
+    except Exception:
+        return ""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -516,6 +527,10 @@ class AccountManager:
                 # 是否开播中：总览页要直接看出来，不必点进详情
                 "room_streaming": bool(room and getattr(room, "is_streaming", False)),
                 "room_name": (room.room_name or "") if room else "",
+                "room_description": (room.room_description or "") if room else "",
+                # 主播名 / 主播简介：总览页的搜索要覆盖它们，否则只能按账户名找
+                "creator_name": (room.creator_name or "") if room else "",
+                "creator_intro": _safe_creator_intro(room),
                 "plugin_count": len(server._plugin_manager.list_plugins()),
                 "enabled_plugin_count": sum(
                     1 for p in server._plugin_manager.list_plugins() if p.enabled
@@ -694,26 +709,50 @@ class AccountManager:
             raise ValueError("mode 必须为 public 或 private")
 
         if mode == "public":
-            pub_cookie = self._public_bot.get("cookie", "")
-            if not pub_cookie:
-                raise ValueError("面板公共 Cookie 未配置,无法切换为公共模式")
-            # 公共 Cookie 权限强制降级为仅发送直播间消息
-            from interfaces.bot import BotPermission
-            await server.update_cookie(
-                pub_cookie, permissions=BotPermission.SEND_LIVESTREAM_MESSAGE
-            )
-            rec.bot_mode = "public"
+            await self._switch_to_public(rec, server)
         else:
-            cookie = (cookie or "").strip()
-            if not cookie:
-                raise ValueError("自定义 Cookie 不能为空")
-            await server.update_cookie(cookie, permissions=permissions)
-            rec.bot_mode = "private"
+            await self._switch_to_private(rec, server, cookie, permissions)
 
         rec.updated_at = _now_iso()
         self._save_panel()
         _log.info("账户 {} Bot 模式已切换为 {}", rec.id, mode)
         return rec
+
+    async def _switch_to_public(self, rec: AccountRecord, server: MissevanServer) -> None:
+        """切到面板公共 Cookie（调用方负责落盘 panel.json）。
+
+        切之前先把账户自己的 Cookie 挪进 ``saved_private_cookie`` —— 否则
+        「切过去再切回来」就得让用户重新去浏览器里翻一遍，而普通用户基本等于丢了。
+
+        公共 Cookie 权限强制降级为仅发送直播间消息。
+        """
+        pub_cookie = self._public_bot.get("cookie", "")
+        if not pub_cookie:
+            raise ValueError("面板公共 Cookie 未配置,无法切换为公共模式")
+        if rec.bot_mode == "private" and server.bot_cookie:
+            server.stash_private_cookie(server.bot_cookie)
+        from interfaces.bot import BotPermission
+        await server.update_cookie(
+            pub_cookie, permissions=BotPermission.SEND_LIVESTREAM_MESSAGE
+        )
+        rec.bot_mode = "public"
+
+    async def _switch_to_private(
+        self, rec: AccountRecord, server: MissevanServer,
+        cookie: str, permissions: Any = None,
+    ) -> None:
+        """切到账户自有 Cookie（调用方负责落盘 panel.json）。
+
+        Cookie 必填 —— 切回私有模式始终要用户明确给出一串。已留存的那串
+        由前端提供「填入上次保存的 Cookie」按钮取回，而不是悄悄替他填上。
+        """
+        cookie = (cookie or "").strip()
+        if not cookie:
+            raise ValueError("自定义 Cookie 不能为空")
+        await server.update_cookie(cookie, permissions=permissions)
+        # 切回私有后留存就没有意义了（它只服务于「公共模式期间别丢」）
+        server.clear_saved_private_cookie()
+        rec.bot_mode = "private"
 
     async def update_account(self, account_id: int, **fields: Any) -> AccountRecord:
         """更新账户字段(name / room_id / bot_mode / expires_at 等)。
@@ -745,17 +784,14 @@ class AccountManager:
         if new_mode not in ("private", "public"):
             raise ValueError("bot_mode 必须为 private 或 public")
         if new_mode != rec.bot_mode:
+            # 与 switch_bot_mode 共用同一对实现：切公共时留存自有 Cookie、
+            # 权限强制降级，这些约束不能有第二条绕过的路径
             if new_mode == "public":
-                cookie = self._public_bot.get("cookie", "")
-                if not cookie:
-                    raise ValueError("面板公共 Cookie 未配置,无法切换为公共模式")
-                await server.update_cookie(cookie)
+                await self._switch_to_public(rec, server)
             else:
-                cookie = str(fields.get("cookie", "")).strip()
-                if not cookie:
-                    raise ValueError("切换为私有模式必须提供 Cookie")
-                await server.update_cookie(cookie)
-            rec.bot_mode = new_mode
+                await self._switch_to_private(
+                    rec, server, str(fields.get("cookie", "")),
+                )
 
         if "expires_at" in fields:
             rec.expires_at = fields["expires_at"]

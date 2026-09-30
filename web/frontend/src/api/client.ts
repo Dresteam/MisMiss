@@ -60,13 +60,17 @@ async function request<T>(
     && !(body instanceof ArrayBuffer)
   ) ? JSON.stringify(body) : body;
 
+  // headers 必须先摘出来再展开 rest：若直接 `...options`，调用方传的 headers
+  // 会整个覆盖上面合并好的对象，把 Authorization 一起丢掉（服务端随即 401）。
+  const { headers: extraHeaders, ...rest } = options;
+
   const res = await fetch(url, {
+    ...rest,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
+      ...extraHeaders,
     },
-    ...options,
     body: normalizedBody,
   });
 
@@ -366,6 +370,8 @@ import type {
   AccountCreateRequest,
   AccountSummary,
   AccountUpdateRequest,
+  HelperStatusResponse,
+  HelperTokenResponse,
   LicenseInfo,
   PanelOverview,
   PublicBotInfo,
@@ -576,6 +582,11 @@ export async function deleteAccountBot(id: number): Promise<StatusResponse> {
   return request<StatusResponse>(`/accounts/${id}/bot/`, { method: 'DELETE' });
 }
 
+/** 取回切到公共模式时留存的自有 Cookie（没有则 cookie 为空串）。 */
+export async function getSavedBotCookie(id: number): Promise<BotCookieResponse> {
+  return request<BotCookieResponse>(`/accounts/${id}/bot/saved-cookie`);
+}
+
 // ================================================================== //
 // 账户级直播间
 // ================================================================== //
@@ -745,6 +756,35 @@ export async function compensateAccounts(
     body: JSON.stringify(params),
   });
 }
+
+// ================================================================== //
+// 私有 Cookie 自助登录
+// ================================================================== //
+
+/** 签发书签助手的一次性 token(内嵌进书签链接)。 */
+export async function issueHelperToken(
+  id: number,
+): Promise<HelperTokenResponse> {
+  return request<HelperTokenResponse>(`/accounts/${id}/helper/token`, { method: 'POST' });
+}
+
+/**
+ * 查询 token 是否已被书签消费。
+ *
+ * token 走 ``X-Helper-Token`` 头而非查询参数 —— 生产环境开了访问日志,
+ * 查询参数会被原样记进去。
+ */
+export async function fetchHelperStatus(
+  id: number,
+  token: string,
+): Promise<HelperStatusResponse> {
+  return request<HelperStatusResponse>(`/accounts/${id}/helper/status`, {
+    headers: { 'X-Helper-Token': token },
+  });
+}
+
+// 登录不在前端调接口：猫耳要求 X-M-DeviceSign（浏览器指纹签名）与签名会话，
+// 只能由用户在猫耳自己的页面上完成。面板只通过 /api/helper/cookie 收 Cookie。
 
 /** 从插件库更新账户插件副本(保留启用状态与既有配置,新字段自动补默认值)。 */
 export async function updateAccountPlugin(id: number, name: string): Promise<StatusResponse> {

@@ -73,6 +73,10 @@ class MissevanServer(ServerInterface):
         self._bot_available: bool = False
         self._bind_bot_live_checker()
         self._bot_cookie: str = ""
+        # 切到公共 Cookie 时，把账户自己的 Cookie 挪到这里存着。
+        # 不这样做的话「切一下公共再切回来」就得让用户重新去浏览器里翻一遍 ——
+        # 那串东西对普通用户来说基本等于丢了。
+        self._saved_private_cookie: str = ""
         self._bot_permissions: BotPermission = BotPermission.SEND_LIVESTREAM_MESSAGE
         self._livestreams: dict[int, MissevanLivestream] = {}
         self._enabled_livestreams: set[int] = set()
@@ -275,6 +279,31 @@ class MissevanServer(ServerInterface):
         self._save_state()
         _log.info("Bot 创建成功: {}", bot)
         return bot
+
+    @property
+    def bot_cookie(self) -> str:
+        """当前 Bot 在用的 Cookie（切模式时要把私有那串挪走，故需读它）。"""
+        return self._bot_cookie
+
+    @property
+    def saved_private_cookie(self) -> str:
+        """切到公共 Cookie 时留下的、账户自己的 Cookie；没有则为空串。"""
+        return self._saved_private_cookie
+
+    def stash_private_cookie(self, cookie: str) -> None:
+        """把账户自己的 Cookie 存进 state，供日后切回私有模式时取回。"""
+        if not cookie or cookie == self._saved_private_cookie:
+            return
+        self._saved_private_cookie = cookie
+        self._save_state()
+        _log.debug("已留存账户自有 Cookie，切回私有模式时可取回")
+
+    def clear_saved_private_cookie(self) -> None:
+        """取回并重新启用后就清掉，免得同一串在 state 里存两份。"""
+        if not self._saved_private_cookie:
+            return
+        self._saved_private_cookie = ""
+        self._save_state()
 
     async def update_cookie(
         self, new_cookie: str, permissions: Any = None
@@ -878,6 +907,8 @@ class MissevanServer(ServerInterface):
                 "permissions": self._bot_permissions.value,
                 "enabled": self._bot.enabled,
             }
+            if self._saved_private_cookie:
+                state["bot"]["saved_private_cookie"] = self._saved_private_cookie
             timer_state = self._bot.export_timer_state()
             if timer_state["global"] or timer_state["rooms"]:
                 state["timer_messages"] = timer_state
@@ -922,6 +953,7 @@ class MissevanServer(ServerInterface):
             await self._bot.refresh()
             self._bot_available = True
             self._bot_cookie = cookie
+            self._saved_private_cookie = str(bot_state.get("saved_private_cookie", ""))
             self._bot_permissions = permissions
             # 恢复启用状态
             if bot_state.get("enabled", False):

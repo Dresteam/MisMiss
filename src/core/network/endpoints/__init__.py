@@ -24,3 +24,6 @@ __all__ = [
     "OnlineAPI",
     "RoomInfoAPI",
 ]
+# 注:猫耳登录相关的端点类曾在这里（passport.py）。已删除 —— 登录接口要求
+# X-M-DeviceSign（浏览器指纹签名）、签名会话 Cookie 与表单型 Content-Type,
+# 后端无法伪造。参见 web/backend/api/routes/cookie_login.py 的模块说明。

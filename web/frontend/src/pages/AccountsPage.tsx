@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus, Trash2, CalendarClock, Bot as BotIcon,
+  Plus, Trash2, Bot as BotIcon,
   Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink, CalendarCog,
+  CirclePlay, CircleStop, Plug, Unplug,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
   resetAccountCredentials, expireAccount,
+  enableAccountBot, disableAccountBot, enableAccountLive, disableAccountLive,
 } from '../api/client';
 import type { AccountSummary, AccountCreateRequest, PanelOverview, RenewRequest } from '../api/types';
 import { Button } from '../components/Button';
@@ -15,8 +17,49 @@ import { ExpiryBadge } from '../components/ExpiryBadge';
 import { CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
 import { CompensateDialog } from '../components/CompensateDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { SearchInput, FilterChips, Pagination } from '../components/ListControls';
 import { showToast } from '../hooks/useToast';
 import { livePageUrl } from '../utils/live';
+
+/** 账户列表每页条数 —— 3 列 × 4 行 */
+const ACCOUNTS_PER_PAGE = 12;
+
+/** 卡片上的运行时快捷开关:Bot 启停 / 直播间连断 */
+type RuntimeKind = 'bot' | 'live';
+
+/**
+ * 把一个运行时开关的「当前状态」翻译成确认框文案与要执行的动作。
+ *
+ * 同一个开关的两个方向共用这一份定义 —— 文案、按钮字、危险色、成功提示
+ * 都从 `on` 推导，避免按钮、确认框、toast 三处各写一遍而写岔。
+ */
+function runtimeIntent(acc: AccountSummary, kind: RuntimeKind) {
+  if (kind === 'bot') {
+    const on = acc.bot_enabled;
+    return {
+      /** 当前是否处于「开」的状态;为真表示这次动作是停止/断开 */
+      on,
+      title: on ? '停止 Bot' : '启动 Bot',
+      message: on
+        ? `将停用账户「${acc.name}」的 Bot:断开与平台的连接,其定时消息与插件推送随即停止。`
+        : `将启用账户「${acc.name}」的 Bot:连接平台并开始轮转发送该账户的定时消息。`,
+      confirmLabel: on ? '停止' : '启动',
+      done: on ? 'Bot 已停止' : 'Bot 已启动',
+      run: () => (on ? disableAccountBot(acc.id) : enableAccountBot(acc.id)),
+    };
+  }
+  const on = acc.room_enabled;
+  return {
+    on,
+    title: on ? '断开直播间' : '连接直播间',
+    message: on
+      ? `将断开账户「${acc.name}」的直播间:停止接收弹幕与礼物事件,且重启后不会自动连回。`
+      : `将连接账户「${acc.name}」的直播间:Bot 进入房间,开始接收弹幕与礼物事件。`,
+    confirmLabel: on ? '断开' : '连接',
+    done: on ? '直播间已断开' : '直播间已连接',
+    run: () => (on ? disableAccountLive(acc.id) : enableAccountLive(acc.id)),
+  };
+}
 
 export function AccountsPage() {
   const navigate = useNavigate();
@@ -32,6 +75,15 @@ export function AccountsPage() {
   const [credTarget, setCredTarget] = useState<AccountSummary | null>(null);
   const [credBusy, setCredBusy] = useState(false);
   const [compensateOpen, setCompensateOpen] = useState(false);
+  /** 待确认的运行时开关 —— 点快捷按钮只弹确认框，确认后才真正执行 */
+  const [runtimeTarget, setRuntimeTarget] = useState<{ acc: AccountSummary; kind: RuntimeKind } | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+
+  // ---- 列表筛选与分页（全在浏览器里做，后端不动） ----
+  const [keyword, setKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'expired'>('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'public' | 'private'>('all');
+  const [page, setPage] = useState(1);
 
   const load = useCallback(async () => {
     try {
@@ -107,6 +159,29 @@ export function AccountsPage() {
     }
   };
 
+  /**
+   * 执行已确认的运行时开关。
+   *
+   * 走的是「启用 / 停用」而不是「进入 / 退出」：停用会断开连接并落盘，
+   * Bot 重启后不会自动连回来 —— 与账户详情页的语义保持一致。
+   */
+  const runRuntimeIntent = async () => {
+    if (!runtimeTarget) return;
+    const it = runtimeIntent(runtimeTarget.acc, runtimeTarget.kind);
+    setRuntimeBusy(true);
+    try {
+      await it.run();
+      showToast('success', it.done, '');
+      setRuntimeTarget(null);
+      load();
+    } catch (e: any) {
+      // 失败时保留确认框:目标状态没变，用户可重试或取消
+      showToast('error', '操作失败', e.message);
+    } finally {
+      setRuntimeBusy(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -123,6 +198,35 @@ export function AccountsPage() {
   };
 
   const accounts = overview?.accounts ?? [];
+  const runtimeIt = runtimeTarget ? runtimeIntent(runtimeTarget.acc, runtimeTarget.kind) : null;
+  const expiredCount = accounts.filter((a) => a.expired).length;
+  const publicCount = accounts.filter((a) => a.bot_public).length;
+
+  const filtered = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return accounts.filter((a) => {
+      if (statusFilter === 'normal' && a.expired) return false;
+      if (statusFilter === 'expired' && !a.expired) return false;
+      if (modeFilter === 'public' && !a.bot_public) return false;
+      if (modeFilter === 'private' && a.bot_public) return false;
+      if (!kw) return true;
+      // 命中范围：直播间名称 / 登录用户名 / 主播名 / 直播间简介 / 主播简介，
+      // 外加账户名、Bot 名与房间 ID —— 管理端多半只记得住其中某一个片段
+      return [
+        a.name, a.username,
+        a.room_name, a.room_description, a.creator_name, a.creator_intro,
+        a.bot_name, a.room_id == null ? '' : String(a.room_id),
+      ].some((s) => (s || '').toLowerCase().includes(kw));
+    });
+  }, [accounts, keyword, statusFilter, modeFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / ACCOUNTS_PER_PAGE));
+  // 筛选后页码可能越界（比如在第 5 页时把条件收窄到只剩 1 页），夹回有效范围
+  const safePage = Math.min(page, pageCount);
+  const paged = filtered.slice((safePage - 1) * ACCOUNTS_PER_PAGE, safePage * ACCOUNTS_PER_PAGE);
+
+  // 改筛选条件就回到第一页，否则会停在一个空的页码上
+  useEffect(() => { setPage(1); }, [keyword, statusFilter, modeFilter]);
 
   /**
    * 默认用户名 `user_{账户总数 + 1}`。
@@ -179,6 +283,31 @@ export function AccountsPage() {
         </div>
       )}
 
+      {/* 筛选 —— 不设显示门槛：之前按「账户少于 6 个就藏起来」做过，
+          结果小规模用户根本看不到这个功能，等于没做 */}
+      {accounts.length > 0 && (
+        <div className="space-y-2">
+          <SearchInput value={keyword} onChange={setKeyword}
+            placeholder="搜索账户名 / 用户名 / 直播间 / 房间 ID…" />
+          <div className="flex flex-wrap items-center gap-2">
+            <FilterChips
+              options={[
+                { id: 'all', label: '全部', count: accounts.length },
+                { id: 'normal', label: '正常', count: accounts.length - expiredCount },
+                { id: 'expired', label: '已过期', count: expiredCount },
+              ] as const}
+              value={statusFilter} onChange={setStatusFilter} />
+            <FilterChips
+              options={[
+                { id: 'all', label: '全部 Bot' },
+                { id: 'public', label: '公共', count: publicCount },
+                { id: 'private', label: '私有', count: accounts.length - publicCount },
+              ] as const}
+              value={modeFilter} onChange={setModeFilter} />
+          </div>
+        </div>
+      )}
+
       {/* 账户卡片 */}
       {accounts.length === 0 ? (
         <div className="card">
@@ -189,9 +318,20 @@ export function AccountsPage() {
             </p>
           </div>
         </div>
+      ) : filtered.length === 0 ? (
+        <div className="card">
+          <div className="card-body flex flex-col items-center justify-center py-16 text-center">
+            <p className="text-gray-500 dark:text-gray-400">没有符合条件的账户</p>
+            <button type="button"
+              className="text-sm text-primary-600 dark:text-primary-400 hover:underline mt-2"
+              onClick={() => { setKeyword(''); setStatusFilter('all'); setModeFilter('all'); }}>
+              清除筛选条件
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {accounts.map((acc) => (
+          {paged.map((acc) => (
             <div key={acc.id}
               className="card hover:shadow-lg transition-shadow relative group/card">
               <div className="card-header">
@@ -236,14 +376,14 @@ export function AccountsPage() {
                   </div>
                   <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300 min-w-0">
                     <Radio className="w-4 h-4 shrink-0" />
-                    <span className="truncate">{acc.room_name || (acc.room_id ? `房间 ${acc.room_id}` : '未绑定房间')}</span>
+                    <span className="min-w-0 break-words sm:truncate">{acc.room_name || (acc.room_id ? `房间 ${acc.room_id}` : '未绑定房间')}</span>
                     {/* 外链要 relative z-10：卡片标题用 after:inset-0 铺了整卡点击层，
                         不抬高层级的话这个链接会被那层盖住，点了会进账户页 */}
                     {acc.room_id != null && (
                       <a href={livePageUrl(acc.room_id)} target="_blank" rel="noopener noreferrer"
                         title={`在猫耳打开直播间 ${acc.room_id}`}
                         aria-label="打开直播间"
-                        className="relative z-10 shrink-0 p-0.5 rounded text-gray-400 hover:text-primary-600
+                        className="relative z-10 shrink-0 p-2.5 -m-2 rounded text-gray-400 hover:text-primary-600
                                    dark:text-gray-500 dark:hover:text-primary-400 transition-colors">
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
@@ -274,8 +414,8 @@ export function AccountsPage() {
                     {acc.resume_error}
                   </p>
                 )}
-                {/* 操作 */}
-                <div className="flex items-center justify-between pt-1 border-t border-gray-100 dark:border-gray-700">
+                {/* 操作 —— 允许换行:窄屏下按钮行落到第二行,不会挤扁「进入管理」 */}
+                <div className="flex flex-wrap items-center gap-y-1 pt-1 border-t border-gray-100 dark:border-gray-700">
                   {/* 纯视觉锚点，不接收点击——整卡点击由标题的拉伸链接承担 */}
                   <span
                     aria-hidden="true"
@@ -284,13 +424,27 @@ export function AccountsPage() {
                     进入管理 →
                   </span>
                   {/* z-10 把图标行抬到拉伸链接的覆盖层之上，避免点操作按钮时连带跳转 */}
-                  <div className="relative z-10 flex gap-1">
-                    <Button variant="ghost" size="sm" icon={<CalendarClock className="w-4 h-4" />}
-                      tooltip="续期" onClick={() => { setRenewMode('days'); setRenewTarget(acc); }} />
-                    {/* 剩余天数 / 兑换授权码 / 设为永久 / 设为停用 合并进同一个对话框，
-                        卡片上只留一个入口 —— 图标行不再随功能增加而膨胀 */}
+                  <div className="relative z-10 ml-auto flex flex-wrap justify-end gap-1">
+                    {/* 运行时快捷开关 —— 图标表示「点下去会发生什么」，与按钮状态一致。
+                        两种情况都会改变线上行为，故一律先弹确认框再执行 */}
+                    <Button variant="ghost" size="sm"
+                      icon={acc.bot_enabled
+                        ? <CircleStop className="w-4 h-4" />
+                        : <CirclePlay className="w-4 h-4" />}
+                      tooltip={acc.bot_enabled ? '停止 Bot' : '启动 Bot'}
+                      onClick={() => setRuntimeTarget({ acc, kind: 'bot' })} />
+                    {acc.room_id != null && (
+                      <Button variant="ghost" size="sm"
+                        icon={acc.room_enabled
+                          ? <Unplug className="w-4 h-4" />
+                          : <Plug className="w-4 h-4" />}
+                        tooltip={acc.room_enabled ? '断开直播间' : '连接直播间'}
+                        onClick={() => setRuntimeTarget({ acc, kind: 'live' })} />
+                    )}
+                    {/* 剩余天数 / 续期 / 兑换授权码 / 设为永久 / 设为停用 全在同一个对话框里，
+                        卡片上只留这一个入口 —— 几项可在弹窗顶部切换，不必每项一个按钮 */}
                     <Button variant="ghost" size="sm" icon={<CalendarCog className="w-4 h-4" />}
-                      tooltip="时长管理（剩余天数 / 授权码 / 永久 / 停用）"
+                      tooltip="时长管理"
                       onClick={() => { setRenewMode('set'); setRenewTarget(acc); }} />
                     <Button variant="ghost" size="sm" icon={<Lock className="w-4 h-4" />}
                       tooltip="重置登录凭据" onClick={() => setCredTarget(acc)} />
@@ -302,6 +456,11 @@ export function AccountsPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {filtered.length > 0 && (
+        <Pagination page={safePage} pageCount={pageCount} total={filtered.length}
+          onChange={setPage} />
       )}
 
       <CreateAccountDialog
@@ -346,6 +505,18 @@ export function AccountsPage() {
           } finally { setCredBusy(false); }
         }}
         onCancel={() => setCredTarget(null)}
+      />
+
+      {/* Bot 启停 / 直播间连断的二次确认 —— 停用方向标红，因为会中断正在运行的服务 */}
+      <ConfirmDialog
+        open={runtimeIt !== null}
+        title={runtimeIt?.title ?? ''}
+        message={runtimeIt?.message ?? ''}
+        confirmLabel={runtimeIt?.confirmLabel ?? '确定'}
+        variant={runtimeIt?.on ? 'danger' : 'default'}
+        loading={runtimeBusy}
+        onConfirm={runRuntimeIntent}
+        onCancel={() => setRuntimeTarget(null)}
       />
 
       <ConfirmDialog

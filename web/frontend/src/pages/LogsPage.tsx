@@ -231,13 +231,13 @@ export function LogsPage() {
                      focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 transition-colors" />
         {keyword && (
           <button onClick={() => setKeyword('')}
-            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500 shrink-0">
+            className="p-2 -m-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500 shrink-0">
             <X className="w-3 h-3" />
           </button>
         )}
         <button onClick={() => setFiltersOpen((v) => !v)}
           aria-expanded={filtersOpen}
-          className={`sm:hidden shrink-0 flex items-center gap-1 h-7 px-2.5 rounded-md text-xs
+          className={`sm:hidden shrink-0 flex items-center gap-1 h-8 px-2.5 rounded-md text-xs
                       border transition-colors
             ${filtersOpen || activeFilterCount > 0
               ? 'border-primary-400 dark:border-primary-600 text-primary-600 dark:text-primary-400'
@@ -274,23 +274,33 @@ export function LogsPage() {
             startReached={handleLoadMore}
             itemContent={(_index, entry) => {
               const isExpanded = expanded.has(entry.seq_id);
+              // 整行都可点：手机上只有正文那一小条能点的话太难点中。
+              // active: 是给触摸端的反馈 —— 手机没有 hover，不加就没有任何按下感
               return (
-                <div className={`flex gap-2 leading-5 ${isExpanded ? 'min-h-5 h-auto' : 'h-5'}
-                                hover:bg-black/[0.03] dark:hover:bg-white/[0.03] px-2 text-[11px] font-mono`}>
+                <div
+                  onClick={() => toggleExpand(entry.seq_id)}
+                  title={isExpanded ? '点击收起' : '点击展开'}
+                  className={`flex gap-2 leading-5 cursor-pointer active:bg-black/[0.06]
+                              dark:active:bg-white/[0.06]
+                              ${isExpanded ? 'min-h-5 h-auto' : 'h-5'}
+                              hover:bg-black/[0.03] dark:hover:bg-white/[0.03] px-2 text-[11px] font-mono`}>
                   <span className="text-gray-400 dark:text-gray-600 shrink-0 w-16 text-right">
                     {new Date(entry.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false })}
                   </span>
                   <span className={`shrink-0 w-16 ${levelColors[entry.level] || 'text-gray-400'}`}>
                     [{entry.level}]
                   </span>
-                  {/* 固定行高：默认单行截断，点击展开全文 */}
+                  {/* 固定行高：默认单行截断，点击展开全文。
+                      折叠时右侧留一个展开指示——不然手机用户看不出这行能点 */}
                   <span
-                    onClick={() => toggleExpand(entry.seq_id)}
-                    title={isExpanded ? '点击收起' : '点击展开'}
-                    className={`flex-1 min-w-0 cursor-pointer text-gray-700 dark:text-gray-300
+                    className={`flex-1 min-w-0 text-gray-700 dark:text-gray-300
                       ${isExpanded ? 'h-auto break-all whitespace-pre-wrap' : 'truncate [&_span]:whitespace-nowrap'}`}
                     dangerouslySetInnerHTML={{ __html: ansi.toHtml(entry.message) }}
                   />
+                  <span aria-hidden="true"
+                    className="shrink-0 self-center text-gray-300 dark:text-gray-600 text-[9px] leading-none">
+                    {isExpanded ? '▲' : '▼'}
+                  </span>
                 </div>
               );
             }}

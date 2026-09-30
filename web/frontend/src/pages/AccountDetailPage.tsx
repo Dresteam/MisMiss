@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Bot as BotIcon, Radio, Puzzle, Clock, Send, RefreshCw,
@@ -9,6 +9,7 @@ import {
 import {
   fetchAccountSummary, fetchAccountBot, createAccountBot, refreshAccountBot,
   verifyAccountBot, enableAccountBot, disableAccountBot, deleteAccountBot,
+  getSavedBotCookie,
   setAccountBotMode,
   fetchAccountLive, addAccountLive, removeAccountLive, refreshAccountLive,
   enableAccountLive, disableAccountLive, joinAccountLive, quitAccountLive,
@@ -31,6 +32,8 @@ import { Switch } from '../components/Switch';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { CookieHelper } from '../components/CookieHelper';
+import { SearchInput, FilterChips } from '../components/ListControls';
 import { RenewDialog } from '../components/AccountDialogs';
 import { PluginDrawer } from '../components/PluginDrawer';
 import { UninstallDialog } from '../components/UninstallDialog';
@@ -418,6 +421,7 @@ export function BotTab({ acc, onAccountChanged }: {
   const [perms, setPerms] = useState<string[]>(['SEND_LIVESTREAM_MESSAGE']);
   const [showCookie, setShowCookie] = useState(false);
   const [viewedCookie, setViewedCookie] = useState('');
+  const [confirmPublic, setConfirmPublic] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -429,6 +433,7 @@ export function BotTab({ acc, onAccountChanged }: {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setMode(acc.bot_public ? 'public' : 'private'); }, [acc.bot_public]);
 
+  /** 返回是否成功，便于调用方只在成功时推进本地状态。 */
   const act = async (key: string, fn: () => Promise<unknown>, okMsg: string) => {
     setProcessing(key);
     try {
@@ -436,21 +441,42 @@ export function BotTab({ acc, onAccountChanged }: {
       showToast('success', okMsg, '');
       load();
       onAccountChanged?.();
+      return true;
     } catch (e: any) {
       showToast('error', '操作失败', e.message);
+      return false;
     } finally { setProcessing(''); }
   };
 
   const switchMode = (m: 'public' | 'private') => {
     if (m === mode) return;
     if (m === 'public') {
-      // 切到公共:使用面板公共 Cookie(后端未配置时给出提示)
-      act('mode', () => setAccountBotMode(acc.id, 'public'), '已切换为公共 Cookie')
-        .then(() => setMode('public'));
+      // 切公共会立刻换掉正在跑的 Bot，先确认。自有 Cookie 不会被删（见下方）。
+      setConfirmPublic(true);
     } else {
-      // 切到自定义:需先填写 Cookie(下方表单提交时切换)
+      // 切回自定义必须由用户明确给出一串 Cookie 并保存（见下方表单），
+      // 这里只切本地视图，不发请求
       setMode('private');
-      showToast('success', '请在下方输入自定义 Cookie 并保存', '');
+      showToast('success', '请在下方填入自定义 Cookie 并保存', '');
+    }
+  };
+
+  const doSwitchPublic = async () => {
+    // 后端未配置公共 Cookie 时会失败，act 返回 false，本地状态保持不变
+    const ok = await act('mode', () => setAccountBotMode(acc.id, 'public'), '已切换为公共 Cookie');
+    if (ok) setMode('public');
+    setConfirmPublic(false);
+  };
+
+  /** 把切公共时留存的 Cookie 填进输入框 —— 用户仍需点保存才会真正切回。 */
+  const fillSavedCookie = async () => {
+    try {
+      const r = await getSavedBotCookie(acc.id);
+      if (!r.cookie) { showToast('error', '没有留存的自定义 Cookie', ''); return; }
+      setCookie(r.cookie);
+      showToast('info', '已填入上次保存的 Cookie', '确认后点下方按钮保存');
+    } catch (e: any) {
+      showToast('error', '读取失败', e.message);
     }
   };
 
@@ -570,6 +596,17 @@ export function BotTab({ acc, onAccountChanged }: {
         </div>
       )}
 
+      {/* 自助获取 Cookie —— 与自定义 Cookie 表单分开一张卡：
+          取 Cookie 是「怎么拿到」，下面是「拿到之后怎么填 + 给什么权限」 */}
+      {mode === 'private' && (
+        <div className="card">
+          <div className="card-header"><h3 className="font-semibold">获取 Cookie</h3></div>
+          <div className="card-body">
+            <CookieHelper accountId={acc.id} onDone={onAccountChanged} />
+          </div>
+        </div>
+      )}
+
       {/* 自定义 Cookie 表单(含完整权限设置) */}
       {mode === 'private' && (
         <div className="card">
@@ -577,6 +614,15 @@ export function BotTab({ acc, onAccountChanged }: {
           <div className="card-body space-y-3">
             <textarea value={cookie} onChange={(e) => setCookie(e.target.value)} rows={3}
               className="input w-full font-mono text-xs" placeholder="粘贴 Missevan Cookie..." />
+            {/* 切到公共 Cookie 时那一串会被留存下来，这里给出取回入口 ——
+                否则用户得重新去浏览器里翻一遍 */}
+            {bot?.has_saved_cookie && (
+              <button type="button" onClick={fillSavedCookie}
+                className="inline-flex items-center min-h-8 py-1 text-xs text-primary-600
+                  dark:text-primary-400 hover:underline">
+                填入上次保存的 Cookie
+              </button>
+            )}
             <div>
               <p className="text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
                 Bot 权限设置(自定义 Cookie 可完整设置)
@@ -603,6 +649,18 @@ export function BotTab({ acc, onAccountChanged }: {
           </div>
         </div>
       )}
+
+      {/* 切公共 Cookie 的二次确认 —— 会立刻换掉正在跑的 Bot */}
+      <ConfirmDialog
+        open={confirmPublic}
+        title="切换为公共 Cookie"
+        message={`账户「${acc.name}」将改用面板统一配置的公共 Cookie，Bot 权限会降级为仅发送直播间消息。`
+          + '你当前的自定义 Cookie 会保留下来，之后想切回可以一键填回。'}
+        confirmLabel="切换"
+        loading={processing === 'mode'}
+        onConfirm={doSwitchPublic}
+        onCancel={() => setConfirmPublic(false)}
+      />
 
       {/* Cookie 查看弹框 */}
       {showCookie && (
@@ -975,6 +1033,22 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [libraryVersions, setLibraryVersions] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<PluginFilter>('all');
+  const [kwRaw, setKwRaw] = useState('');
+
+  // ⚠️ 必须放在下方 `if (loading && ...) return` **之前** ——
+  // 放进早退之后会让首次渲染少跑一个 hook，React 直接报
+  // 「Rendered more hooks than during the previous render」并白屏。
+  const visible = useMemo(() => {
+    const kw = kwRaw.trim().toLowerCase();
+    return plugins.filter((p) => {
+      if (filter === 'enabled' && !p.enabled) return false;
+      if (filter === 'disabled' && p.enabled) return false;
+      if (!kw) return true;
+      // 插件名 / 显示名 / 作者 / 简介都搜，中英文混着记的时候不用纠结搜哪个
+      return [p.name, p.display_name, p.author, p.short_desc, p.desc]
+        .some((s) => (s || '').toLowerCase().includes(kw));
+    });
+  }, [plugins, filter, kwRaw]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
   const [drawerTarget, setDrawerTarget] = useState<{ name: string; tab?: string } | null>(null);
@@ -1047,9 +1121,6 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
   }
 
   const enabledCount = plugins.filter((p) => p.enabled).length;
-  const visible = plugins.filter((p) =>
-    filter === 'all' ? true : filter === 'enabled' ? p.enabled : !p.enabled
-  );
   /** 已安装版本低于插件库版本的插件——一键更新的目标 */
   const updatable = plugins.filter((p) => updateVersion(p) !== null);
 
@@ -1110,18 +1181,14 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
       </div>
 
       {/* 筛选 */}
-      <div className="flex gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-800 w-fit">
-        {PLUGIN_FILTERS.map((f) => (
-          <button key={f.id} onClick={() => setFilter(f.id)}
-            className={
-              'px-3 py-1.5 text-xs font-medium rounded-md transition-all ' +
-              (filter === f.id
-                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300')
-            }>
-            {f.label}
-          </button>
-        ))}
+      <div className="space-y-2">
+        <SearchInput value={kwRaw} onChange={setKwRaw} placeholder="搜索插件名 / 作者 / 简介…" />
+        <FilterChips
+          options={PLUGIN_FILTERS.map((f) => ({
+            ...f,
+            count: f.id === 'all' ? plugins.length : undefined,
+          }))}
+          value={filter} onChange={setFilter} />
       </div>
 
       {/* 卡片网格 */}
@@ -1387,6 +1454,19 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
   // 账户级偏好：安装后是否自动启用（默认关闭）
   const [autoEnable, setAutoEnable] = useState(acc.auto_enable_on_install);
   const [savingPref, setSavingPref] = useState(false);
+  const [libKw, setLibKw] = useState('');
+  const [libFilter, setLibFilter] = useState<'all' | 'installed' | 'notinstalled'>('all');
+
+  const libFiltered = useMemo(() => {
+    const kw = libKw.trim().toLowerCase();
+    return library.filter((p) => {
+      if (libFilter === 'installed' && !p.installed) return false;
+      if (libFilter === 'notinstalled' && p.installed) return false;
+      if (!kw) return true;
+      return [p.name, p.display_name, p.desc, p.author, p.short_desc]
+        .some((x) => (x || '').toLowerCase().includes(kw));
+    });
+  }, [library, libKw, libFilter]);
 
   const load = useCallback(async () => {
     try {
@@ -1454,8 +1534,29 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
           <div className="p-10 text-center text-gray-400 text-sm">插件库为空</div>
         </div>
       ) : (
+        /* 筛选控件与卡片网格是兄弟节点 —— 三元分支里必须用 Fragment 包住 */
+        <>
+        <div className="space-y-2">
+          <SearchInput value={libKw} onChange={setLibKw} placeholder="搜索插件名 / 作者 / 简介…" />
+          <FilterChips
+            options={[
+              { id: 'all', label: '全部', count: library.length },
+              { id: 'installed', label: '已安装',
+                count: library.filter((p) => p.installed).length },
+              { id: 'notinstalled', label: '未安装',
+                count: library.filter((p) => !p.installed).length },
+            ] as const}
+            value={libFilter} onChange={setLibFilter} />
+        </div>
+
+        {libFiltered.length === 0 && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 py-6 text-center">
+            没有符合条件的插件
+          </p>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {library.map((p) => (
+          {libFiltered.map((p) => (
             <div key={p.name}
               className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
               {/* 卡片主体(v1.0.1 样式) */}
@@ -1516,6 +1617,7 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {/* 插件详情抽屉(库模式:文档/更新日志/使用账户) */}

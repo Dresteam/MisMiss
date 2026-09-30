@@ -250,7 +250,7 @@ export function RenewDialog({
             {MODE_ORDER.filter((x) => modes.includes(x)).map((x) => (
               <button key={x} type="button"
                 onClick={() => { setActiveMode(x); setError(''); }}
-                className={`px-2.5 py-1 text-xs rounded-lg border transition-colors
+                className={`inline-flex items-center min-h-8 px-2.5 py-1 text-xs rounded-lg border transition-colors
                   ${x === m
                     ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
                     : 'border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700'}`}>

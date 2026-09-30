@@ -15,6 +15,10 @@ interface Props {
  * 全站的开关都用同一套尺寸与配色（h-5 w-9，开启为 primary-600），
  * 避免各处再手抄一遍 class。调用方负责「点一下即保存」的语义：
  * 这里只上报新状态，不发请求。
+ *
+ * 触摸可用性：视觉仍是 36×20，但用 `after:` 伪元素把点击热区向外扩到
+ * 52×44 —— 手机上 20px 高的目标按不准。伪元素是绝对定位，不占布局，
+ * 所以周围排版一个像素都不会动。
  */
 export function Switch({
   checked, onChange, disabled = false, title, label, className = '',
@@ -30,6 +34,7 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full
                   transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+                  after:absolute after:-inset-x-2 after:-inset-y-3 after:content-['']
                   ${checked ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}
                   ${className}`}>
       <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform

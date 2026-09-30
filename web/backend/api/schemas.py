@@ -48,6 +48,8 @@ class BotInfoResponse(BaseModel):
     available: bool = False
     permissions: list[str] = []
     cookie_length: int = 0
+    # 公共模式下 state 里仍存着上次的自有 Cookie
+    has_saved_cookie: bool = False
 
 
 class BotCookieResponse(BaseModel):
@@ -298,6 +300,9 @@ class AccountSummary(BaseModel):
     # 该账户直播间当前是否开播中（与「已连接」是两件事：连着但没开播是常态）
     room_streaming: bool = False
     room_name: str = ""
+    room_description: str = ""
+    creator_name: str = ""
+    creator_intro: str = ""
     plugin_count: int = 0
     # 操作结果提示(如「永久账户无需续期」),仅写操作返回,供前端弹 toast
     notice: str | None = None
@@ -368,3 +373,22 @@ class LicenseGenerateRequest(BaseModel):
     count: int = Field(default=1, ge=1, le=100)
     days: int = Field(..., gt=0)
     note: str = ""
+
+
+# ================================================================== #
+# 私有 Cookie 自助登录
+# ================================================================== #
+
+
+class HelperTokenResponse(BaseModel):
+    """书签助手的一次性 token（内嵌进书签链接）。"""
+
+    token: str
+    expires_at: float
+
+
+class HelperStatusResponse(BaseModel):
+    """书签助手 token 的消费状态（供页面轮询）。"""
+
+    state: str = Field(description="waiting=等书签回传 / done=已写入 / failed=写入失败")
+    message: str = ""
