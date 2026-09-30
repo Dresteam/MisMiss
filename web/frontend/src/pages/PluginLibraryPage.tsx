@@ -82,12 +82,23 @@ export function PluginLibraryPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
-    try {
-      const [p, a] = await Promise.all([fetchLibraryPlugins(), fetchAccounts()]);
-      setPlugins(p);
-      setAccounts(a);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+    // 两个请求互不依赖，**不要**用 Promise.all 把它们绑死：账户接口一失败，
+    // 插件列表也会被连累成空；再配上一个静默的 catch，界面上就只剩
+    // 「插件库为空」—— 看着像没装插件，实际是另一个接口挂了。
+    // 线上就这么误导过一次排查。各自独立结算 + 如实报错。
+    const [pluginsRes, accountsRes] = await Promise.allSettled([
+      fetchLibraryPlugins(),
+      fetchAccounts(),
+    ]);
+    if (pluginsRes.status === 'fulfilled') setPlugins(pluginsRes.value);
+    if (accountsRes.status === 'fulfilled') setAccounts(accountsRes.value);
+
+    const failed = [pluginsRes, accountsRes].find(r => r.status === 'rejected');
+    if (failed && failed.status === 'rejected') {
+      const reason: any = failed.reason;
+      showToast('error', '部分数据加载失败', reason?.message ?? String(reason));
+    }
+    setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
