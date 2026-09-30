@@ -32,6 +32,13 @@ _DEFAULT_MIN_INTERVAL = 0.1
 # 用户若从日志里确认到猫耳专用的限流错误码，加到这里即可（用 MISMISS_RATE_LIMIT_MARKERS
 # 环境变量可以不改代码临时追加，逗号分隔）。
 _DEFAULT_RATE_LIMIT_MARKERS: tuple[str, ...] = (
+    # 猫耳实际返回的风控响应（2026-09-30 从线上服务器日志确认）：
+    #   HTTP 418: {"code":100010017,"success":false,
+    #              "info":"https://www.missevan.com/standalone/403/403.html"}
+    # 418 是「I'm a teapot」，被拿来当反爬标记用 —— 盯状态码比盯文案可靠。
+    "418",
+    "100010017",
+    # 通用兜底
     "429",
     "too many requests",
     "rate limit",

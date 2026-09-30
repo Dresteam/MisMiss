@@ -581,7 +581,9 @@ def _download_asset(asset_url: str, dest: Path, cfg: dict) -> None:
             opener = urllib.request.build_opener(proxy_handler)
         dest.parent.mkdir(parents=True, exist_ok=True)
         with opener.open(req, timeout=300) as resp, open(dest, "wb") as f:
-            f.write(resp.read())
+            # 分块落盘，不要 resp.read() —— 部署包 200MB+，整个读进内存会把
+            # 512MB 上限的容器顶到边缘（应用基线已占 270MB 左右）
+            shutil.copyfileobj(resp, f, length=256 * 1024)
     except HTTPException:
         raise
     except Exception as e:
@@ -590,8 +592,12 @@ def _download_asset(asset_url: str, dest: Path, cfg: dict) -> None:
 
 def _verify_docker_package(pkg_path: Path) -> None:
     """校验 Docker 部署包：含 docker-compose.yml 与 mismiss-docker.tar.gz，
-    且内层镜像归档是标准 docker save 格式（根含 manifest.json）。"""
-    import io
+    且内层镜像归档是标准 docker save 格式（根含 manifest.json）。
+
+    ⚠️ 全程流式读取，**不得**把内层归档整个读进内存。镜像归档 200MB+，
+    容器内存上限常见 512MB，读一份再拷一份就会把进程 OOM 掉 ——
+    线上就是这么「更新失败」的，而且发生在备份之前，现场毫无痕迹。
+    """
     import tarfile
     import zipfile
 
@@ -609,7 +615,12 @@ def _verify_docker_package(pkg_path: Path) -> None:
         names = [_normalize(n) for n in zf.namelist()]
         for n in zf.namelist():
             if _normalize(n).endswith("mismiss-docker.tar.gz"):
-                image_reader = io.BytesIO(zf.read(n))
+                # ⚠️ 必须用 zf.open（流）而不是 io.BytesIO(zf.read(n))。
+                # 后者会把 200MB+ 的镜像归档整个读进内存，再被 BytesIO 拷一份，
+                # 峰值 400MB+ —— 容器内存上限 512MB 时直接把进程 OOM 掉，
+                # 表现为「包下载完了但更新失败」，且因为发生在备份之前，
+                # 连备份目录都不会更新，现场没有任何痕迹。
+                image_reader = zf.open(n)
                 break
 
     if not any(n.endswith("docker-compose.yml") for n in names):
@@ -617,9 +628,16 @@ def _verify_docker_package(pkg_path: Path) -> None:
     if image_reader is None:
         raise HTTPException(status_code=400, detail="部署包格式异常：缺少 mismiss-docker.tar.gz")
     try:
-        with tarfile.open(fileobj=image_reader, mode="r:gz") as itf:
-            if "manifest.json" not in itf.getnames():
-                raise ValueError("缺少 manifest.json")
+        # 同样用流式模式（r|gz）逐成员读，找到 manifest.json 即停。
+        # getnames() 会先把整个 tar 扫一遍建索引，在流上没必要。
+        found = False
+        with tarfile.open(fileobj=image_reader, mode="r|gz") as itf:
+            for member in itf:
+                if member.name == "manifest.json":
+                    found = True
+                    break
+        if not found:
+            raise ValueError("缺少 manifest.json")
     except HTTPException:
         raise
     except Exception:
