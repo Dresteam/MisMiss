@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,10 @@ from core.config import ServerConfig
 from core.logging import get_logger
 
 _log = get_logger(__name__)
+
+# Bot 恢复失败后的冷却秒数。见 MissevanServer.__init__ 里 _bot_restore_failed_at 的说明。
+# 取 5 分钟：长到足以让平台的限流窗口滑过去，短到用户修好 Cookie 后不必久等。
+_BOT_RESTORE_COOLDOWN = 300.0
 
 
 class MissevanServer(ServerInterface):
@@ -71,6 +76,11 @@ class MissevanServer(ServerInterface):
             timer_interval=self._config.get_float("bot.timer_interval", 60.0),
         )
         self._bot_available: bool = False
+        # Bot 恢复失败的冷却。面板的直播间 Tab 每 8 秒轮询一次，而 _ensure_bot_restored
+        # 的判据是 `_bot.id == 0` —— 恢复失败时它**保持** 0，于是每次轮询都会再打一次
+        # Cookie 校验接口。平台侧一旦限流，这就把「一次失败」放大成每 8 秒一次的洪水。
+        # 失败后进入冷却，期间不再重试。
+        self._bot_restore_failed_at: float = 0.0
         self._bind_bot_live_checker()
         self._bot_cookie: str = ""
         # 切到公共 Cookie 时，把账户自己的 Cookie 挪到这里存着。
@@ -424,7 +434,11 @@ class MissevanServer(ServerInterface):
         state = self._load_state() or {}
 
         # 1. Bot 恢复
-        if self._bot.id == 0:
+        # 失败后冷却，避免被面板轮询（直播间 Tab 每 8 秒一次）放大成请求洪水
+        cooldown_left = (
+            self._bot_restore_failed_at + _BOT_RESTORE_COOLDOWN - time.monotonic()
+        )
+        if self._bot.id == 0 and cooldown_left <= 0:
             bot_state = state.get("bot", {})
             if bot_state:
                 _log.debug("bot 状态从磁盘异步恢复（多 worker）")
@@ -952,6 +966,7 @@ class MissevanServer(ServerInterface):
             self._bind_bot_live_checker()
             await self._bot.refresh()
             self._bot_available = True
+            self._bot_restore_failed_at = 0.0
             self._bot_cookie = cookie
             self._saved_private_cookie = str(bot_state.get("saved_private_cookie", ""))
             self._bot_permissions = permissions
@@ -964,9 +979,22 @@ class MissevanServer(ServerInterface):
                 _log.debug("Bot 已恢复（禁用）: {}", self._bot)
         except CoreApiException as e:
             self._bot_available = False
-            _log.error("Bot 恢复时发生错误：{}", str(e))
+            self._note_bot_restore_failure("Bot 恢复时发生错误：{}", str(e))
         except CoreCookieException:
-            _log.warning("Cookie 已过期")
+            self._note_bot_restore_failure("Cookie 已过期")
+
+    def _note_bot_restore_failure(self, msg: str, *args: Any) -> None:
+        """记录一次 Bot 恢复失败并进入冷却。
+
+        冷却期内重复失败只记 ``debug``：平台限流时每个账户每次轮询都会失败，
+        全按 error 打会瞬间刷满日志，反而把真正的原因埋掉。
+        """
+        first = self._bot_restore_failed_at == 0.0
+        self._bot_restore_failed_at = time.monotonic()
+        if first:
+            _log.warning(msg + "（{} 秒内不再自动重试）", *args, int(_BOT_RESTORE_COOLDOWN))
+        else:
+            _log.debug(msg, *args)
 
     async def _restore_livestream(self, live_id: int) -> None:
         """从持久化数据恢复 Livestream（不自动 join）。"""

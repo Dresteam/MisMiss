@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 import uuid
 from collections import namedtuple
@@ -44,6 +45,15 @@ _TimerEntry = namedtuple(
 
 # 默认定时消息间隔（秒）
 _DEFAULT_TIMER_INTERVAL: float = 120.0
+
+# 调用侧已明确认定为「预期情况」的业务错误 —— 主播没开播。这类失败与 Cookie
+# 无关，却会走 _safe_call 的失败分支去校验 Cookie。未开播的房间每轮定时消息
+# 都白打一次校验接口，账号一多就是持续的无效流量（且平台会当成异常调用）。
+_BENIGN_ERROR_MARKERS: tuple[str, ...] = ("500030011", "主播休息")
+
+# 同一个 Bot 两次主动 Cookie 校验之间的最小间隔（秒）。
+# 平台限流时每次发送都会失败，没有这道闸就会「失败一次、校验一次」地翻倍。
+_MIN_COOKIE_CHECK_INTERVAL: float = 60.0
 
 _log = get_logger(__name__)
 
@@ -119,6 +129,9 @@ class MissevanBot(Bot):
         self.__permissions: BotPermission = permissions
         # 启用状态
         self._enabled: bool = True
+
+        # 上次因 API 失败而主动校验 Cookie 的时间（monotonic）；见 _should_refresh
+        self._last_cookie_check: float = 0.0
 
     @property
     def timer_interval(self) -> float:
@@ -248,6 +261,32 @@ class MissevanBot(Bot):
     # API 调用包装
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _is_benign_error(err: Exception) -> bool:
+        """该错误是否为「预期情况」（主播没开播），值得静默忽略。"""
+        text = str(err)
+        return any(marker in text for marker in _BENIGN_ERROR_MARKERS)
+
+    def _should_refresh_after(self, err: Exception) -> bool:
+        """API 失败后是否值得再打一次 Cookie 校验接口。
+
+        两种情况下**不**校验：
+
+        - **预期内的业务错误**（如主播没开播的 ``500030011``）：调用方本来就会
+          静默忽略，跟 Cookie 没关系，校验纯属浪费。
+        - **距上次校验不足 :data:`_MIN_COOKIE_CHECK_INTERVAL`**：平台限流时每次
+          发送都会失败，不设闸门就会把一个失败放大成一倍的额外请求。
+
+        节流只在返回 True 时推进时间戳，所以被节流掉的失败不会饿死后续检查。
+        """
+        if self._is_benign_error(err):
+            return False
+        now = time.monotonic()
+        if now - self._last_cookie_check < _MIN_COOKIE_CHECK_INTERVAL:
+            return False
+        self._last_cookie_check = now
+        return True
+
     async def _safe_call(self, factory):
         """包装 API 调用——失败时自动检查 Cookie 状态并校验返回值。
 
@@ -264,8 +303,9 @@ class MissevanBot(Bot):
         try:
             result = await factory()
             return self._check_success(result)
-        except CoreApiException:
-            await self.refresh()
+        except CoreApiException as e:
+            if self._should_refresh_after(e):
+                await self.refresh()
             raise
 
     # ------------------------------------------------------------------ #
@@ -348,7 +388,9 @@ class MissevanBot(Bot):
                     self._queue_idle.set()
                     return
                 item = self._message_queue.pop(0)
-                _log.info(
+                # 逐条消息的流水账：内容与聊天窗口里已有的信息重复，
+                # 且房间活跃时每条都打会淹没日志——按约定降到 debug
+                _log.debug(
                     "发送消息 直播间={} 内容={} 优先级={} 剩余={}",
                     item.live_id,
                     item.message,
@@ -364,9 +406,8 @@ class MissevanBot(Bot):
                     )
                 )
             except CoreApiException as e:
-                err_str = str(e)
                 # 直播间未开播（主播休息）——预期情况，静默忽略
-                if "500030011" not in err_str and "主播休息" not in err_str:
+                if not self._is_benign_error(e):
                     _log.warning(
                         "消息发送失败 直播间={} 内容={} 原因={}",
                         item.live_id,
@@ -1076,8 +1117,13 @@ class MissevanBot(Bot):
         独立消息在后）发送一条消息。
         """
         while self._has_any_timer_messages():
-            self._next_tick_at = time.monotonic() + self._timer_interval
-            await asyncio.sleep(self._timer_interval)
+            # 间隔加 ±10% 抖动。各账户间隔相同、又都在启动窗口里同时起跑，
+            # 不加抖动就会永远在同一瞬间齐发 —— N 个账户的定时消息变成一串
+            # 整齐的请求脉冲，既像机器行为，也让平台侧瞬时压力翻倍。
+            # 抖动逐轮累积，账户之间会自然散开。
+            delay = self._timer_interval * random.uniform(0.9, 1.1)
+            self._next_tick_at = time.monotonic() + delay
+            await asyncio.sleep(delay)
             self._next_tick_at = 0.0
             if not self._has_any_timer_messages():
                 break
@@ -1151,8 +1197,7 @@ class MissevanBot(Bot):
                 )
             )
         except CoreApiException as e:
-            err_str = str(e)
-            if "500030011" in err_str or "主播休息" in err_str:
+            if self._is_benign_error(e):
                 pass  # 直播间未开播——预期情况，静默跳过该条
             else:
                 _log.warning("定时消息发送失败 id={}: {}", msg_id, e)
