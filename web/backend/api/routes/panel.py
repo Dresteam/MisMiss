@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from core.account import AccountManager
+from core.logging import get_logger
 from core.exceptions import (
     CoreAccountExpiredException,
     CoreAccountNotFoundException,
@@ -31,6 +32,8 @@ from api.schemas import (
 )
 
 router = APIRouter()
+
+_log = get_logger("web.api.panel")
 
 _DEP = Depends(get_account_manager)
 
@@ -124,6 +127,59 @@ async def accounts_create(req: AccountCreateRequest, manager: AccountManager = _
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"账户创建失败: {e}")
     return _summary(manager, rec.id)
+
+
+@router.get("/accounts/check-username")
+async def accounts_check_username(username: str, manager: AccountManager = _DEP):
+    """用户名是否可用 —— 供前端在输入时即时提示，而不是提交后才报错。
+
+    ⚠️ 必须注册在 ``/accounts/{account_id}`` **之前**：FastAPI 按注册顺序匹配，
+    否则 ``check-username`` 会被当成 account_id 去解析然后报 422。
+    """
+    uname = (username or "").strip()
+    if not uname:
+        return {"username": uname, "available": False, "reason": "用户名不能为空"}
+    taken = next(
+        (r for r in manager.list_records() if r.username == uname), None
+    )
+    if taken is None:
+        return {"username": uname, "available": True, "reason": ""}
+    # 只回「被占用」，不回是哪个账户占的 —— 面板是管理员用的，
+    # 但没必要把无关信息塞进这个自动补全式的接口里
+    return {"username": uname, "available": False, "reason": "该用户名已被使用"}
+
+
+@router.post("/accounts/renumber")
+async def accounts_renumber(
+    dry_run: bool = True, manager: AccountManager = _DEP
+):
+    """重排账户编号，去掉历史遗留的空号（压紧为 1..N）。
+
+    默认 ``dry_run=True`` 只返回映射供确认；真正执行要显式传 ``dry_run=false``。
+    空号源自早期「先占号后校验」的创建流程，现已修复不再产生新空号。
+    """
+    try:
+        result = await manager.renumber_accounts(dry_run=dry_run)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重排失败: {e}")
+
+    if not dry_run and result["changed"]:
+        # 令牌里存着 account_id，编号变了必须跟着改，
+        # 否则账户角色的用户要么被拒之门外，要么落到别人的账户上
+        from api.routes import auth as auth_route
+        from api.routes import cookie_login
+
+        mapping = result["mapping"]
+        try:
+            result["tokens_updated"] = auth_route.remap_token_account_ids(mapping)
+        except Exception as e:
+            result["tokens_updated"] = -1
+            _log.warning("重排后改写登录令牌失败: {}", e)
+        try:
+            cookie_login.remap_helper_token_account_ids(mapping)
+        except Exception as e:
+            _log.warning("重排后改写助手令牌失败: {}", e)
+    return result
 
 
 @router.get("/accounts/{account_id}", response_model=AccountSummary)

@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from './Button';
+import { checkUsername } from '../api/client';
 import type { AccountCreateRequest, RenewRequest } from '../api/types';
 import { parseLiveId } from '../utils/live';
+
+/** 用户名可用性检查的防抖间隔（毫秒） */
+const USERNAME_CHECK_DEBOUNCE = 400;
 
 // ================================================================== //
 // 创建账户对话框
@@ -26,6 +30,11 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  // 用户名的即时可用性：输入时就告诉用户，而不是等提交后弹错误
+  const [unameState, setUnameState] = useState<
+    { checking: boolean; available: boolean; reason: string }
+  >({ checking: false, available: true, reason: '' });
+  const unameSeq = useRef(0);
 
   // 打开时预填默认凭据（仍可改）。用 useEffect 而非 useState 初值：
   // 账户列表是异步取到的，弹窗挂载时可能还没有
@@ -41,11 +50,40 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
     setError('');
   }, [open, defaultUsername]);
 
+  // 用户名可用性：防抖后查询。用递增序号丢弃过期响应 —— 快速输入时先发的
+  // 请求可能后到，不设序号会用旧结果覆盖新结果（明明是「已被占用」却显示可用）。
+  useEffect(() => {
+    if (!open) return;
+    const uname = username.trim();
+    if (!uname) {
+      setUnameState({ checking: false, available: true, reason: '' });
+      return;
+    }
+    const seq = ++unameSeq.current;
+    setUnameState((s) => ({ ...s, checking: true }));
+    const timer = setTimeout(async () => {
+      try {
+        const r = await checkUsername(uname);
+        if (seq !== unameSeq.current) return;
+        setUnameState({ checking: false, available: r.available, reason: r.reason });
+      } catch {
+        if (seq !== unameSeq.current) return;
+        // 查不到就放行，别拿网络问题拦人 —— 提交时后端仍会兜底校验
+        setUnameState({ checking: false, available: true, reason: '' });
+      }
+    }, USERNAME_CHECK_DEBOUNCE);
+    return () => clearTimeout(timer);
+  }, [username, open]);
+
   if (!open) return null;
 
   const submit = () => {
     if (!name.trim()) { setError('请输入账户名称'); return; }
     if (!username.trim()) { setError('登录用户名必填'); return; }
+    if (!unameState.available) {
+      setError(unameState.reason || '该用户名已被使用');
+      return;
+    }
     const rid = roomId.trim() ? parseLiveId(roomId) : null;
     if (roomId.trim() && rid === null) {
       setError('直播间 ID 或链接无法识别，请粘贴形如 https://fm.missevan.com/live/869198039 的链接');
@@ -125,7 +163,18 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
                 登录用户名 *
               </label>
               <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off"
-                className="input w-full" placeholder="必填,用于账户分辨,不可重复" />
+                className={`input w-full ${!unameState.available ? 'border-red-400 dark:border-red-500' : ''}`}
+                placeholder="必填,用于账户分辨,不可重复" />
+              {/* 输入时就给结论，别等提交后才报「已被使用」 */}
+              {username.trim() && (
+                unameState.checking ? (
+                  <p className="text-xs text-gray-400 mt-1">检查中…</p>
+                ) : !unameState.available ? (
+                  <p className="text-xs text-red-500 mt-1">{unameState.reason || '该用户名已被使用'}</p>
+                ) : (
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">该用户名可用</p>
+                )
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
