@@ -233,6 +233,26 @@ docker compose up -d
 
 访问 `http://localhost:18080`。
 
+> **构建时下载 Docker CLI 失败？** 镜像内要装 Docker CLI 与 compose 插件（供在线更新操作宿主
+> Docker）。`download.docker.com` 在国内网络下**传输中途会被重置**，报错形如：
+>
+> ```
+> curl: (35) TLS connect error ... unexpected eof while reading
+> gzip: stdin: unexpected end of file
+> ```
+>
+> 注意其迷惑性：**目录列表能正常访问，只有文件传不动**，所以不要据此判断「网络没问题」。
+> Dockerfile 默认已走清华镜像，如需改回官方或换其他镜像源：
+>
+> ```bash
+> docker build -t mismiss:latest \
+>   --build-arg DOCKER_DL_BASE=https://download.docker.com/linux/static/stable .
+> ```
+>
+> 已知可用镜像：清华 `mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable`（实测 ~6MB/s）、
+> 阿里云 `mirrors.aliyun.com/docker-ce/linux/static/stable`（较慢）。compose 插件不在这些
+> 镜像站内，仍从 GitHub Releases 取。
+
 ### 4.7 在线更新（Web 控制台，推荐日常使用）
 
 首次部署后，日常更新在 Web 控制台「更新 MisMiss」页手动点击完成，无需 SSH：

@@ -41,6 +41,14 @@ ARG MISMISS_VERSION=1.0.0
 ARG DOCKER_CLI_VERSION=27.5.1
 ARG COMPOSE_VERSION=v2.32.4
 
+# 下载源 —— download.docker.com 在国内网络下会在**传输中途被重置**
+# （curl: (35) Recv failure / unexpected eof while reading；现象是目录列表能通、
+# 文件下不动），故默认走清华镜像。海外环境或镜像不可用时改回官方即可：
+#   --build-arg DOCKER_DL_BASE=https://download.docker.com/linux/static/stable
+# compose 插件不在 docker-ce 镜像站内，仍从 GitHub Releases 取。
+ARG DOCKER_DL_BASE=https://mirrors.tuna.tsinghua.edu.cn/docker-ce/linux/static/stable
+ARG COMPOSE_DL_BASE=https://github.com/docker/compose/releases/download
+
 LABEL org.opencontainers.image.title="MisMiss"
 LABEL org.opencontainers.image.description="MIST 标准实现 · 猫耳FM 直播场控机器人框架"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
@@ -65,13 +73,23 @@ RUN set -eux; \
         arm64) DOCKER_ARCH=aarch64 ;; \
         *) echo "unsupported arch"; exit 1 ;; \
     esac; \
-    curl -fSL --retry 3 "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" \
-        | tar xz -C /usr/local/bin --strip-components=1; \
+    # --retry-all-errors 不可省:默认 --retry 只重试超时与 5xx，
+    # 对 TLS/连接被重置（本项目最常见的失败）完全不会重试 \
+    curl -fSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+        "${DOCKER_DL_BASE}/${DOCKER_ARCH}/docker-${DOCKER_CLI_VERSION}.tgz" \
+        -o /tmp/docker-cli.tgz; \
+    # 先落盘再解压:管道写法下 curl 的失败不会中止 tar，且会把半截文件喂给它 \
+    tar xzf /tmp/docker-cli.tgz -C /usr/local/bin --strip-components=1; \
+    rm -f /tmp/docker-cli.tgz; \
+    test -x /usr/local/bin/docker; \
     mkdir -p /usr/local/lib/docker/cli-plugins; \
-    curl -fSL --retry 3 "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}" \
+    curl -fSL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
+        "${COMPOSE_DL_BASE}/${COMPOSE_VERSION}/docker-compose-linux-${DOCKER_ARCH}" \
         -o /usr/local/lib/docker/cli-plugins/docker-compose; \
     test -s /usr/local/lib/docker/cli-plugins/docker-compose; \
-    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose; \
+    docker --version; \
+    docker compose version
 
 WORKDIR /app
 
