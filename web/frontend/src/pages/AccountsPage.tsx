@@ -88,6 +88,7 @@ export function AccountsPage() {
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'expired'>('all');
   const [modeFilter, setModeFilter] = useState<'all' | 'public' | 'private'>('all');
+  const [liveFilter, setLiveFilter] = useState<'all' | 'live' | 'offline'>('all');
   const [page, setPage] = useState(1);
 
   const load = useCallback(async () => {
@@ -206,6 +207,7 @@ export function AccountsPage() {
   const runtimeIt = runtimeTarget ? runtimeIntent(runtimeTarget.acc, runtimeTarget.kind) : null;
   const expiredCount = accounts.filter((a) => a.expired).length;
   const publicCount = accounts.filter((a) => a.bot_public).length;
+  const liveCount = accounts.filter((a) => a.room_streaming).length;
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -214,6 +216,11 @@ export function AccountsPage() {
       if (statusFilter === 'expired' && !a.expired) return false;
       if (modeFilter === 'public' && !a.bot_public) return false;
       if (modeFilter === 'private' && a.bot_public) return false;
+      // 开播状态与卡片上的徽标同源（都取 room_streaming）：
+      // 账户未就绪 / 直播间没 join 时该值为 false，会被归入「未开播」，
+      // 与卡片显示一致，不会出现「筛出来却在卡片上看着是开播」的矛盾
+      if (liveFilter === 'live' && !a.room_streaming) return false;
+      if (liveFilter === 'offline' && a.room_streaming) return false;
       if (!kw) return true;
       // 命中范围：直播间名称 / 登录用户名 / 主播名 / 直播间简介 / 主播简介，
       // 外加账户名、Bot 名与房间 ID —— 管理端多半只记得住其中某一个片段
@@ -223,7 +230,7 @@ export function AccountsPage() {
         a.bot_name, a.room_id == null ? '' : String(a.room_id),
       ].some((s) => (s || '').toLowerCase().includes(kw));
     });
-  }, [accounts, keyword, statusFilter, modeFilter]);
+  }, [accounts, keyword, statusFilter, modeFilter, liveFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / ACCOUNTS_PER_PAGE));
   // 筛选后页码可能越界（比如在第 5 页时把条件收窄到只剩 1 页），夹回有效范围
@@ -231,7 +238,7 @@ export function AccountsPage() {
   const paged = filtered.slice((safePage - 1) * ACCOUNTS_PER_PAGE, safePage * ACCOUNTS_PER_PAGE);
 
   // 改筛选条件就回到第一页，否则会停在一个空的页码上
-  useEffect(() => { setPage(1); }, [keyword, statusFilter, modeFilter]);
+  useEffect(() => { setPage(1); }, [keyword, statusFilter, modeFilter, liveFilter]);
 
   /**
    * 默认用户名 `user_{账户总数 + 1}`。
@@ -354,6 +361,13 @@ export function AccountsPage() {
                 { id: 'private', label: '私有', count: accounts.length - publicCount },
               ] as const}
               value={modeFilter} onChange={setModeFilter} />
+            <FilterChips
+              options={[
+                { id: 'all', label: '全部开播' },
+                { id: 'live', label: '已开播', count: liveCount },
+                { id: 'offline', label: '未开播', count: accounts.length - liveCount },
+              ] as const}
+              value={liveFilter} onChange={setLiveFilter} />
           </div>
         </div>
       )}
