@@ -7,6 +7,16 @@ bot:
   timer_interval: 120
 plugin:
   pip_mirror: https://pypi.tuna.tsinghua.edu.cn/simple
+# 出站请求节流 —— 面向猫耳平台，避免短时间大量请求触发风控
+ratelimit:
+  # 启动时账户之间的平均间隔（秒），实际取 0.5~1.5 倍之间的随机值。
+  # 账户越多越该调大；设为 0 关闭错峰（不建议）。
+  startup_stagger: 1.5
+  # 广播全局消息时，各账户之间的平均间隔（秒）
+  broadcast_gap: 0.4
+  # 全进程最小请求间隔（秒）—— 所有发往猫耳的请求都要过这道闸。
+  # 0.1 约合上限 10 请求/秒。账户多可调大，测试可设 0。
+  min_interval: 0.1
 update:
   repo: Dresteam/MisMiss
   mirror: ''

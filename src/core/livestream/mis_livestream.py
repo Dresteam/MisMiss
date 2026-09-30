@@ -6,6 +6,7 @@ WebSocket 事件监听和消息/礼物操作。
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from interfaces.bot.bot import Bot
@@ -25,6 +26,14 @@ from ..models.medal import RoomMedal
 from ..models.user import MissevanUser
 from .handler import Live
 from ..exceptions import CoreApiException, CoreDisabledException
+
+# 管理员列表的缓存时长（秒）。名单极少变化，而 _refresh() 在开机时要跑三轮、
+# 开播/下播各一次 —— 10 分钟足以省掉绝大部分重复请求。
+_ADMIN_LIST_TTL = 600.0
+
+# 房间信息的最短刷新间隔（秒）—— 合并开机时连续三次 _refresh()，
+# 以及开播/下播事件与它们撞车的情况。
+_REFRESH_MIN_INTERVAL = 5.0
 
 
 class MissevanLivestream(Livestream):
@@ -59,8 +68,12 @@ class MissevanLivestream(Livestream):
         self._websocket: Live | None = None
         # 启用状态
         self._enabled: bool = True
-        # 管理员列表缓存（在 _refresh() 中通过 Meta API 获取）
+        # 管理员列表缓存（在 _refresh() 中通过 Meta API 获取，按 TTL 复用）
         self._admin_list: list[User] = []
+        # 上次成功取到管理员列表的时间（monotonic）；0 表示还没取过
+        self._admin_list_fetched_at: float = 0.0
+        # 上次真正拉取房间信息的时间（monotonic）；0 表示还没拉过
+        self._last_refresh_at: float = 0.0
 
         # 注册内部监听器 — 监听开播/下播事件以更新状态
         self._event_bus.register_new_event(self._create_internal_listener())
@@ -258,8 +271,20 @@ class MissevanLivestream(Livestream):
         self._score = score
         self._online_count = online
 
-    async def _refresh(self) -> None:
-        """刷新直播间元数据。"""
+    async def _refresh(self, *, force: bool = False) -> None:
+        """刷新直播间元数据。
+
+        带一个很短的冷却：开机时 ``_restore_livestream`` → ``enable_livestream``
+        → ``join()`` 会连着调三次，几秒内房间信息根本不会变，合并成一次请求即可。
+        同样地，开播/下播触发的 ``_refresh_soon`` 也常与它撞在一起。
+
+        :param force: 无视冷却与缓存，强制真正拉取（面板「刷新」按钮用）
+        """
+        now = time.monotonic()
+        if not force and now - self._last_refresh_at < _REFRESH_MIN_INTERVAL:
+            return
+        self._last_refresh_at = now
+
         response = await RoomInfoAPI().api(self._live_id)
 
         if response.get("code") != 0:
@@ -310,24 +335,30 @@ class MissevanLivestream(Livestream):
         if online is not None:
             self._online_count = int(online)
 
-        # 管理员列表（Meta API，仅调用一次）
-        try:
-            meta = await MetaAPI().api(self._live_id)
-            if meta.get("code") == 0:
-                members = meta.get("info", {}).get("members", {})
-                raw = members.get("admin", [])
-                self._admin_list = [
-                    MissevanUser(
-                        user_id=a.get("user_id", 0),
-                        username=a.get("username", ""),
-                        user_intro="",
-                        user_icon=a.get("iconurl", ""),
-                    )
-                    for a in raw
-                    if isinstance(a, dict)
-                ]
-        except Exception:
-            self._admin_list = []
+        # 管理员列表（Meta API）—— 走 TTL 缓存，不是每次刷新都打。
+        # 原先的注释写着「仅调用一次」，但实际每次 _refresh() 都会调，而
+        # _refresh() 在开机时要跑三轮、开播/下播各一次。管理员名单几乎不变，
+        # 这属于纯浪费的平台请求。
+        if force or now - self._admin_list_fetched_at >= _ADMIN_LIST_TTL:
+            try:
+                meta = await MetaAPI().api(self._live_id)
+                if meta.get("code") == 0:
+                    members = meta.get("info", {}).get("members", {})
+                    raw = members.get("admin", [])
+                    self._admin_list = [
+                        MissevanUser(
+                            user_id=a.get("user_id", 0),
+                            username=a.get("username", ""),
+                            user_intro="",
+                            user_icon=a.get("iconurl", ""),
+                        )
+                        for a in raw
+                        if isinstance(a, dict)
+                    ]
+                    # 只在成功时记时间 —— 失败要允许下次立刻重试
+                    self._admin_list_fetched_at = now
+            except Exception:
+                self._admin_list = []
 
     def get_admin_list(self) -> list[User]:
         """获取直播间管理员列表。

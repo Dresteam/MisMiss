@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
+import time
 from typing import Any
 
 import brotli
@@ -19,6 +21,9 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from .endpoints.cookie import DefaultCookieAPI
 from .urls import Urls
 from ..exceptions import CoreWebSocketException
+
+# 连接维持多久才算「稳定」，从而允许重置重连退避计数（秒）
+_STABLE_CONNECTION_SECONDS = 60.0
 
 
 class LiveWebSocket:
@@ -43,6 +48,8 @@ class LiveWebSocket:
         self._heartbeat_task: asyncio.Task[Any] | None = None
         self._loop_task: asyncio.Task[Any] | None = None
         self._closing: bool = False
+        # 上次连上的时刻（monotonic）——用于判断连接是否「稳定」
+        self._connected_at: float = 0.0
 
     # ------------------------------------------------------------------ #
     # 公共接口
@@ -184,14 +191,20 @@ class LiveWebSocket:
                 return
 
             self._retry_count += 1
-            # 指数退避:2s → 4s → 8s → 16s → 32s(_MAX_RETRIES=5)
-            delay = min(2.0 ** self._retry_count, 60.0)
-            await asyncio.sleep(delay)
+            # 指数退避:2s → 4s → 8s → 16s → 32s(_MAX_RETRIES=5)，再叠 ±20% 抖动。
+            # 抖动是必需的：所有账户同时断线时，固定间隔会让它们之后永远同步重连，
+            # 一次平台抖动就被放大成周期性的请求脉冲。
+            base = min(2.0 ** self._retry_count, 60.0)
+            await asyncio.sleep(base * random.uniform(0.8, 1.2))
 
             try:
                 await self._do_connect()
-                # 重连成功 — 重置计数，恢复心跳，通知子类
-                self._retry_count = 0
+                # 只有「稳定连上过一阵」才重置计数。连着秒断秒连（平台侧拒绝、
+                # 网络抖）时如果无脑清零，退避永远停在 2 秒下限 —— 连接一直连不上，
+                # 请求却按最低间隔不停地打。
+                if time.monotonic() - self._connected_at >= _STABLE_CONNECTION_SECONDS:
+                    self._retry_count = 0
+                self._connected_at = time.monotonic()
                 self._start_heartbeat()
                 await self.on_open()
                 return

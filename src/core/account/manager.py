@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import random
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -181,6 +183,15 @@ class AccountManager:
         self._config = config or ServerConfig.load()
         # data_dir 可用环境变量/参数覆盖(如 MISMISS_DATA_DIR),便于测试与数据卷分离
         self._root_data_dir: str = data_dir or self._config.get_str("server.data_dir", "data")
+        # 配置全进程出站闸门。放在这里是因为 AccountManager 是唯一同时持有
+        # ServerConfig 与「应用已启动」语义的地方；测试直接构造 HTTPClient 时
+        # 走的仍是模块默认值（同样有限速），需要不限速时显式调 gate.configure(0)。
+        try:
+            from core.network.throttle import gate
+
+            gate.configure(self._config.get_float("ratelimit.min_interval", 0.1))
+        except Exception as e:  # pragma: no cover - 配置异常不该拖垮启动
+            _log.warning("出站限速配置失败，沿用默认值: {}", e)
         self._panel_path: str = os.path.join(self._root_data_dir, _PANEL_FILE)
         self._accounts_dir: str = os.path.join(self._root_data_dir, "accounts")
 
@@ -367,7 +378,16 @@ class AccountManager:
             await self.get_library_pm().load_all()
         except Exception as e:
             _log.warning("插件库扫描失败: {}", e)
-        for rec in sorted(self._records.values(), key=lambda r: r.id):
+        # 启动错峰：每个账户开机要打十来个平台接口（Cookie 校验、房间信息、
+        # 管理员列表、WS 握手…），背靠背启动会让 20 个账户在几秒内砸出上百个
+        # 请求 —— 这正是平台风控最典型的触发形态。账户之间拉开随机间隔，
+        # 把尖峰摊平。**用随机而非固定值**：固定间隔只是把尖峰摊成一条斜线，
+        # 请求依旧整整齐齐，反而更容易被识别为机器行为。
+        stagger = max(0.0, self._config.get_float("ratelimit.startup_stagger", 1.5))
+        records = sorted(self._records.values(), key=lambda r: r.id)
+        for idx, rec in enumerate(records):
+            if idx and stagger:
+                await asyncio.sleep(random.uniform(stagger * 0.5, stagger * 1.5))
             try:
                 await self._start_account(rec)
             except Exception as e:
@@ -610,15 +630,6 @@ class AccountManager:
         if bot_mode not in ("private", "public"):
             raise ValueError("bot_mode 必须为 private 或 public")
 
-        aid = self._next_account_id
-        self._next_account_id += 1
-
-        # 有效时长: -1 → 永久;N → now + N 天
-        if duration_days < 0:
-            expires_at: str | None = None
-        else:
-            expires_at = (datetime.now(timezone.utc) + timedelta(days=duration_days)).isoformat()
-
         # 登录凭据(用户名必填且全局唯一,用于账户分辨)
         uname = (username or "").strip()
         if not uname:
@@ -628,6 +639,19 @@ class AccountManager:
         pwd = (password or "").strip() or secrets.token_hex(8)
         if len(pwd) < 4:
             raise ValueError("密码至少 4 位")
+
+        # 有效时长: -1 → 永久;N → now + N 天
+        if duration_days < 0:
+            expires_at: str | None = None
+        else:
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=duration_days)).isoformat()
+
+        # ⚠️ 占号必须排在**全部校验之后**。此前它写在最前面，于是「用户名重复」
+        # 「密码太短」这类校验失败也会白白吃掉一个编号 —— 表现就是账户列表里
+        # #25 的下一个直接成了 #27，而且永远补不回来。
+        # 下面任何失败路径都要调 _release_account_id 把它还回去。
+        aid = self._next_account_id
+        self._next_account_id += 1
 
         rec = AccountRecord(
             id=aid,
@@ -649,6 +673,7 @@ class AccountManager:
         except Exception:
             self._records.pop(aid, None)
             self._servers.pop(aid, None)
+            self._release_account_id(aid)
             raise
 
         # 房间绑定
@@ -667,6 +692,9 @@ class AccountManager:
                 await server.create_bot(cookie.strip(), permissions=perms)
             except CoreCookieException as e:
                 _log.error("账户 {} Bot 创建失败: {}", name, e)
+                # 走到这里账户记录已入内存、运行时已启动，只抛异常会留下一个
+                # 「面板报创建失败、账户却真实存在」的幽灵 —— 必须整个撤掉。
+                await self._discard_failed_account(aid)
                 raise ValueError(f"Cookie 无效: {e}")
         # 默认插件：安装并启用（失败仅告警，不影响账户创建）
         default_applied = await self._install_default_plugins(aid)
@@ -677,6 +705,105 @@ class AccountManager:
             aid, name, bot_mode, default_applied or "无",
         )
         return rec
+
+    def _release_account_id(self, aid: int) -> None:
+        """把创建失败时占用的编号还回去（避免出现永远补不上的空号）。
+
+        只有当它**仍是最后分配的那个**才回退 —— 否则并发创建已经用掉了下一个号，
+        回退会让两个账户撞号。
+        """
+        if self._next_account_id == aid + 1:
+            self._next_account_id = aid
+            _log.debug("账户 {} 创建失败，编号已回退", aid)
+
+    async def _discard_failed_account(self, aid: int) -> None:
+        """撤掉一个创建到一半的账户：停运行时、删目录、移除记录、还编号。
+
+        与 :meth:`delete_account` 的区别：那个是用户主动删除（可保留数据目录），
+        这个用于创建失败的回滚，目录一定是刚建的空壳，直接清掉。
+        """
+        server = self._servers.pop(aid, None)
+        if server is not None:
+            try:
+                await server.shutdown()
+            except Exception as e:
+                _log.warning("回滚失败账户 {} 时关闭运行时出错: {}", aid, e)
+        self._records.pop(aid, None)
+        shutil.rmtree(self._server_dirs(aid), ignore_errors=True)
+        self._release_account_id(aid)
+
+    async def renumber_accounts(self, *, dry_run: bool = False) -> dict[str, Any]:
+        """把账户编号压紧成连续的 1..N，去掉历史遗留的空号。
+
+        空号来自「占号之后又失败的创建」—— 用户名重复、密码太短、Cookie 无效、
+        运行时启动失败都会吃掉一个号，于是列表里 #25 的下一个直接成了 #27。
+        创建流程已修好不再产生新空号，这个函数负责清掉已有的。
+
+        :param dry_run: 只计算映射不落地，供前端预览确认
+        :return: ``{"mapping": {旧: 新}, "changed": n, "total": n, "dry_run": bool}``
+        """
+        old_ids = sorted(self._records.keys())
+        mapping = {
+            old: new for new, old in enumerate(old_ids, start=1) if new != old
+        }
+        result = {
+            "mapping": mapping,
+            "changed": len(mapping),
+            "total": len(old_ids),
+            "dry_run": dry_run,
+        }
+        if dry_run or not mapping:
+            return result
+
+        _log.info("开始重排账户编号: {} 个账户受影响", len(mapping))
+
+        # 1. 停掉全部运行时。必须先摘插件 UI 路由再 shutdown ——
+        #    路由前缀里嵌着账户 id，不摘的话旧前缀会继续响应。
+        for aid in list(self._servers.keys()):
+            server = self._servers.pop(aid)
+            try:
+                server._plugin_manager.unmount_ui_routes()
+            except Exception as e:
+                _log.warning("重排时摘除账户 {} 的插件路由出错: {}", aid, e)
+            try:
+                await server.shutdown()
+            except Exception as e:
+                _log.warning("重排时关闭账户 {} 出错: {}", aid, e)
+
+        # 2. 两阶段改目录名。25→5 这类映射会撞上仍然存在的 5，
+        #    所以先全部挪到临时名，再落到最终名。
+        suffix = f".renumber-{os.urandom(4).hex()}"
+        staged: list[tuple[str, str]] = []
+        for old_id, new_id in mapping.items():
+            src = self._server_dirs(old_id)
+            if not os.path.isdir(src):
+                continue
+            tmp = src + suffix
+            os.rename(src, tmp)
+            staged.append((tmp, self._server_dirs(new_id)))
+        for tmp, dst in staged:
+            if os.path.exists(dst):
+                # 理论上到不了：目标若是被映射走的旧目录，此时已经让开了
+                _log.error("重排目标 {} 已存在，跳过该账户", dst)
+                os.rename(tmp, tmp + ".orphan")
+                continue
+            os.rename(tmp, dst)
+
+        # 3. 重建记录（旧对象直接改 id，保留配置与凭据）
+        new_records: dict[int, AccountRecord] = {}
+        for old_id, rec in self._records.items():
+            rec.id = mapping.get(old_id, old_id)
+            rec.updated_at = _now_iso()
+            new_records[rec.id] = rec
+        self._records = new_records
+        self._next_account_id = max(self._records.keys(), default=0) + 1
+        self._save_panel()
+
+        # 4. 重新拉起。用 start_all 是为了顺带享受启动错峰 ——
+        #    重排会把所有账户一起重启，正是最需要限速的场景。
+        await self.start_all()
+        _log.info("账户编号重排完成，现为 1..{}", len(self._records))
+        return result
 
     async def delete_account(self, account_id: int, purge_data: bool = False) -> None:
         """删除账户:停止运行时、移除记录;purge_data 时删除数据目录。"""
@@ -1220,6 +1347,7 @@ class AccountManager:
             return result
 
         bots: list[Any] = []
+        broadcast_gap = max(0.0, self._config.get_float("ratelimit.broadcast_gap", 0.4))
         for rec in self.list_records():
             try:
                 if rec.expired or not rec.room_id:
@@ -1241,6 +1369,13 @@ class AccountManager:
                     _log.debug("账户 {} 的直播间未开播，跳过全局消息", rec.name)
                     result["skipped"] += 1
                     continue
+                # 两次实际发送之间拉开随机间隔。send_message 只是**入队**，
+                # 所以顺序 await 并不构成错峰 —— 不加间隔的话 N 个账户的消费者
+                # 会几乎同时开口。放在发送**之前**，避免末尾多等一次。
+                if result["sent"] and broadcast_gap:
+                    await asyncio.sleep(
+                        random.uniform(broadcast_gap * 0.5, broadcast_gap * 1.5)
+                    )
                 await room.send_message(text)
                 bots.append(room.bot)
                 result["sent"] += 1

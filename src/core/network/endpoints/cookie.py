@@ -25,14 +25,22 @@ class DefaultCookieAPI(API):
         """
         import httpx
 
+        from ..throttle import gate
+
+        # 这个端点绕开了 HTTPClient（要读响应头而不是 body），但**同样要过闸** ——
+        # 每次 WebSocket 连接与重连都会调它一次，是重连风暴里实打实的一份流量。
+        await gate.acquire()
         headers = self._build_headers()
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(Urls.DEFAULT_COOKIE, headers=headers)
                 if resp.status_code != 200:
+                    gate.note_failure()
                     return None
+                gate.note_success()
                 return resp.headers.get("set-cookie")
-        except Exception:
+        except Exception as e:
+            gate.note_failure(e)
             return None
 
     @staticmethod
