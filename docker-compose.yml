@@ -62,6 +62,18 @@ services:
       # 多 worker 会导致跨进程状态不一致（连接重复、事件分裂等）。
       # 仅在明确了解限制且仅需提高 API 吞吐时调高。
       - WORKERS=${MISMISS_WORKERS:-1}
+    # 健康检查 —— 覆盖镜像里的默认值（Dockerfile 的 start-period=15s 太短）
+    #
+    # 启动是**错峰**的：账户之间会按 ratelimit.startup_stagger 拉开随机间隔，
+    # 32 个账户约 50 秒，加上各账户自身的启动开销，lifespan 期间 /api/health
+    # 不会应答。镜像默认的 15s start-period + 3 次重试撑不过去，compose 会判定
+    # 不健康并**放弃启动 nginx** —— 表现为更新后面板打不开。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 240s
+      retries: 3
     # 资源限制（根据服务器调整）
     deploy:
       resources:
