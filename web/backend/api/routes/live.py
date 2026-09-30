@@ -153,10 +153,10 @@ async def live_remove(account_id: int, s: MissevanServer = Depends(require_activ
 
 @router.post("/refresh", response_model=LivestreamInfo)
 async def live_refresh(account_id: int, s: MissevanServer = Depends(require_account)):
-    """刷新直播间房间信息。"""
+    """刷新直播间房间信息（手动刷新，管理员列表无视缓存重取）。"""
     room = _require_room(s)
     try:
-        await room._refresh()
+        await room._refresh(force=True)
     except CoreApiException as e:
         raise HTTPException(status_code=502, detail=f"API 错误: {e}")
     return _live_to_info(room)
