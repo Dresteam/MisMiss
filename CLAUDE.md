@@ -442,6 +442,24 @@ WS 握手只允许 admin，鉴权在 `ws.py` 内单独完成——WebSocket 不�
 
 ## 陷阱
 
+- ⚠️ **聚合路径必须保证「单个账户异常不扩散」**（`manager._account_snapshot`
+  是唯一的公共出口，账户列表 / 总览 / 服务状态全走它）。
+
+  `MissevanLivestream.creator` 在直播间**未 join** 时**直接抛**
+  `CoreApiException`，而 `creator_name` / `creator_id` / `medal` 都是它的
+  转发属性——裸读一个就能让整页 500。线上踩过：平台风控（HTTP 418）导致
+  账户集体起不来、直播间一直没 join，面板三个接口一起挂，整页打不开。
+
+  这类字段一律走 `_safe_room_attr(room, name, default)`；`_safe_creator_intro`
+  早就是这个写法，但当初只覆盖了它自己那一个字段。**新增字段时照抄这个模式**。
+
+  同一条链上还有个更隐蔽的教训：`PluginLibraryPage` 用
+  `Promise.all([fetchLibraryPlugins(), fetchAccounts()])` 把两个**互不依赖**的
+  请求绑死，再配 `catch { /* ignore */ }`。账户接口 500 → 插件列表也变成空 →
+  错误被吞 → 界面显示「插件库为空」。**真实情况是「另一个接口挂了」，界面却
+  说「你没装插件」**，排查时被这个假象带偏过一轮。→ 用 `allSettled` 各自结算，
+  并且**不要吞掉错误**。
+
 - **`config.yml` 是硬编码路径**（`src/core/config.py` 从 `__file__` 上溯三级到仓库根）。
   `MISMISS_DATA_DIR` 只隔离 `data/`，隔离不了它——测试若走 `/api/update/settings` 或
   `/api/config/log-level` 会改到开发机真实配置，必须备份 + `atexit` 还原
