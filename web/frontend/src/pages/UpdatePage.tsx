@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Download, RefreshCw, RotateCcw, Loader2, Globe, Shield, Container,
   ChevronLeft, ChevronRight, ScrollText, Megaphone,
+  CheckCircle2, XCircle, AlertTriangle,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
@@ -18,6 +19,20 @@ interface ReleaseInfo {
   body: string;
   prerelease: boolean;
   assets: { name: string; url: string }[];
+}
+
+/** GET /api/update/status —— 更新进度（后端后台执行，前端轮询） */
+interface UpdateStatus {
+  busy: boolean;
+  /** idle=没有记录 / running=进行中 / done / failed / interrupted */
+  state: 'idle' | 'running' | 'done' | 'failed' | 'interrupted';
+  kind?: 'apply' | 'rollback';
+  step?: string;
+  step_label?: string;
+  message?: string;
+  version?: string;
+  started_at?: number;
+  finished_at?: number | null;
 }
 
 interface UpdateInfo {
@@ -69,6 +84,10 @@ export function UpdatePage() {
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
+  // 与 applying 分开：applying 只控按钮禁用，polling 表示「本次请求已受理，开始跟进度」。
+  // 必须在 POST 成功之后才置位 —— 否则轮询会先读到上一轮的终态并误报。
+  const [polling, setPolling] = useState(false);
+  const [progress, setProgress] = useState<UpdateStatus | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<ReleaseInfo | null>(null);
   const [confirmRollback, setConfirmRollback] = useState(false);
   const [showChangelog, setShowChangelog] = useState(false);
@@ -136,6 +155,50 @@ export function UpdatePage() {
 
   useEffect(() => { loadInfo(); checkUpdate(); }, [loadInfo, checkUpdate]);
 
+  // 更新进度轮询。apply/rollback 在后端已改为后台执行（秒回 202），
+  // 真实进度只能靠轮询 —— 否则下载+导入镜像动辄数分钟，长请求会被代理掐断。
+  useEffect(() => {
+    if (!polling) return;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const st: UpdateStatus = await api('/status');
+        if (stopped) return;
+        setProgress(st);
+        if (st.state === 'running') return;
+        // 终态：停止轮询并汇报
+        setPolling(false);
+        setApplying(false);
+        if (st.state === 'done') {
+          showToast('success', st.message || '更新已完成');
+          checkUpdate();
+        } else if (st.state === 'interrupted') {
+          showToast('error', '更新中断', st.message || '更新未完成即中断');
+        } else {
+          showToast('error', '更新失败', st.message || '未知原因');
+        }
+      } catch {
+        /* 下一轮再试 —— 容器重建期间请求会短暂失败，属正常 */
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 2000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [polling, checkUpdate]);
+
+  // 进入页面时若后端仍有更新在跑（如刷新过页面），接上轮询
+  useEffect(() => {
+    let stopped = false;
+    api('/status')
+      .then((st: UpdateStatus) => {
+        if (stopped) return;
+        setProgress(st);
+        if (st.state === 'running') { setPolling(true); setApplying(true); }
+      })
+      .catch(() => { /* 拿不到就不显示进度 */ });
+    return () => { stopped = true; };
+  }, []);
+
   const saveSettings = async (label = '更新配置') => {
     try {
       // 两张设置卡片共用同一份状态与同一个接口，任一「保存」都会落盘全部字段
@@ -183,21 +246,29 @@ export function UpdatePage() {
           (a.name.endsWith('.zip') || a.name.endsWith('.tar.gz')) && !a.name.includes('-docker'))?.name
         || ''
       );
-      const res = await api('/apply', 'POST', { version: confirmUpdate.tag, asset_name: assetName });
-      showToast('success', res.message);
+      await api('/apply', 'POST', { version: confirmUpdate.tag, asset_name: assetName });
+      // 这里**不报成功** —— 请求只表示「已受理」，真实结果由轮询给出
       setConfirmUpdate(null);
-    } catch (e: any) { showToast('error', '更新失败', e.message); }
-    finally { setApplying(false); }
+      setProgress({ busy: true, state: 'running', step_label: '准备中', message: '正在开始更新…' });
+      setPolling(true);
+    } catch (e: any) {
+      showToast('error', '更新失败', e.message);
+      setApplying(false);
+    }
   };
 
   const handleRollback = async () => {
     setApplying(true);
+    setProgress(null);
     try {
-      const res = await api('/rollback', 'POST');
-      showToast('success', res.message);
+      await api('/rollback', 'POST');
       setConfirmRollback(false);
-    } catch (e: any) { showToast('error', '回滚失败', e.message); }
-    finally { setApplying(false); }
+      setProgress({ busy: true, state: 'running', step_label: '准备中', message: '正在开始回滚…' });
+      setPolling(true);
+    } catch (e: any) {
+      showToast('error', '回滚失败', e.message);
+      setApplying(false);
+    }
   };
 
   // ------------------------------------------------------------------ #
@@ -245,6 +316,40 @@ export function UpdatePage() {
           )}
         </div>
       </div>
+
+      {/* 更新进度：后端后台执行，这里轮询显示 */}
+      {progress && progress.state !== 'idle' && (
+        <div className={`flex items-start gap-3 px-4 py-3 rounded-lg border text-sm ${
+          progress.state === 'running'
+            ? 'bg-sky-100 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-400'
+            : progress.state === 'done'
+              ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-400'
+              : 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-800 dark:text-red-400'
+        }`}>
+          {progress.state === 'running' && <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />}
+          {progress.state === 'done' && <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />}
+          {progress.state === 'failed' && <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+          {progress.state === 'interrupted' && <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />}
+          <div className="min-w-0">
+            <div className="font-medium">
+              {progress.kind === 'rollback' ? '回滚' : '更新'}
+              {progress.state === 'running' && ` · ${progress.step_label || '进行中'}`}
+              {progress.state === 'done' && ' 已完成'}
+              {progress.state === 'failed' && ' 失败'}
+              {progress.state === 'interrupted' && ' 被中断'}
+              {progress.version && `（v${progress.version}）`}
+            </div>
+            {progress.message && (
+              <div className="mt-0.5 break-words opacity-90">{progress.message}</div>
+            )}
+            {progress.state === 'running' && (
+              <div className="mt-0.5 opacity-75 text-xs">
+                更新在服务端后台执行，可以离开本页；重新进入会自动接上进度。
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Docker 部署提示：在线更新可用 / 未挂载 socket */}
       {info?.is_docker && info?.docker_ready && (

@@ -80,6 +80,9 @@ async def lifespan(app: FastAPI):
     """应用生命周期——迁移旧数据、启动账户管理器与到期调度器。"""
     global _manager, _scheduler
     _log.debug("正在启动 MisMiss 多账户面板 ...")
+    # 上一轮更新若停在 running，说明执行它的进程已不在（Docker 重建换了容器，
+    # 或非 Docker 解压覆盖 src/ 触发了 reload）—— 先标记掉，别让面板一直转圈
+    update.mark_interrupted_if_running()
     # 单服务器旧数据备份迁移(全新开始,幂等)
     migrate_legacy_data(_DATA_DIR)
     _manager = AccountManager(data_dir=_DATA_DIR)
@@ -105,6 +108,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     _manager = None
+    # 关闭出站共享连接池，别把套接字留到进程退出
+    try:
+        from core.network.client import aclose_shared_client
+
+        await aclose_shared_client()
+    except Exception:
+        pass
     _log.info("AccountManager 已关闭")
 
 

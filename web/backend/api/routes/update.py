@@ -10,10 +10,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
+import time
 import urllib.request
 from pathlib import Path
 
@@ -45,6 +48,29 @@ _NOTIFY_AFTER_DEFAULT = "机器人已更新完成，已恢复正常"
 # 更新状态文件中记录「重启后补发更新完成提示」的键
 _NOTIFY_PENDING_KEY = "notify_pending"
 
+# 更新状态文件中记录「本次更新进度」的键
+_APPLY_KEY = "apply"
+
+# 更新进度的状态取值
+_APPLY_RUNNING = "running"
+_APPLY_DONE = "done"
+_APPLY_FAILED = "failed"
+# 进程重启后发现的残留 running —— 执行它的进程已经不在了
+_APPLY_INTERRUPTED = "interrupted"
+
+# 更新流程的步骤标识（前端按此显示进度文案）
+_STEP_LABELS = {
+    "prepare": "准备中",
+    "download": "下载部署包",
+    "verify": "校验部署包",
+    "notify": "发送更新提示",
+    "backup": "备份当前版本",
+    "extract": "解压部署包",
+    "load": "导入镜像",
+    "recreate": "重建容器",
+    "done": "完成",
+}
+
 # 是否运行在 Docker 容器内（Docker 会在容器根目录创建 /.dockerenv）
 _IS_DOCKER = Path("/.dockerenv").exists()
 # docker.sock 是否挂载（在线更新需要）
@@ -53,6 +79,8 @@ _DOCKER_SOCKET = Path("/var/run/docker.sock").exists()
 _DEPLOY_DIR = Path("/app/deploy")
 _BACKUP_DIR = _DEPLOY_DIR / ".mismiss-backup"
 _UPDATE_TMP_DIR = _DEPLOY_DIR / ".mismiss-update"
+# 执行容器重建的一次性容器名（日志见 <部署目录>/logs/update-recreate.log）
+_RECREATE_CONTAINER = "mismiss-online-update"
 
 _DOCKER_UPDATE_HINT = (
     "未挂载 docker.sock / 部署目录，在线更新不可用。"
@@ -215,10 +243,95 @@ async def notify_after_update(manager: AccountManager) -> None:
 
 
 def _save_update_state(state: dict) -> None:
+    """整表覆盖写（原子：先写临时文件再 os.replace）。
+
+    ⚠️ 会用传入的字典**整个替换**文件内容，调用方若只想改一个键请用
+    :func:`_patch_update_state`，否则会把 ``backup_dir`` / ``notify_pending``
+    等别的键一起抹掉。
+    """
     _UPDATE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _UPDATE_STATE_FILE.write_text(
+    tmp = _UPDATE_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(tmp, _UPDATE_STATE_FILE)
+
+
+def _patch_update_state(**fields) -> dict:
+    """读-改-写地合并若干键，其余键原样保留。
+
+    传 ``None`` 表示删除该键。
+
+    :return: 合并后的完整状态字典
+    """
+    state = _load_update_state()
+    for k, v in fields.items():
+        if v is None:
+            state.pop(k, None)
+        else:
+            state[k] = v
+    _save_update_state(state)
+    return state
+
+
+# ------------------------------------------------------------------ #
+# 本次更新的进度（供前端轮询）
+# ------------------------------------------------------------------ #
+
+def _read_apply_progress() -> dict:
+    """读取当前/最近一次更新的进度；没有记录时返回 ``{"state": "idle"}``。"""
+    data = _load_update_state().get(_APPLY_KEY)
+    if not isinstance(data, dict):
+        return {"state": "idle"}
+    # 补上人可读的步骤文案，前端不必自己维护映射
+    if data.get("step"):
+        data["step_label"] = _STEP_LABELS.get(str(data["step"]), str(data["step"]))
+    return data
+
+
+def _set_apply_progress(
+    kind: str,
+    state: str,
+    step: str,
+    message: str = "",
+    version: str = "",
+) -> None:
+    """写入更新进度（读-改-写，不动其它键）。"""
+    prev = _load_update_state().get(_APPLY_KEY)
+    prev = prev if isinstance(prev, dict) else {}
+    # 上一轮也是 running 说明是同一次更新的步骤推进，沿用开始时间；
+    # 否则视为新的一轮，重新计时。
+    started = prev.get("started_at") if prev.get("state") == _APPLY_RUNNING else None
+    record = {
+        "kind": kind,
+        "state": state,
+        "step": step,
+        "step_label": _STEP_LABELS.get(step, step),
+        "message": message,
+        "version": version or prev.get("version", ""),
+        "started_at": started or time.time(),
+        "finished_at": None if state == _APPLY_RUNNING else time.time(),
+    }
+    _patch_update_state(**{_APPLY_KEY: record})
+
+
+def mark_interrupted_if_running() -> None:
+    """启动时调用：把残留的 running 判定为 interrupted。
+
+    执行更新的进程已经不在了（Docker 重建换了容器 / 非 Docker 解压覆盖 ``src/``
+    触发了 uvicorn reload），所以任何 ``running`` 都必然是中断残留。
+    """
+    data = _load_update_state().get(_APPLY_KEY)
+    if not isinstance(data, dict) or data.get("state") != _APPLY_RUNNING:
+        return
+    _set_apply_progress(
+        kind=str(data.get("kind", "apply")),
+        state=_APPLY_INTERRUPTED,
+        step="done",
+        message="上一次更新未完成即中断（进程已重启）。请查看日志 logs/update-recreate.log 后重试。",
+        version=str(data.get("version", "")),
+    )
+    _log.warning("发现中断的更新任务（step={}），已标记为 interrupted", data.get("step"))
 
 
 # ------------------------------------------------------------------ #
@@ -525,7 +638,8 @@ def _backup_deploy(current_version: str) -> None:
         src = _DEPLOY_DIR / item
         if src.exists():
             shutil.copy2(src, _BACKUP_DIR / item)
-    _save_update_state({"backup_dir": str(_BACKUP_DIR), "backup_version": current_version})
+    # 只并这两个键 —— 整表覆盖会抹掉同一文件里的 apply 进度与 notify_pending
+    _patch_update_state(backup_dir=str(_BACKUP_DIR), backup_version=current_version)
 
 
 def _restore_deploy() -> None:
@@ -538,29 +652,60 @@ def _restore_deploy() -> None:
             shutil.copy2(src, _DEPLOY_DIR / item)
 
 
+def _recreate_container_running() -> bool:
+    """上一次派发的一次性重建容器是否仍在运行。"""
+    try:
+        proc = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", _RECREATE_CONTAINER],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
 def _spawn_recreate() -> None:
     """派发一次性容器在宿主守护进程上执行 compose 重建。
 
     不能在应用容器内直接跑 compose —— 重建会销毁本容器、中断命令；
     通过 ``docker run`` 创建的一次性容器由宿主守护进程独立运行，不受重建影响，
     容器内只负责等待 compose 完成（重建后页面短暂断开属正常现象）。
+
+    输出**追加写** ``<部署目录>/logs/update-recreate.log``，不再丢弃 ——
+    重建是整条链路最容易静默失败的一步，日志是唯一的证据。
     """
     home = _deploy_home()
-    # 清理上一次遗留的一次性容器（若存在）
+
+    # 仍在运行的容器**不能杀**：它可能正在 compose 重建，半路杀掉会把栈留在
+    # 半重建状态（旧容器已停、新容器没起）。只有已退出/不存在时才清理。
+    if _recreate_container_running():
+        raise HTTPException(
+            status_code=409,
+            detail="上一次的容器重建仍在进行中，请等它结束后再试（约 10~30 秒）",
+        )
     subprocess.run(
-        ["docker", "rm", "-f", "mismiss-online-update"],
+        ["docker", "rm", "-f", _RECREATE_CONTAINER],
         capture_output=True, timeout=30,
     )
+
     cmd = [
-        "docker", "run", "--name", "mismiss-online-update",
+        "docker", "run", "--name", _RECREATE_CONTAINER,
         "-v", "/var/run/docker.sock:/var/run/docker.sock",
         "-v", f"{home}:/app/deploy",
         "mismiss:latest", "bash", "-c",
         "sleep 3; cd /app/deploy && docker compose --env-file /app/deploy/.env "
         "-f /app/deploy/docker-compose.yml up -d --force-recreate",
     ]
+    log_path = Path(home) / "logs" / "update-recreate.log"
     try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "ab") as log:
+            log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 重建开始 =====\n".encode())
+            log.flush()
+            # Popen 会为子进程复制一份 fd，父进程这边 with 退出即可
+            subprocess.Popen(
+                cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"启动重建任务失败: {e}")
 
@@ -570,33 +715,47 @@ async def _docker_apply(
     cfg: dict,
     target_version: str,
     assets: list[dict],
-) -> StatusResponse:
-    """Docker 在线更新：下载部署包 → 校验 → 备份 → 解压 → 导入镜像 → 后台重建。"""
+) -> None:
+    """Docker 在线更新：下载部署包 → 校验 → 备份 → 解压 → 导入镜像 → 后台重建。
+
+    在后台任务里跑（见 :func:`_run_update_task`），不持有任何 HTTP 请求。
+    所有阻塞调用一律经 ``asyncio.to_thread`` 移出事件循环 —— ``docker load``
+    动辄几十秒到几分钟，直接跑在循环上会让整个面板与健康检查一起停摆
+    （``docs/TASKS.md`` 的 P2）。
+    """
     asset_url, asset_name = _docker_select_asset(assets, target_version)
 
     # 下载部署包到宿主部署目录的临时子目录
-    if _UPDATE_TMP_DIR.exists():
-        shutil.rmtree(_UPDATE_TMP_DIR)
+    _set_apply_progress("apply", _APPLY_RUNNING, "download",
+                        f"正在下载 {asset_name}（较大，请耐心等待）", target_version)
+    if await asyncio.to_thread(_UPDATE_TMP_DIR.exists):
+        await asyncio.to_thread(shutil.rmtree, _UPDATE_TMP_DIR)
     pkg_path = _UPDATE_TMP_DIR / asset_name
-    _download_asset(asset_url, pkg_path, cfg)
+    await asyncio.to_thread(_download_asset, asset_url, pkg_path, cfg)
 
     # 校验格式（含内层镜像归档检查，避免 load 时才报 unrecognized image format）
-    _verify_docker_package(pkg_path)
+    _set_apply_progress("apply", _APPLY_RUNNING, "verify", "正在校验部署包", target_version)
+    await asyncio.to_thread(_verify_docker_package, pkg_path)
 
     # 容器重建前先把「即将更新」提示发出去（此后镜像导入耗时较长，队列有充足时间排空）
     notify_after = cfg["notify_after"]
     if cfg["notify_enabled"] and clip_broadcast(cfg["notify_before"]):
+        _set_apply_progress("apply", _APPLY_RUNNING, "notify", "正在发送更新提示", target_version)
         await _notify_livestreams(manager, cfg["notify_before"])
 
     # 备份当前部署包（供在线回滚）
-    _backup_deploy(_CURRENT_VERSION)
+    _set_apply_progress("apply", _APPLY_RUNNING, "backup", "正在备份当前版本", target_version)
+    await asyncio.to_thread(_backup_deploy, _CURRENT_VERSION)
     # 记录待发提示：容器重建后由新进程 lifespan 补发（data/ 是挂载卷，能存活到重启后）
     if cfg["notify_enabled"] and clip_broadcast(notify_after):
         _mark_notify_pending(target_version, notify_after)
 
     # 解压到宿主部署目录（剥离顶层目录；config.yml 用户配置与 .env 不被覆盖）
+    _set_apply_progress("apply", _APPLY_RUNNING, "extract", "正在解压部署包", target_version)
     try:
-        _extract_archive(pkg_path, _DEPLOY_DIR, skip={"config.yml", ".env"})
+        await asyncio.to_thread(
+            _extract_archive, pkg_path, _DEPLOY_DIR, {"config.yml", ".env"}
+        )
     except HTTPException:
         _clear_notify_pending()
         raise
@@ -606,27 +765,92 @@ async def _docker_apply(
 
     # 导入新镜像（标准 docker save 格式，任意版本 docker load 可读）
     image_tar = _DEPLOY_DIR / "mismiss-docker.tar.gz"
-    if not image_tar.exists():
+    if not await asyncio.to_thread(image_tar.exists):
         raise HTTPException(status_code=400, detail="部署包内缺少 mismiss-docker.tar.gz")
-    _run(["docker", "load", "-i", str(image_tar)], timeout=600)
+    _set_apply_progress("apply", _APPLY_RUNNING, "load",
+                        "正在导入镜像（视机器性能约 1~3 分钟，请勿关闭页面）", target_version)
+    await asyncio.to_thread(_run, ["docker", "load", "-i", str(image_tar)], 600)
 
-    # 后台重建容器
-    _spawn_recreate()
-
-    return StatusResponse(
-        success=True,
-        message=f"已加载 v{target_version} 镜像，容器正在后台重建（约 10~30 秒），页面将短暂断开",
-    )
+    # 派发容器重建：此后本进程随时可能被替换
+    _set_apply_progress("apply", _APPLY_RUNNING, "recreate",
+                        "正在重建容器，页面将短暂断开", target_version)
+    await asyncio.to_thread(_spawn_recreate)
 
 
-def _docker_rollback() -> StatusResponse:
+async def _docker_rollback() -> None:
     """Docker 在线回滚：恢复备份的部署包 → 重新导入镜像 → 后台重建。"""
-    _restore_deploy()
+    _set_apply_progress("rollback", _APPLY_RUNNING, "backup", "正在恢复备份的部署文件")
+    await asyncio.to_thread(_restore_deploy)
     image_tar = _DEPLOY_DIR / "mismiss-docker.tar.gz"
-    _run(["docker", "load", "-i", str(image_tar)], timeout=600)
-    _spawn_recreate()
-    _save_update_state({})
-    return StatusResponse(success=True, message="已恢复上一版本镜像，容器正在后台重建（约 10~30 秒）")
+    _set_apply_progress("rollback", _APPLY_RUNNING, "load", "正在导入上一版镜像")
+    await asyncio.to_thread(_run, ["docker", "load", "-i", str(image_tar)], 600)
+    _set_apply_progress("rollback", _APPLY_RUNNING, "recreate", "正在重建容器，页面将短暂断开")
+    await asyncio.to_thread(_spawn_recreate)
+    # 只清备份键，别整表覆盖 —— 同文件里还可能有 notify_pending
+    _patch_update_state(backup_dir=None, backup_version=None)
+
+
+# ================================================================== #
+# 后台任务调度
+# ================================================================== #
+
+# 当前正在跑的更新/回滚任务。持引用既用于「是否忙」的快失败探测，
+# 也避免 create_task 的返回值被 GC 掉导致任务中途消失。
+_update_task: asyncio.Task | None = None
+
+
+def update_busy() -> bool:
+    """是否有更新/回滚正在执行。"""
+    return _update_task is not None and not _update_task.done()
+
+
+async def _run_update_task(kind: str, target_version: str, job) -> None:
+    """后台执行一次更新/回滚（``job`` 是无参协程），终态写进 ``update_state.json``。
+
+    成功时写 ``done`` —— 注意此时容器重建只是**已派发**，是否真的起来要看
+    重启后的进程，所以文案里带上日志路径，别把话说满。
+    """
+    try:
+        await job()
+    except HTTPException as e:
+        detail = str(e.detail)
+        _set_apply_progress(kind, _APPLY_FAILED, "done", detail, target_version)
+        _log.error("更新失败（{}）: {}", kind, detail)
+    except Exception as e:
+        _set_apply_progress(
+            kind, _APPLY_FAILED, "done",
+            f"未预期的错误: {e}。详见 logs/bot_*.log", target_version,
+        )
+        _log.exception("更新失败（{}）", kind)
+    else:
+        _set_apply_progress(
+            kind, _APPLY_DONE, "done",
+            f"已派发容器重建（v{target_version}）。若约 1 分钟后版本仍未变化，"
+            f"请查看 logs/update-recreate.log",
+            target_version,
+        )
+        _log.info("更新流程已完成并派发重建（v{}）", target_version)
+    finally:
+        # 非 Docker 路径会解压覆盖 src/ 触发 reload，正常情况走不到这里
+        global _update_task
+        _update_task = None
+
+
+def _start_update_task(kind: str, target_version: str, job) -> None:
+    """占用更新通道并起后台任务；已在执行时抛 409。
+
+    检查与赋值之间**没有 await**，单线程事件循环下不会被插队。
+    """
+    global _update_task
+    if update_busy():
+        raise HTTPException(
+            status_code=409,
+            detail="已有更新正在进行中，请等它结束（可在本页查看进度）",
+        )
+    _set_apply_progress(kind, _APPLY_RUNNING, "prepare", "正在准备更新", target_version)
+    _update_task = asyncio.create_task(
+        _run_update_task(kind, target_version, job)
+    )
 
 
 # ================================================================== #
@@ -659,7 +883,9 @@ async def update_info():
 async def update_check():
     """检测最新版本。"""
     cfg = _update_config()
-    releases = _github_request(f"/repos/{cfg['repo']}/releases?per_page=100")
+    releases = await asyncio.to_thread(
+        _github_request, f"/repos/{cfg['repo']}/releases?per_page=100"
+    )
     if not releases:
         return {"latest": None, "up_to_date": True, "releases": []}
 
@@ -704,7 +930,9 @@ async def update_check():
 async def update_changelog(version: str):
     """获取指定版本的更新日志。"""
     cfg = _update_config()
-    releases = _github_request(f"/repos/{cfg['repo']}/releases?per_page=100")
+    releases = await asyncio.to_thread(
+        _github_request, f"/repos/{cfg['repo']}/releases?per_page=100"
+    )
     for r in releases:
         tag = r.get("tag_name", "").lstrip("v")
         if tag == version:
@@ -743,7 +971,13 @@ async def update_settings(body: dict, manager: AccountManager = Depends(get_acco
     return StatusResponse(success=True, message="更新配置已保存")
 
 
-@router.post("/apply", response_model=StatusResponse)
+@router.get("/status")
+async def update_status():
+    """本次（或最近一次）更新的进度，供前端轮询。"""
+    return {"busy": update_busy(), **_read_apply_progress()}
+
+
+@router.post("/apply", response_model=StatusResponse, status_code=202)
 async def update_apply(body: dict, manager: AccountManager = Depends(get_account_manager)):
     """执行更新到指定版本。
 
@@ -757,7 +991,9 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
     if not target_version:
         raise HTTPException(status_code=400, detail="必须指定目标版本")
 
-    releases = _github_request(f"/repos/{cfg['repo']}/releases?per_page=100")
+    releases = await asyncio.to_thread(
+        _github_request, f"/repos/{cfg['repo']}/releases?per_page=100"
+    )
     target = None
     for r in releases:
         if r.get("tag_name", "").lstrip("v") == target_version:
@@ -771,7 +1007,14 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
     if _IS_DOCKER:
         if not _docker_ready():
             raise HTTPException(status_code=400, detail=_DOCKER_UPDATE_HINT)
-        return await _docker_apply(manager, cfg, target_version, assets)
+        _start_update_task(
+            "apply", target_version,
+            lambda: _docker_apply(manager, cfg, target_version, assets),
+        )
+        return StatusResponse(
+            success=True,
+            message=f"已开始更新到 v{target_version}，可在本页查看进度",
+        )
 
     asset_name = str(body.get("asset_name", "")).strip()
     asset_url = None
@@ -802,14 +1045,40 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
         if not asset_url:
             raise HTTPException(status_code=400, detail="该版本没有可下载的更新包")
 
+    _start_update_task(
+        "apply", target_version,
+        lambda: _apply_source(manager, cfg, target_version, asset_url, asset_name),
+    )
+    return StatusResponse(
+        success=True,
+        message=f"已开始更新到 v{target_version}，可在本页查看进度",
+    )
+
+
+async def _apply_source(
+    manager: AccountManager,
+    cfg: dict,
+    target_version: str,
+    asset_url: str,
+    asset_name: str,
+) -> None:
+    """非 Docker 在线更新：下载源码归档 → 备份 → 解压覆盖程序目录。
+
+    ⚠️ 解压覆盖 ``src/`` 会触发 uvicorn 的 reload 监视器重启进程，
+    **执行本函数的后台任务会随之被杀**。所以「成功」必须在解压完成后立刻落盘，
+    且启动时要能把残留的 ``running`` 识别成中断（见
+    :func:`mark_interrupted_if_running`）。
+    """
     project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
     suffix = ".tar.gz" if asset_name.endswith(".tar.gz") else ".zip"
     tmp_pkg = project_root / "data" / f"update_{target_version}{suffix}"
 
     # 先只下载到 data/ 下的临时文件（不动程序文件），
     # 下载这一步是整条链路最可能失败的地方
+    _set_apply_progress("apply", _APPLY_RUNNING, "download",
+                        f"正在下载 {asset_name}", target_version)
     try:
-        _download_asset(asset_url, tmp_pkg, cfg)
+        await asyncio.to_thread(_download_asset, asset_url, tmp_pkg, cfg)
     except HTTPException:
         raise
     except Exception as e:
@@ -818,23 +1087,31 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
     # 走到这里更新已无退路：解压覆盖 src/ 会触发 uvicorn 的 reload 监视器重启进程，
     # 故必须在写文件之前把「即将更新」提示真正发出去（内部会等队列排空）
     if cfg["notify_enabled"] and clip_broadcast(cfg["notify_before"]):
+        _set_apply_progress("apply", _APPLY_RUNNING, "notify", "正在发送更新提示", target_version)
         await _notify_livestreams(manager, cfg["notify_before"])
 
     # 备份当前版本
+    _set_apply_progress("apply", _APPLY_RUNNING, "backup", "正在备份当前版本", target_version)
     backup_dir = project_root / "data" / "backup" / f"v{_CURRENT_VERSION}"
     try:
-        if backup_dir.exists():
-            shutil.rmtree(backup_dir)
-        backup_dir.parent.mkdir(parents=True, exist_ok=True)
-        for item in ["src", "web", "plugins", "scripts", "config.yml"]:
-            src = project_root / item
-            if src.exists():
+        if await asyncio.to_thread(backup_dir.exists):
+            await asyncio.to_thread(shutil.rmtree, backup_dir)
+        await asyncio.to_thread(backup_dir.parent.mkdir, parents=True, exist_ok=True)
+
+        def _copy_tree() -> None:
+            for item in ["src", "web", "plugins", "scripts", "config.yml"]:
+                src = project_root / item
+                if not src.exists():
+                    continue
                 dst = backup_dir / item
                 if src.is_dir():
                     shutil.copytree(src, dst)
                 else:
                     shutil.copy2(src, dst)
-        _save_update_state({"backup_dir": str(backup_dir), "backup_version": _CURRENT_VERSION})
+
+        await asyncio.to_thread(_copy_tree)
+        # 只并这两个键，别整表覆盖（同文件里还有 notify_pending）
+        _patch_update_state(backup_dir=str(backup_dir), backup_version=_CURRENT_VERSION)
     except Exception as e:
         tmp_pkg.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"备份失败: {e}")
@@ -844,9 +1121,10 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
         _mark_notify_pending(target_version, cfg["notify_after"])
 
     # 解压覆盖（剥离归档顶层目录；config.yml 用户配置不会被覆盖）
+    _set_apply_progress("apply", _APPLY_RUNNING, "extract", "正在解压并覆盖程序文件", target_version)
     try:
-        _extract_archive(tmp_pkg, project_root)
-        tmp_pkg.unlink(missing_ok=True)
+        await asyncio.to_thread(_extract_archive, tmp_pkg, project_root)
+        await asyncio.to_thread(tmp_pkg.unlink, True)
     except HTTPException:
         _clear_notify_pending()
         raise
@@ -854,27 +1132,39 @@ async def update_apply(body: dict, manager: AccountManager = Depends(get_account
         _clear_notify_pending()
         raise HTTPException(status_code=500, detail=f"更新包解压失败: {e}")
 
-    return StatusResponse(
-        success=True,
-        message=f"已更新到 v{target_version}，服务即将重启",
-    )
 
-
-@router.post("/rollback", response_model=StatusResponse)
+@router.post("/rollback", response_model=StatusResponse, status_code=202)
 async def update_rollback(manager: AccountManager = Depends(get_account_manager)):
     """回滚到上一版本。"""
     if _IS_DOCKER:
         if not _docker_ready():
             raise HTTPException(status_code=400, detail=_DOCKER_UPDATE_HINT)
-        return _docker_rollback()
+        _start_update_task("rollback", _CURRENT_VERSION, _docker_rollback)
+        return StatusResponse(success=True, message="已开始回滚，可在本页查看进度")
 
     state = _load_update_state()
     backup_dir = state.get("backup_dir", "")
-    if not backup_dir or not Path(backup_dir).exists():
+    if not backup_dir or not await asyncio.to_thread(Path(backup_dir).exists):
         raise HTTPException(status_code=400, detail="没有可用的备份，无法回滚")
 
+    prev_version = str(state.get("backup_version", "?"))
+    _start_update_task(
+        "rollback", prev_version,
+        lambda: _rollback_source(backup_dir, prev_version),
+    )
+    return StatusResponse(success=True, message="已开始回滚，可在本页查看进度")
+
+
+async def _rollback_source(backup_dir: str, prev_version: str) -> None:
+    """非 Docker 回滚：用备份目录覆盖程序文件。
+
+    与 :func:`_apply_source` 一样，覆盖会触发 reload 重启进程。
+    """
     project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-    try:
+    _set_apply_progress("rollback", _APPLY_RUNNING, "extract",
+                        f"正在恢复 v{prev_version} 的文件", prev_version)
+
+    def _restore() -> None:
         for item in ["src", "web", "plugins", "scripts", "config.yml"]:
             src = Path(backup_dir) / item
             dst = project_root / item
@@ -889,12 +1179,11 @@ async def update_rollback(manager: AccountManager = Depends(get_account_manager)
                 shutil.copytree(src, dst)
             else:
                 shutil.copy2(src, dst)
+
+    try:
+        await asyncio.to_thread(_restore)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"回滚失败: {e}")
 
-    # 清除备份状态
-    _save_update_state({})
-    return StatusResponse(
-        success=True,
-        message=f"已回滚到 v{state.get('backup_version', '?')}，服务即将重启",
-    )
+    # 只清备份键，别整表覆盖 —— 同文件里还可能有 notify_pending
+    _patch_update_state(backup_dir=None, backup_version=None)
