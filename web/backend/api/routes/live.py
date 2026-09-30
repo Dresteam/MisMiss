@@ -33,13 +33,27 @@ router = APIRouter()
 # 辅助
 # ------------------------------------------------------------------ #
 
+def _safe_creator_name(live) -> str:
+    """取主播名；直播间未 join 时 creator 会抛异常，拿不到就当空串。"""
+    try:
+        return live.creator_name or ""
+    except Exception:
+        return ""
+
+
 def _live_to_info(live) -> LivestreamInfo:
     """将 MissevanLivestream 实例转为响应模型。"""
+    # medal / creator_name 走的是 MissevanLivestream.creator，而它在直播间
+    # 尚未 join 时会抛 CoreApiException —— 全部按「拿不到就当空」处理，
+    # 否则一个没就绪的账户会让这个接口 500（LiveTab 每 8 秒轮询它）。
     medal_name = None
     medal_level = None
-    if live.medal:
-        medal_name = live.medal.name
-        medal_level = live.medal.level
+    try:
+        if live.medal:
+            medal_name = live.medal.name
+            medal_level = live.medal.level
+    except Exception:
+        pass
     creator_online = False
     creator_avatar = ""
     creator_intro = ""
@@ -56,7 +70,7 @@ def _live_to_info(live) -> LivestreamInfo:
         room_description=live.room_description or "",
         score=getattr(live, "score", 0) or 0,
         online_count=getattr(live, "online_count", 0) or 0,
-        creator_name=live.creator_name or "",
+        creator_name=_safe_creator_name(live),
         creator_id=getattr(live, "creator_id", 0) or 0,
         creator_is_online=creator_online,
         is_connected=live.is_connected,

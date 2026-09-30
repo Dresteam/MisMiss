@@ -65,11 +65,26 @@ def clip_broadcast(message: object) -> str:
     return " ".join(str(message).split())[:BROADCAST_MAX_LEN]
 
 
-def _safe_creator_intro(room: Any) -> str:
-    """取主播简介；creator 缺失或平台字段异常时返回空串。
+def _safe_room_attr(room: Any, attr: str, default: Any = "") -> Any:
+    """安全读取直播间字段。
 
-    总览是每个账户都要走的高频路径，不能因为一个房间信息不完整就整页报错。
+    总览是每个账户都要走的高频路径，**不能因为某个账户没就绪就让整个面板 500**。
+    ``creator`` / ``creator_name`` / ``creator_id`` / ``medal`` 走的都是
+    ``MissevanLivestream.creator`` 这个 property，而它在直播间尚未 join 时
+    会直接抛 ``CoreApiException``。
+
+    线上就是这么挂的：平台风控导致账户起不来、直播间一直没 join，
+    于是账户列表 / 总览 / 服务状态三个接口一起 500 —— 面板整页打不开。
     """
+    try:
+        value = getattr(room, attr, default)
+    except Exception:
+        return default
+    return default if value is None else value
+
+
+def _safe_creator_intro(room: Any) -> str:
+    """取主播简介；creator 缺失或平台字段异常时返回空串。"""
     try:
         return (room.creator.introduction or "") if room and room.creator else ""
     except Exception:
@@ -546,10 +561,13 @@ class AccountManager:
                 "room_enabled": bool(room and room.enabled),
                 # 是否开播中：总览页要直接看出来，不必点进详情
                 "room_streaming": bool(room and getattr(room, "is_streaming", False)),
-                "room_name": (room.room_name or "") if room else "",
-                "room_description": (room.room_description or "") if room else "",
+                # 一律走 _safe_room_attr：creator_name 在直播间未 join 时会抛异常，
+                # 而这里是账户列表/总览/服务状态的公共路径，一个账户没就绪
+                # 不能让整个面板挂掉
+                "room_name": _safe_room_attr(room, "room_name") if room else "",
+                "room_description": _safe_room_attr(room, "room_description") if room else "",
                 # 主播名 / 主播简介：总览页的搜索要覆盖它们，否则只能按账户名找
-                "creator_name": (room.creator_name or "") if room else "",
+                "creator_name": _safe_room_attr(room, "creator_name") if room else "",
                 "creator_intro": _safe_creator_intro(room),
                 "plugin_count": len(server._plugin_manager.list_plugins()),
                 "enabled_plugin_count": sum(
