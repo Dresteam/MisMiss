@@ -54,11 +54,19 @@ _mis_bot.MessageSendAPI = _FakeSendAPI  # type: ignore[assignment]
 
 
 def _fake_room(lid: int, *, enabled: bool, streaming: bool) -> SimpleNamespace:
-    # 字段需覆盖两处消费方：广播只读 enabled / is_streaming / bot，
-    # 而 manager.overview() 的快照还读 is_connected / room_name
+    # 字段需覆盖三处消费方：
+    #   - 广播本身：enabled / is_streaming / bot
+    #   - manager._account_snapshot：is_connected / room_name /
+    #     room_description / creator_name / creator.introduction
+    #   - api/routes/live.py 的 _live_to_info：medal / creator / score /
+    #     online_count / creator_id / cover_url
+    # 后两者用的是裸属性访问，缺一个就会 AttributeError。
+    # 新增消费方字段时记得同步这里 —— 这个假对象已经因此静默失效过一轮。
     room = SimpleNamespace(
-        live_id=lid, room_name=f"房间{lid}", enabled=enabled,
-        is_streaming=streaming, is_connected=enabled, bot=None,
+        live_id=lid, room_name=f"房间{lid}", room_description="",
+        creator_name="", creator=None, medal=None,
+        score=0, online_count=0, creator_id=0, cover_url="",
+        enabled=enabled, is_streaming=streaming, is_connected=enabled, bot=None,
     )
 
     async def send_message(message: str, priority: int = 0) -> None:
