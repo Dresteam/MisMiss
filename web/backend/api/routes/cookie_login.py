@@ -80,6 +80,34 @@ def _token_path(token: str):
     return _HELPER_TOKEN_DIR / f"{token}.json"
 
 
+def remap_helper_token_account_ids(mapping: dict[int, int]) -> int:
+    """账户编号重排后，把书签助手令牌里记录的 ``account_id`` 跟着改。
+
+    这些令牌只有 5 分钟寿命，重排期间正在走流程的会自然失效，
+    但能改的就改掉，免得用户刚好卡在中间看到莫名其妙的失败。
+
+    :return: 实际改写的令牌数
+    """
+    if not mapping or not _HELPER_TOKEN_DIR.exists():
+        return 0
+    changed = 0
+    for path in _HELPER_TOKEN_DIR.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        aid = data.get("account_id")
+        if not isinstance(aid, int) or aid not in mapping:
+            continue
+        data["account_id"] = mapping[aid]
+        try:
+            path.write_text(json.dumps(data), encoding="utf-8")
+            changed += 1
+        except OSError:
+            pass
+    return changed
+
+
 def _is_valid_helper_token(token: str) -> bool:
     """token 必须是 ``secrets.token_hex(32)`` 的 64 位十六进制串。
 

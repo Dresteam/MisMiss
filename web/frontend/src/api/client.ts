@@ -394,6 +394,26 @@ export async function fetchAccountSummary(id: number): Promise<AccountSummary> {
   return request<AccountSummary>(`/accounts/${id}/info`);
 }
 
+/** 用户名是否可用（创建账户时即时校验，避免提交后才被拒） */
+export async function checkUsername(
+  username: string,
+): Promise<{ username: string; available: boolean; reason: string }> {
+  return request(
+    `/panel/accounts/check-username?username=${encodeURIComponent(username)}`,
+  );
+}
+
+/** 重排账户编号（去掉历史空号）。dryRun 只返回映射供确认。 */
+export async function renumberAccounts(dryRun: boolean): Promise<{
+  mapping: Record<string, number>;
+  changed: number;
+  total: number;
+  dry_run: boolean;
+  tokens_updated?: number;
+}> {
+  return request(`/panel/accounts/renumber?dry_run=${dryRun}`, { method: 'POST' });
+}
+
 export async function createAccount(data: AccountCreateRequest): Promise<AccountSummary> {
   return request<AccountSummary>('/panel/accounts', {
     method: 'POST',

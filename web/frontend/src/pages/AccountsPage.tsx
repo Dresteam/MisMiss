@@ -3,11 +3,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, Bot as BotIcon,
   Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink, CalendarCog,
-  CirclePlay, CircleStop, Plug, Unplug,
+  CirclePlay, CircleStop, Plug, Unplug, ListOrdered,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
-  resetAccountCredentials, expireAccount,
+  resetAccountCredentials, expireAccount, renumberAccounts,
   enableAccountBot, disableAccountBot, enableAccountLive, disableAccountLive,
 } from '../api/client';
 import type { AccountSummary, AccountCreateRequest, PanelOverview, RenewRequest } from '../api/types';
@@ -75,6 +75,11 @@ export function AccountsPage() {
   const [credTarget, setCredTarget] = useState<AccountSummary | null>(null);
   const [credBusy, setCredBusy] = useState(false);
   const [compensateOpen, setCompensateOpen] = useState(false);
+  // 编号重排：先拿 dry-run 映射给用户确认，再真正执行
+  const [renumberPlan, setRenumberPlan] = useState<
+    { mapping: Record<string, number>; changed: number; total: number } | null
+  >(null);
+  const [renumberBusy, setRenumberBusy] = useState(false);
   /** 待确认的运行时开关 —— 点快捷按钮只弹确认框，确认后才真正执行 */
   const [runtimeTarget, setRuntimeTarget] = useState<{ acc: AccountSummary; kind: RuntimeKind } | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
@@ -243,6 +248,43 @@ export function AccountsPage() {
     return `user_${n}`;
   }, [accounts]);
 
+  /**
+   * 编号是否存在空号（如 #25 的下一个直接是 #27）。
+   * 只有真的有空号才显示「重排编号」入口 —— 编号本就连续时那个按钮纯属噪音。
+   */
+  const hasIdGaps = useMemo(() => {
+    const ids = accounts.map((a) => a.id).sort((x, y) => x - y);
+    return ids.some((id, i) => id !== i + 1);
+  }, [accounts]);
+
+  /** 拉一次 dry-run 映射并弹出确认框 */
+  const startRenumber = async () => {
+    try {
+      const plan = await renumberAccounts(true);
+      if (!plan.changed) {
+        showToast('success', '账户编号已经是连续的，无需重排');
+        return;
+      }
+      setRenumberPlan(plan);
+    } catch (e: any) {
+      showToast('error', '获取重排方案失败', e.message);
+    }
+  };
+
+  const confirmRenumber = async () => {
+    setRenumberBusy(true);
+    try {
+      const res = await renumberAccounts(false);
+      showToast('success', `已重排 ${res.changed} 个账户的编号`);
+      setRenumberPlan(null);
+      await load();
+    } catch (e: any) {
+      showToast('error', '重排失败', e.message);
+    } finally {
+      setRenumberBusy(false);
+    }
+  };
+
   if (loading && !overview) {
     return (
       <div className="flex justify-center py-24">
@@ -267,6 +309,14 @@ export function AccountsPage() {
             onClick={() => setCompensateOpen(true)}>
             批量补偿
           </Button>
+          {/* 只在真的有空号时才出现 */}
+          {hasIdGaps && (
+            <Button variant="secondary" icon={<ListOrdered className="w-4 h-4" />}
+              onClick={startRenumber}
+              title="账户编号存在断号（如 #25 之后是 #27），可压紧为连续编号">
+              重排编号
+            </Button>
+          )}
           <Button variant="primary" icon={<Plus className="w-4 h-4" />} onClick={() => setCreateOpen(true)}>
             创建账户
           </Button>
@@ -528,6 +578,35 @@ export function AccountsPage() {
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      <ConfirmDialog
+        open={renumberPlan !== null}
+        title="重排账户编号"
+        message={`将把 ${renumberPlan?.changed ?? 0} 个账户的编号压紧，去掉中间的空号。`
+          + '账户名称、直播间、Cookie、插件配置都不会变，但登录凭据会随编号更新；'
+          + '重排过程会重启全部账户，期间面板短暂不可用。'}
+        confirmLabel="确认重排"
+        variant="warning"
+        loading={renumberBusy}
+        onConfirm={confirmRenumber}
+        onCancel={() => setRenumberPlan(null)}
+      >
+        <div className="mt-3 max-h-56 overflow-auto rounded border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800">
+          {Object.entries(renumberPlan?.mapping ?? {}).map(([oldId, newId]) => {
+            const acc = accounts.find((a) => a.id === Number(oldId));
+            return (
+              <div key={oldId} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                <span className="font-mono text-gray-400">#{oldId}</span>
+                <span className="text-gray-400">→</span>
+                <span className="font-mono font-semibold text-primary-600 dark:text-primary-400">
+                  #{newId}
+                </span>
+                {acc?.name && <span className="truncate text-gray-500">{acc.name}</span>}
+              </div>
+            );
+          })}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

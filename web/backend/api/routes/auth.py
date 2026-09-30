@@ -70,6 +70,37 @@ def _save_token(
         }, f)
 
 
+def remap_token_account_ids(mapping: dict[int, int]) -> int:
+    """账户编号重排后，把令牌里记录的 ``account_id`` 跟着改。
+
+    不改的话，账户角色的用户会拿着指向旧编号的令牌——重排后要么直接被
+    中间件判成「无权访问其他账户」，要么（更糟）落到另一个人的账户上。
+
+    :param mapping: 旧编号 → 新编号
+    :return: 实际改写的令牌数
+    """
+    if not mapping or not TOKEN_DIR.exists():
+        return 0
+    changed = 0
+    for path in TOKEN_DIR.iterdir():
+        if not path.is_file() or not _is_valid_token(path.name):
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        aid = data.get("account_id")
+        if not isinstance(aid, int) or aid not in mapping:
+            continue
+        data["account_id"] = mapping[aid]
+        try:
+            path.write_text(json.dumps(data), encoding="utf-8")
+            changed += 1
+        except OSError:
+            pass
+    return changed
+
+
 def _is_valid_token(token: str) -> bool:
     """token 必须是 ``secrets.token_hex(32)`` 生成的 64 位十六进制字符串。
 

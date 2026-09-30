@@ -1607,6 +1607,34 @@ class PluginManager:
         metadata.plugin_instance = None
         metadata.enabled = False
 
+    def unmount_ui_routes(self) -> None:
+        """摘除本账户已注册的全部插件 UI 路由。
+
+        用于账户编号重排：路由前缀里嵌着账户 id，换了号之后旧前缀必须摘掉，
+        否则 ``/api/accounts/{旧id}/plugin/.../ui`` 会一直响应已失效的实例。
+        （``shutdown_all`` 只调 ``terminate``，**不**摘路由，所以不能指望它。）
+
+        ⚠️ 与 :meth:`disable_plugin` 的区别：这里只摘路由，**不改启用状态** ——
+        重排编号不该顺手把用户的插件全关了。
+        """
+        if self._app is None:
+            return
+        prefixes = {
+            self._plugin_ui_prefix(name) for name in self._plugins
+        }
+        if not prefixes:
+            return
+        kept: list[Any] = []
+        removed = 0
+        for route in self._app.router.routes:
+            if PluginManager._route_prefix(route) in prefixes:
+                removed += 1
+            else:
+                kept.append(route)
+        if removed:
+            self._app.router.routes[:] = kept
+            _log.info("已摘除 {} 条插件 UI 路由", removed)
+
     def _remove_plugin_routes(self, metadata: PluginMetadata) -> None:
         """从 FastAPI 移除指定插件的 UI 路由。"""
         if self._app is None:
