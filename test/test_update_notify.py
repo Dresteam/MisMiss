@@ -339,6 +339,75 @@ check("项目根 config.yml 已还原",
       _CONFIG.read_bytes() == _CONFIG_BACKUP if _CONFIG_BACKUP else not _CONFIG.exists(),
       "测试污染了真实配置文件")
 
+# ------------------------------------------------------------------ #
+# 部署包校验必须流式 —— 曾因把 200MB 镜像归档读进内存而 OOM
+# ------------------------------------------------------------------ #
+
+def test_verify_package_streams_without_oom() -> None:
+    """构造一个含大体积内层归档的部署包，确认校验不会把它整个读进内存。
+
+    线上故障：容器内存上限 512MB，`io.BytesIO(zf.read(n))` 对 207MB 的
+    内层归档先读一份再拷一份，峰值 400MB+，进程被 OOM 杀掉 ——
+    表现为「包下载完了但更新失败」，且发生在备份之前，现场没有任何痕迹。
+    """
+    import io
+    import tarfile
+    import tracemalloc
+    import zipfile
+    from pathlib import Path
+
+    from api.routes import update as U
+    from fastapi import HTTPException
+
+    tmp = Path(tempfile.mkdtemp(prefix="mismiss-pkg-"))
+    inner = tmp / "mismiss-docker.tar.gz"
+
+    # 造一个「足够大」的内层归档：用不可压缩的随机数据，确保 gz 也是大块头
+    blob = os.urandom(24 * 1024 * 1024)
+    with tarfile.open(inner, "w:gz") as t:
+        for i in range(4):
+            f = tmp / f"layer{i}.bin"
+            f.write_bytes(blob)
+            t.add(f, arcname=f"blobs/sha256/layer{i}")
+        # manifest.json 放在最后 —— 流式扫描要读到底才能找到
+        m = tmp / "manifest.json"
+        m.write_text("[]", encoding="utf-8")
+        t.add(m, arcname="manifest.json")
+
+    pkg = tmp / "mismiss-1.5.0-docker.zip"
+    with zipfile.ZipFile(pkg, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(inner, arcname="mismiss-docker.tar.gz")
+        z.writestr("docker-compose.yml", "services: {}")
+        z.writestr("nginx.conf", "")
+
+    inner_mb = inner.stat().st_size / 1024 / 1024
+    tracemalloc.start()
+    U._verify_docker_package(pkg)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    peak_mb = peak / 1024 / 1024
+
+    # 流式实现峰值应远小于归档本身；整读会至少 equal 内层大小
+    assert peak_mb < inner_mb / 2, (
+        f"校验峰值内存 {peak_mb:.1f}MB，内层归档 {inner_mb:.1f}MB —— "
+        f"看起来又把归档整个读进内存了（容器 512MB 上限下会 OOM）"
+    )
+    print(f"PASS: 校验内层 {inner_mb:.0f}MB 的包，峰值内存仅 {peak_mb:.1f}MB")
+
+    # 缺 docker-compose.yml 的包仍要被拒
+    bad = tmp / "bad.zip"
+    with zipfile.ZipFile(bad, "w") as z:
+        z.writestr("mismiss-docker.tar.gz", "")
+    try:
+        U._verify_docker_package(bad)
+        raise AssertionError("缺少 docker-compose.yml 竟然通过了校验")
+    except HTTPException as e:
+        assert "docker-compose.yml" in str(e.detail)
+        print("PASS: 缺少 docker-compose.yml 仍被拒")
+
+
+test_verify_package_streams_without_oom()
+
 passed = sum(1 for _, ok, _ in res if ok)
 for i, (name, ok, detail) in enumerate(res, 1):
     print(f"{'PASS' if ok else 'FAIL'} {i}: {name}" + (f"  [{detail}]" if not ok else ""))
