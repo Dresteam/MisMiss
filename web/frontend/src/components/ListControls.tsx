@@ -107,8 +107,14 @@ export function FilterChips<T extends string>({ options, value, onChange, block 
   block?: boolean;
 }) {
   return (
-    <div className={`flex flex-wrap gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-800 ${
-      block ? 'w-full md:w-fit' : 'w-fit'}`}>
+    // block 模式用固定 4 列网格而不是等分：各组选项数不同（3 个 vs 4 个），
+    // 等分会让每行的胶囊宽度不一致、列对不齐，看着别扭。固定列数后所有行的
+    // 胶囊等宽、上下对齐，选项少的那行末尾留一个空格（容器底色，视觉上
+    // 读作「这组少一个选项」而不是破版）。
+    <div className={`p-1 rounded-lg bg-gray-100 dark:bg-gray-800 gap-1 ${
+      block
+        ? 'grid grid-cols-4 w-full md:flex md:flex-wrap md:w-fit'
+        : 'flex flex-wrap w-fit'}`}>
       {options.map((o) => (
         <button
           key={o.id}
@@ -116,8 +122,8 @@ export function FilterChips<T extends string>({ options, value, onChange, block 
           onClick={() => onChange(o.id)}
           className={
             'inline-flex items-center min-h-8 px-3 py-1.5 text-xs font-medium rounded-md transition-all ' +
-            // block 模式下选项在行内等分（移动端），桌面端恢复按内容宽度
-            (block ? 'flex-1 md:flex-none justify-center ' : '') +
+            // block 模式下由网格分配宽度（移动端），桌面端恢复按内容宽度
+            (block ? 'justify-center md:flex-none ' : '') +
             (value === o.id
               ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300')
