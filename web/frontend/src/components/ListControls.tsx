@@ -38,7 +38,11 @@ export function FilterToggle({ open, count, onToggle, className = '' }: {
       <SlidersHorizontal className="w-3.5 h-3.5" />
       筛选
       {count > 0 && (
-        <span className="min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white
+        // 浅底 + 同色深字，而不是饱和底 + 白字：按钮本身是中性灰底，
+        // 一块亮蓝压上去太跳、与整体色调不搭。这套浅底角标是全项目通用写法。
+        <span className="min-w-4 h-4 px-1 rounded-full
+          bg-primary-100 text-primary-700
+          dark:bg-primary-900/40 dark:text-primary-300
           text-[10px] leading-4 text-center font-semibold">
           {count}
         </span>
