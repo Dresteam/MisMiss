@@ -31,6 +31,18 @@ const levelColors: Record<string, string> = {
 
 const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 
+/**
+ * 窄屏用的三字母缩写 —— 六个全称在手机上要占两行还挤。
+ *
+ * 取的是各自的通用缩写而非机械截前三位：WAR（前三位）会被读成英文单词
+ * 「战争」，DBG 也比 DEB 更常见。过滤值仍是全称（`filterLevels` 存的是
+ * `levels` 里的原值），缩写只作用于显示。
+ */
+const levelShort: Record<string, string> = {
+  DEBUG: 'DBG', INFO: 'INF', SUCCESS: 'SUC',
+  WARNING: 'WRN', ERROR: 'ERR', CRITICAL: 'CRT',
+};
+
 export function LogsPage() {
   const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
   // 账户筛选可多选：空数组 = 不过滤；含 '' 表示只看面板级；其余为账户名
@@ -242,7 +254,10 @@ export function LogsPage() {
                   ${active
                     ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
                     : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
-                {lv}
+                {/* 窄屏显示缩写、md 起显示全称。两份都渲染、由 CSS 决定显示哪份 ——
+                    比用 matchMedia 监听宽度简单，也不会有首帧闪烁 */}
+                <span className="md:hidden">{levelShort[lv] ?? lv}</span>
+                <span className="hidden md:inline">{lv}</span>
               </button>
             );
           })}
