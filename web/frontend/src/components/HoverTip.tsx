@@ -17,9 +17,19 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  * 只在挂载与窗口尺寸变化时量：气泡虽然 opacity-0，但始终参与布局，
  * 几何是稳定的，不需要每次悬停都读一遍。
  */
+/**
+ * 宿主离视口顶部多近时，提示改为**显示在下方**。
+ *
+ * 本应用移动端有一条 `sticky top-0 z-20 h-12` 的顶栏（左上角是菜单按钮），
+ * 而提示是 z-50 —— 层级更高，所以顶部那排按钮的气泡会盖在顶栏上、挡住菜单。
+ * 48px 顶栏 + 余量，取 64。
+ */
+const FLIP_BELOW_TOP = 64;
+
 export function HoverTip({ text }: { text: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [shift, setShift] = useState(0);
+  const [below, setBelow] = useState(false);
 
   const clamp = useCallback(() => {
     const el = ref.current;
@@ -32,15 +42,21 @@ export function HoverTip({ text }: { text: string }) {
     // 改为量宿主（不受 transform 影响）+ 气泡自身宽度（offsetWidth 同样不受影响），
     // 反推它在未变换时的左边缘。
     const width = el.offsetWidth;
-    if (!width) return; // 尚未布局
+    const height = el.offsetHeight;
+    if (!width || !height) return; // 尚未布局
     const pad = 8; // 与视口留一点缝，贴着边不好看
+    const GAP = 8; // 气泡与宿主之间的间距（对应 mb-2 / mt-2）
     const hostRect = host.getBoundingClientRect();
-    const left = hostRect.left + hostRect.width / 2 - width / 2;
 
+    // 横向：夹回视口内
+    const left = hostRect.left + hostRect.width / 2 - width / 2;
     let dx = 0;
     if (left < pad) dx = pad - left;
     else if (left + width > window.innerWidth - pad) dx = window.innerWidth - pad - (left + width);
     setShift(dx);
+
+    // 纵向：宿主离顶太近（或上方根本放不下）就翻到下方，避免盖住顶栏与菜单按钮
+    setBelow(hostRect.top - GAP < height + FLIP_BELOW_TOP);
   }, []);
 
   useLayoutEffect(() => {
@@ -65,17 +81,19 @@ export function HoverTip({ text }: { text: string }) {
       role="tooltip"
       // 用内联 transform 覆盖 Tailwind 的 -translate-x-1/2，把夹取量叠上去
       style={{ transform: `translateX(calc(-50% + ${shift}px))` }}
-      // bottom-full + mb-2 —— 贴在宿主正上方，偏移量不写死。
-      // 原先用 -top-9（固定 36px），一旦文字换行、气泡变高就会压到宿主上。
+      // 默认贴在宿主正上方；宿主贴近顶部时改为下方（见 FLIP_BELOW_TOP）。
+      // 用 bottom-full/top-full 而非写死的 -top-9：偏移随气泡高度自适应，
+      // 文字换行变高也不会压到宿主上。
       //
       // w-max + max-w —— 短提示按内容宽度一行放下；长提示被 max-w 卡住后**换行**。
       // 单靠 whitespace-nowrap 时，比屏幕还宽的提示无论怎么夹取都会有一端越界
       // （夹住左边右端就出去），窄机型上尤其明显。
-      className="pointer-events-none absolute bottom-full mb-2 left-1/2 z-50
+      className={`pointer-events-none absolute left-1/2 z-50
+                 ${below ? 'top-full mt-2' : 'bottom-full mb-2'}
                  w-max max-w-[calc(100vw-1rem)] text-center
                  px-2 py-1 rounded-md text-[11px] font-medium
                  bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                 opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+                 opacity-0 group-hover:opacity-100 transition-opacity duration-100`}
     >
       {text}
     </span>
