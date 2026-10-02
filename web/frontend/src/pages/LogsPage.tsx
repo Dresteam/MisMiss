@@ -161,6 +161,29 @@ export function LogsPage() {
     URL.revokeObjectURL(url);
   };
 
+  /**
+   * 三个操作按钮。定义一次、两处渲染：窄屏放在标题行（始终可见，不受筛选折叠
+   * 影响），md 起仍在筛选面板里 —— 桌面端布局与改动前完全一致。
+   * 两处的可见性互补（一个 md:hidden、一个在 hidden md:flex 的面板内），
+   * 任何宽度下只会出现一份。
+   */
+  const logActions = (
+    <>
+      <Button variant="ghost" size="sm" icon={<RefreshCw />}
+        title="刷新" aria-label="刷新" onClick={refresh}>
+        <span className="hidden md:inline">刷新</span>
+      </Button>
+      <Button variant="ghost" size="sm" icon={<Package />}
+        title="安装包" aria-label="安装包" onClick={() => setPipOpen(true)}>
+        <span className="hidden md:inline">安装包</span>
+      </Button>
+      <Button variant="ghost" size="sm" icon={<Download />}
+        title="导出" aria-label="导出" onClick={handleExport}>
+        <span className="hidden md:inline">导出</span>
+      </Button>
+    </>
+  );
+
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] lg:h-[calc(100vh-6rem)] animate-fade-in">
       {/* Header */}
@@ -173,14 +196,18 @@ export function LogsPage() {
             {filtered.length !== entries.length && `（筛选后 ${filtered.length} 条）`}
           </p>
         </div>
+        {/* 窄屏：操作按钮不随筛选折叠，始终可见 */}
+        <div className="flex items-center gap-1 shrink-0 md:hidden">{logActions}</div>
         {/* 窄屏收起筛选：日志页的主角是日志本身，6 个级别 + 账户 + 3 个操作
             能占掉三行。折叠后默认只留搜索行，点「筛选」展开。 */}
         <div className={`${filtersOpen ? 'flex' : 'hidden'} md:flex
                          flex-wrap items-center gap-1 w-full md:w-auto`}>
           {/* 级别药丸：容器样式与账户总览的筛选胶囊组对齐（浅底圆角 + 内边距）。
-              窄屏独占一行并横向滚动，避免折成两行且不挤压其它控件 */}
-          <div className="flex items-center gap-1 overflow-x-auto max-w-full md:max-w-none
-                          shrink-0 p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
+              一律 flex-wrap 换行，**不横向滚动** —— 6 个级别加「清除」在窄屏放不下，
+              横向滚动没有可滚动的视觉提示，用户只会看到「显示不全」；
+              换行虽然占两行，但每个选项都看得见、点得到。 */}
+          <div className="flex flex-wrap items-center gap-1
+                          max-w-full shrink p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
             {levels.map((lv) => {
               const active = filterLevels.has(lv);
               return (
@@ -206,19 +233,8 @@ export function LogsPage() {
             onChange={setFilterAccounts}
           />
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
-          {/* 次要操作窄屏只留图标（display:none 的子节点不占 flex 间距） */}
-          <Button variant="ghost" size="sm" icon={<RefreshCw />}
-            title="刷新" aria-label="刷新" onClick={refresh}>
-            <span className="hidden md:inline">刷新</span>
-          </Button>
-          <Button variant="ghost" size="sm" icon={<Package />}
-            title="安装包" aria-label="安装包" onClick={() => setPipOpen(true)}>
-            <span className="hidden md:inline">安装包</span>
-          </Button>
-          <Button variant="ghost" size="sm" icon={<Download />}
-            title="导出" aria-label="导出" onClick={handleExport}>
-            <span className="hidden md:inline">导出</span>
-          </Button>
+          {/* 次要操作：窄屏那份在标题行且常驻（md:hidden），这份只在 md 起显示 */}
+          <div className="hidden md:flex items-center gap-1">{logActions}</div>
         </div>
       </div>
 
