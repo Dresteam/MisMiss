@@ -24,7 +24,12 @@ export function ToastContainer({ toasts, onRemove }: Props) {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+    // ⚠️ 宽度不能用 `w-full`：它取的是**视口宽度的 100%**，而容器只锚在 right-4
+    // （右侧 16px），没有左侧约束 —— 屏宽不足 max-w-sm + 16 时（大部分手机都比
+    // 400px 窄），左边缘会被顶到 −16px，整条提示的**左端直接跑出屏幕**。
+    // 改为「视口宽 − 两侧各 16px」，宽屏再由 max-w-sm 收住。
+    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2
+                    w-[calc(100vw-2rem)] max-w-sm pointer-events-none">
       {toasts.map((toast) => {
         const Icon = iconMap[toast.type];
         return (
