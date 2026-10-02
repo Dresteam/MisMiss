@@ -162,10 +162,10 @@ export function LogsPage() {
   };
 
   /**
-   * 三个操作按钮。定义一次、两处渲染：窄屏放在标题行（始终可见，不受筛选折叠
-   * 影响），md 起仍在筛选面板里 —— 桌面端布局与改动前完全一致。
+   * 三个操作按钮。定义一次、两处渲染：窄屏放在标题行（始终可见，不受筛选
+   * 折叠影响），md 起在筛选面板里。
    * 两处的可见性互补（一个 md:hidden、一个在 hidden md:flex 的面板内），
-   * 任何宽度下只会出现一份。
+   * 任何宽度下只会出现一份 —— 提成一份定义就是为了避免两份文案/回调各改各的。
    */
   const logActions = (
     <>
@@ -198,44 +198,6 @@ export function LogsPage() {
         </div>
         {/* 窄屏：操作按钮不随筛选折叠，始终可见 */}
         <div className="flex items-center gap-1 shrink-0 md:hidden">{logActions}</div>
-        {/* 窄屏收起筛选：日志页的主角是日志本身，6 个级别 + 账户 + 3 个操作
-            能占掉三行。折叠后默认只留搜索行，点「筛选」展开。 */}
-        <div className={`${filtersOpen ? 'flex' : 'hidden'} md:flex
-                         flex-wrap items-center gap-1 w-full md:w-auto`}>
-          {/* 级别药丸：容器样式与账户总览的筛选胶囊组对齐（浅底圆角 + 内边距）。
-              一律 flex-wrap 换行，**不横向滚动** —— 6 个级别加「清除」在窄屏放不下，
-              横向滚动没有可滚动的视觉提示，用户只会看到「显示不全」；
-              换行虽然占两行，但每个选项都看得见、点得到。 */}
-          <div className="flex flex-wrap items-center gap-1
-                          max-w-full shrink p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
-            {levels.map((lv) => {
-              const active = filterLevels.has(lv);
-              return (
-                <button key={lv} onClick={() => toggleLevel(lv)}
-                  className={`px-2 py-1 text-xs font-medium rounded-md transition-colors shrink-0
-                    ${active
-                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
-                  {lv}
-                </button>
-              );
-            })}
-            {filterLevels.size > 0 && (
-              <button onClick={() => setFilterLevels(new Set())}
-                className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-red-500
-                           transition-colors shrink-0">清除</button>
-            )}
-          </div>
-          <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
-          <AccountFilter
-            accounts={accountOptions}
-            selected={filterAccounts}
-            onChange={setFilterAccounts}
-          />
-          <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
-          {/* 次要操作：窄屏那份在标题行且常驻（md:hidden），这份只在 md 起显示 */}
-          <div className="hidden md:flex items-center gap-1">{logActions}</div>
-        </div>
       </div>
 
       {/* Search bar：窄屏与「筛选」开关同一行 */}
@@ -259,6 +221,46 @@ export function LogsPage() {
           count={activeFilterCount}
           onToggle={() => setFiltersOpen((v) => !v)}
         />
+      </div>
+
+      {/* 筛选面板：紧跟在「筛选」开关**下方**展开。
+          此前它挂在标题行里，而开关在搜索行 —— 展开时面板出现在按钮上方，
+          点按钮却在上面出内容，很反直觉。 */}
+      <div className={`${filtersOpen ? 'flex' : 'hidden'} md:flex
+                       flex-wrap items-center gap-1 mb-2 w-full`}>
+        {/* 级别药丸：容器样式与账户总览的筛选胶囊组对齐（浅底圆角 + 内边距）。
+            一律 flex-wrap 换行，**不横向滚动** —— 6 个级别加「清除」在窄屏放不下，
+            横向滚动没有可滚动的视觉提示，用户只会看到「显示不全」；
+            换行虽然占两行，但每个选项都看得见、点得到。 */}
+        <div className="flex flex-wrap items-center gap-1
+                        max-w-full shrink p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
+          {levels.map((lv) => {
+            const active = filterLevels.has(lv);
+            return (
+              <button key={lv} onClick={() => toggleLevel(lv)}
+                className={`px-2 py-1 text-xs font-medium rounded-md transition-colors shrink-0
+                  ${active
+                    ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+                {lv}
+              </button>
+            );
+          })}
+          {filterLevels.size > 0 && (
+            <button onClick={() => setFilterLevels(new Set())}
+              className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-red-500
+                         transition-colors shrink-0">清除</button>
+          )}
+        </div>
+        <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
+        <AccountFilter
+          accounts={accountOptions}
+          selected={filterAccounts}
+          onChange={setFilterAccounts}
+        />
+        <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
+        {/* 次要操作：窄屏那份在标题行且常驻（md:hidden），这份只在 md 起显示 */}
+        <div className="hidden md:flex items-center gap-1">{logActions}</div>
       </div>
 
       {/* Log area */}
