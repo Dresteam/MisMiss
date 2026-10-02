@@ -5,6 +5,7 @@ import { HoverTip } from '../components/HoverTip';
 import { StatusBadge } from '../components/StatusBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AccountSetup } from '../components/AccountSetup';
+import { Switch } from '../components/Switch';
 import { useAuth } from '../hooks/useAuth';
 import { showToast } from '../hooks/useToast';
 import { ApiError } from '../api/client';
@@ -406,16 +407,13 @@ export function SettingsPage() {
               <p className="text-xs text-gray-400 mt-0.5">启用后日志将包含 DEBUG 级别的详细信息</p>
             </div>
             <div className="flex items-center gap-3">
-              {logSaving && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
-              <button
-                onClick={() => handleToggleDebug(!debugEnabled)}
-                disabled={logSaving}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
-                  ${debugEnabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
-              >
-                <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
-                  ${debugEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
-              </button>
+              {/* 保存中的转圈由 Switch 内部渲染（旋钮里），不再飘在旁边 */}
+              <Switch
+                checked={debugEnabled}
+                onChange={handleToggleDebug}
+                loading={logSaving}
+                label="调试日志"
+              />
             </div>
           </div>
         </div>
@@ -566,14 +564,11 @@ function ConfigSection({
               <HoverTip text={key} />
             </label>
             {typeof value === 'boolean' ? (
-              <button
-                onClick={() => onChange(path, key, !value)}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors
-                  ${value ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}`}
-              >
-                <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
-                  ${value ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
-              </button>
+              <Switch
+                checked={value}
+                onChange={(next) => onChange(path, key, next)}
+                label={FIELD_LABELS[key] || key}
+              />
             ) : typeof value === 'number' ? (
               <input type="number" value={value}
                 onChange={(e) => onChange(path, key, e.target.value === '' ? '' : Number(e.target.value))}
