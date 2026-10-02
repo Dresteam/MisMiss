@@ -53,13 +53,21 @@ export interface FilterOption<T extends string> {
   count?: number;
 }
 
-export function FilterChips<T extends string>({ options, value, onChange }: {
+export function FilterChips<T extends string>({ options, value, onChange, block = false }: {
   options: readonly FilterOption<T>[];
   value: T;
   onChange: (next: T) => void;
+  /**
+   * 移动端独占整行、各选项等分宽度（桌面端仍按内容贴合）。
+   *
+   * 用于多组筛选竖排的场景：各组选项数量与文案长短不一，默认的 `w-fit`
+   * 会让每行右边缘参差不齐，看着很乱。开启后四行等宽，选项在行内等分。
+   */
+  block?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-800 w-fit">
+    <div className={`flex flex-wrap gap-1 p-1 rounded-lg bg-gray-100 dark:bg-gray-800 ${
+      block ? 'w-full md:w-fit' : 'w-fit'}`}>
       {options.map((o) => (
         <button
           key={o.id}
@@ -67,6 +75,8 @@ export function FilterChips<T extends string>({ options, value, onChange }: {
           onClick={() => onChange(o.id)}
           className={
             'inline-flex items-center min-h-8 px-3 py-1.5 text-xs font-medium rounded-md transition-all ' +
+            // block 模式下选项在行内等分（移动端），桌面端恢复按内容宽度
+            (block ? 'flex-1 md:flex-none justify-center ' : '') +
             (value === o.id
               ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300')
