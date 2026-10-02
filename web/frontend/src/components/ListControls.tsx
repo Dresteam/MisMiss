@@ -5,7 +5,48 @@
  * 之前的 26~28px 高版本按不准。
  */
 
-import { Search, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, X, ChevronLeft, ChevronRight, SlidersHorizontal, ChevronDown } from 'lucide-react';
+
+// ------------------------------------------------------------------ //
+// 窄屏筛选开关
+// ------------------------------------------------------------------ //
+
+/**
+ * 窄屏下展开/收起筛选区的开关。
+ *
+ * 提成共享组件是为了让各页在移动端**长得一样** —— 账户总览与日志页此前各写了
+ * 一份，一个填充式、一个描边式，断点还分别是 md 与 sm，手机上切换页面时观感割裂。
+ * 断点统一为 md（768px）：更宽的屏上筛选区常驻展开，这个按钮不出现。
+ */
+export function FilterToggle({ open, count, onToggle, className = '' }: {
+  open: boolean;
+  /** 生效中的筛选项数量；> 0 时显示角标 */
+  count: number;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className={`md:hidden shrink-0 inline-flex items-center gap-1.5 min-h-9 px-3
+        rounded-lg bg-gray-100 dark:bg-gray-800 text-xs font-medium
+        text-gray-600 dark:text-gray-300
+        active:bg-gray-200 dark:active:bg-gray-700 transition-colors ${className}`}
+    >
+      <SlidersHorizontal className="w-3.5 h-3.5" />
+      筛选
+      {count > 0 && (
+        <span className="min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white
+          text-[10px] leading-4 text-center font-semibold">
+          {count}
+        </span>
+      )}
+      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+    </button>
+  );
+}
 
 // ------------------------------------------------------------------ //
 // 搜索框

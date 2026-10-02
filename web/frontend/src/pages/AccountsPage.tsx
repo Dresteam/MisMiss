@@ -3,8 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, Bot as BotIcon,
   Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink, CalendarCog,
-  CirclePlay, CircleStop, Plug, Unplug, ListOrdered,
-  SlidersHorizontal, ChevronDown, X,
+  CirclePlay, CircleStop, Plug, Unplug, ListOrdered, X,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
@@ -18,7 +17,7 @@ import { ExpiryBadge } from '../components/ExpiryBadge';
 import { CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
 import { CompensateDialog } from '../components/CompensateDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { SearchInput, FilterChips, Pagination } from '../components/ListControls';
+import { SearchInput, FilterChips, FilterToggle, Pagination } from '../components/ListControls';
 import { showToast } from '../hooks/useToast';
 import { livePageUrl } from '../utils/live';
 
@@ -370,24 +369,11 @@ export function AccountsPage() {
           {/* 移动端：折叠开关。四组筛选在窄屏上展开会占满整屏，
               折叠后用一个按钮 + 生效数量提示，桌面端（md 起）始终展开、看不到这个按钮 */}
           <div className="flex items-center gap-2 md:hidden">
-            <button
-              type="button"
-              onClick={() => setFiltersOpen((v) => !v)}
-              aria-expanded={filtersOpen}
-              className="inline-flex items-center gap-1.5 min-h-9 px-3 rounded-lg
-                bg-gray-100 dark:bg-gray-800 text-xs font-medium
-                text-gray-600 dark:text-gray-300 active:bg-gray-200 dark:active:bg-gray-700"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              筛选
-              {activeFilterCount > 0 && (
-                <span className="min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white text-[10px]
-                  leading-4 text-center font-semibold">
-                  {activeFilterCount}
-                </span>
-              )}
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
-            </button>
+            <FilterToggle
+              open={filtersOpen}
+              count={activeFilterCount}
+              onToggle={() => setFiltersOpen((v) => !v)}
+            />
             {activeFilterCount > 0 && (
               <button
                 type="button"
