@@ -1202,13 +1202,30 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {visible.map((p) => (
             <div key={p.name}
-              className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
+              className="relative bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
               {/* 卡片主体 */}
               <div className="p-5 flex-1">
                 <div className="flex items-start justify-between gap-3 mb-2">
                   <div className="min-w-0 flex-1">
                     <h3 className="font-semibold text-gray-900 dark:text-white">
-                      <MarqueeText text={p.display_name || p.name} />
+                      {/* 有插件主页的整卡可点（拉伸链接：标题是真实 <a>，其 ::after
+                          覆盖整卡），没有的就不做成链接、点了没反应 —— 与账户卡片同一套
+                          写法，保留键盘可达与中键新标签页打开。
+                          卡片上其余交互元素（Button / IconBtn / 开关都自带 relative）
+                          会盖在这层之上，不受影响 */}
+                      {p.has_ui ? (
+                        <Link
+                          to={`${pluginPageBase ?? '/account/plugin'}/${p.name}/page`}
+                          className="rounded hover:text-primary-600 dark:hover:text-primary-400
+                                     transition-colors focus:outline-none focus-visible:ring-2
+                                     focus-visible:ring-primary-500 focus-visible:ring-offset-2
+                                     dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
+                        >
+                          <MarqueeText text={p.display_name || p.name} />
+                        </Link>
+                      ) : (
+                        <MarqueeText text={p.display_name || p.name} />
+                      )}
                     </h3>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="text-xs font-mono text-gray-400 dark:text-gray-500">v{p.version}</span>
@@ -1238,7 +1255,7 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                     <button
                       title={`初始化失败：${p.last_error}\n点击查看插件日志`}
                       onClick={() => { setLogHint(p.last_error || ''); setLogOpen(true); }}
-                      className="inline-flex items-center rounded-full px-1.5 py-0 text-[10px] font-medium
+                      className="relative z-10 inline-flex items-center rounded-full px-1.5 py-0 text-[10px] font-medium
                                  bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400
                                  hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors">
                       初始化失败
@@ -1291,11 +1308,8 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                   <IconBtn icon={<RefreshCw className="w-3.5 h-3.5" />} label="重载"
                     loading={processing === `reload-${p.name}`} disabled={processing === `reload-${p.name}`}
                     onClick={() => act(`reload-${p.name}`, () => reloadAccountPlugin(acc.id, p.name), '已重载')} />
-                  {p.has_ui && (
-                    <Link to={`${pluginPageBase ?? '/account/plugin'}/${p.name}/page`}>
-                      <IconBtn icon={<ExternalLink className="w-3.5 h-3.5" />} label="插件主页" />
-                    </Link>
-                  )}
+                  {/* 「插件主页」入口已提升为整卡可点（见卡片标题处的拉伸链接），
+                      这里不再重复放按钮 */}
                   <IconBtn icon={<BookOpenIcon />} label="文档" onClick={() => openDrawer(p.name, 'readme')} />
                   <IconBtn icon={<Trash2 className="w-3.5 h-3.5" />} label="卸载" onClick={() => setUninstallTarget(p)} />
                 </div>
