@@ -186,15 +186,15 @@ export function LogsPage() {
   const logActions = (
     <>
       <Button variant="ghost" size="sm" icon={<RefreshCw />}
-        title="刷新" aria-label="刷新" onClick={refresh}>
+        tooltip="刷新" aria-label="刷新" onClick={refresh}>
         <span className="hidden md:inline">刷新</span>
       </Button>
       <Button variant="ghost" size="sm" icon={<Package />}
-        title="安装包" aria-label="安装包" onClick={() => setPipOpen(true)}>
+        tooltip="安装包" aria-label="安装包" onClick={() => setPipOpen(true)}>
         <span className="hidden md:inline">安装包</span>
       </Button>
       <Button variant="ghost" size="sm" icon={<Download />}
-        title="导出" aria-label="导出" onClick={handleExport}>
+        tooltip="导出" aria-label="导出" onClick={handleExport}>
         <span className="hidden md:inline">导出</span>
       </Button>
     </>
