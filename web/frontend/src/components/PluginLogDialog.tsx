@@ -53,7 +53,7 @@ export function PluginLogDialog({ open, title, hint, onClose }: Props) {
     <div className="fixed inset-0 z-[70] flex items-center justify-center">
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col animate-slide-in-up">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center gap-2 min-w-0">
             <ScrollText className="w-4 h-4 text-gray-500 shrink-0" />
             <h3 className="font-semibold text-gray-900 dark:text-white truncate">
@@ -75,29 +75,36 @@ export function PluginLogDialog({ open, title, hint, onClose }: Props) {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
           {hint && (
             <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">{hint}</p>
           )}
           {loading && entries.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-8">加载中…</p>
+            <p className="text-sm text-gray-400 text-center py-6 sm:py-8">加载中…</p>
           ) : entries.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-8">暂无插件日志</p>
+            <p className="text-sm text-gray-400 text-center py-6 sm:py-8">暂无插件日志</p>
           ) : (
             <div className="space-y-1 font-mono text-xs">
+              {/* 四列（时间 / 级别 / 来源 / 消息）横排在窄屏放不下：光是三个固定列
+                  就有 300px 上下，消息完全分不到宽度。改为 flex-wrap + 消息独占整行，
+                  宽屏再回到同排（sm:w-auto sm:flex-1） */}
               {entries.map((e) => (
-                <div key={e.seq_id} className="flex gap-3 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                <div key={e.seq_id}
+                  className="flex flex-wrap gap-x-2 sm:gap-x-3 gap-y-0.5 py-1.5 sm:py-0.5
+                             hover:bg-gray-50 dark:hover:bg-gray-700/40">
                   <span className="text-gray-400 shrink-0">
                     {new Date(e.timestamp * 1000).toLocaleTimeString()}
                   </span>
                   <span className={`w-16 shrink-0 ${levelColors[e.level] || 'text-gray-500'}`}>
                     {e.level}
                   </span>
-                  <span className="text-gray-500 dark:text-gray-400 shrink-0 max-w-[10rem] truncate"
+                  <span className="text-gray-500 dark:text-gray-400 shrink-0
+                                   max-w-[7rem] sm:max-w-[10rem] truncate"
                     title={e.source || ''}>
                     {e.source || '—'}
                   </span>
-                  <span className="text-gray-700 dark:text-gray-200 break-all whitespace-pre-wrap">
+                  <span className="w-full sm:w-auto sm:flex-1 text-gray-700 dark:text-gray-200
+                                   break-all whitespace-pre-wrap">
                     {e.message}
                   </span>
                 </div>
@@ -106,7 +113,7 @@ export function PluginLogDialog({ open, title, hint, onClose }: Props) {
           )}
         </div>
 
-        <div className="flex justify-end px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-200 dark:border-gray-700">
           <button onClick={onClose}
             className="px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium transition-colors">
             关闭
