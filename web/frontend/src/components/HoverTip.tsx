@@ -65,8 +65,15 @@ export function HoverTip({ text }: { text: string }) {
       role="tooltip"
       // 用内联 transform 覆盖 Tailwind 的 -translate-x-1/2，把夹取量叠上去
       style={{ transform: `translateX(calc(-50% + ${shift}px))` }}
-      className="pointer-events-none absolute -top-9 left-1/2 z-50
-                 whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
+      // bottom-full + mb-2 —— 贴在宿主正上方，偏移量不写死。
+      // 原先用 -top-9（固定 36px），一旦文字换行、气泡变高就会压到宿主上。
+      //
+      // w-max + max-w —— 短提示按内容宽度一行放下；长提示被 max-w 卡住后**换行**。
+      // 单靠 whitespace-nowrap 时，比屏幕还宽的提示无论怎么夹取都会有一端越界
+      // （夹住左边右端就出去），窄机型上尤其明显。
+      className="pointer-events-none absolute bottom-full mb-2 left-1/2 z-50
+                 w-max max-w-[calc(100vw-1rem)] text-center
+                 px-2 py-1 rounded-md text-[11px] font-medium
                  bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
                  opacity-0 group-hover:opacity-100 transition-opacity duration-100"
     >
