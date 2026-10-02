@@ -7,6 +7,7 @@ import {
 } from '../api/client';
 import type { LibraryPlugin, AccountSummary, BulkGroup } from '../api/types';
 import { Button } from '../components/Button';
+import { HoverTip } from '../components/HoverTip';
 import { SearchInput, FilterChips } from '../components/ListControls';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { UpdateDialog } from '../components/UpdateDialog';
@@ -36,13 +37,7 @@ function IconBtn({ icon, label, onClick, loading, disabled }: {
       <span className="h-3.5 w-3.5 [&_svg]:h-full [&_svg]:w-full shrink-0">
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
       </span>
-      <span role="tooltip"
-        className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
-                   whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
-                   bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                   opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-        {label}
-      </span>
+      <HoverTip text={label} />
     </button>
   );
 }
@@ -298,12 +293,12 @@ export function PluginLibraryPage() {
             故不会多出一段空隙），5 个操作仍排得下一行；sm 起恢复文字 */}
         <div className="flex flex-wrap gap-1.5 sm:gap-2">
           <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />}
-            title="刷新" aria-label="刷新"
+            tooltip="刷新" aria-label="刷新"
             onClick={async () => { await refreshPlugins(); load(); showToast('success', '已刷新', ''); }}>
             <span className="hidden sm:inline">刷新</span>
           </Button>
           <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />}
-            title="推送全部到账户" aria-label="推送全部到账户"
+            tooltip="推送全部到账户" aria-label="推送全部到账户"
             loading={processing === '__push_all__'} disabled={!!processing}
             onClick={() => askBulk({
               key: '__push_all__',
@@ -317,7 +312,7 @@ export function PluginLibraryPage() {
             <span className="hidden sm:inline">推送全部到账户</span>
           </Button>
           <Button variant="secondary" size="sm" icon={<Sparkles className="w-4 h-4" />}
-            title="应用默认插件" aria-label="应用默认插件"
+            tooltip="应用默认插件" aria-label="应用默认插件"
             loading={processing === '__apply_defaults__'} disabled={!!processing}
             onClick={() => askBulk({
               key: '__apply_defaults__',
@@ -331,7 +326,7 @@ export function PluginLibraryPage() {
             <span className="hidden sm:inline">应用默认插件</span>
           </Button>
           <Button variant="ghost" size="sm" icon={<ScrollText className="w-4 h-4" />}
-            title="插件日志" aria-label="插件日志"
+            tooltip="插件日志" aria-label="插件日志"
             onClick={() => { setLogHint(''); setLogOpen(true); }}>
             <span className="hidden sm:inline">插件日志</span>
           </Button>

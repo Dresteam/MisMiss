@@ -29,6 +29,7 @@ import type {
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
 import { Switch } from '../components/Switch';
+import { HoverTip } from '../components/HoverTip';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -906,13 +907,13 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
                     disabled={m.index !== pointer || processing === m.message_id}
                     onClick={() => act(m.message_id, () => sendAccountTimerNow(acc.id, m.message_id), '已发送')}>
                     <Send className="w-4 h-4" />
-                    <TooltipLabel text="立即发送（仅即将执行的消息）" />
+                    <HoverTip text="立即发送（仅即将执行的消息）" />
                   </button>
                   <button className="relative group p-1.5 rounded-lg hover:bg-amber-100 dark:hover:bg-amber-900/30 text-amber-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     disabled={m.index !== pointer || processing === m.message_id}
                     onClick={() => act(m.message_id, () => skipAccountTimer(acc.id, m.message_id), '已跳过')}>
                     <SkipForward className="w-4 h-4" />
-                    <TooltipLabel text="跳过当前待执行消息（指针后移）" />
+                    <HoverTip text="跳过当前待执行消息（指针后移）" />
                   </button>
                   <button className="relative group p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     disabled={locked}
@@ -924,7 +925,7 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
                     disabled={locked}
                     onClick={() => setDeleteTarget(m)}>
                     <Trash2 className="w-4 h-4" />
-                    <TooltipLabel text={locked ? '插件消息由插件托管，不可删除' : '删除'} />
+                    <HoverTip text={locked ? '插件消息由插件托管，不可删除' : '删除'} />
                   </button>
                 </div>
               </div>
@@ -974,19 +975,6 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
         onCancel={() => setDeleteTarget(null)}
       />
     </div>
-  );
-}
-
-/** 悬浮提示标签(v1.0.1 样式) */
-function TooltipLabel({ text }: { text: string }) {
-  return (
-    <span role="tooltip"
-      className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
-                 whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
-                 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-      {text}
-    </span>
   );
 }
 
@@ -1411,13 +1399,7 @@ function IconBtn({ icon, label, onClick, loading, disabled }: {
       <span className="h-3.5 w-3.5 [&_svg]:h-full [&_svg]:w-full shrink-0">
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
       </span>
-      <span role="tooltip"
-        className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
-                   whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
-                   bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                   opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-        {label}
-      </span>
+      <HoverTip text={label} />
     </button>
   );
 }

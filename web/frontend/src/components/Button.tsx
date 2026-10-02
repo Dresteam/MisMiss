@@ -91,7 +91,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ) : icon ? (
           <span className={`${iconSizes[size]} shrink-0`}>{icon}</span>
         ) : null}
-        {children && <span>{children}</span>}
+        {/* 直接渲染 children，**不要**再包一层 <span>。
+            调用方常写成「窄屏只留图标」：<span className="hidden sm:inline">刷新</span>。
+            多包的那层没有 hidden，于是 display:none 的孩子虽然不可见，外层仍是
+            一个空 flex item —— `gap-1.5` 照样在它与图标之间生效，图标被挤得偏离中心。
+            （Button 自身带 relative group，HoverTip 依赖这一点。） */}
+        {children}
         {tooltip && !isDisabled && <HoverTip text={tooltip} />}
       </button>
     );

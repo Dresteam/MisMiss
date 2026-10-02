@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react';
 import { Loader2 } from 'lucide-react';
+import { HoverTip } from './HoverTip';
 
 interface Props {
   checked: boolean;
@@ -66,15 +67,7 @@ export function Switch({
                         ${checked ? 'translate-x-6' : 'translate-x-1'}`}>
         {loading && <Loader2 className="h-2.5 w-2.5 animate-spin text-primary-500" />}
       </span>
-      {hint && (
-        <span role="tooltip"
-          className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
-                     whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
-                     bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                     opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-          {hint}
-        </span>
-      )}
+      {hint && <HoverTip text={hint} />}
     </button>
   );
 }
