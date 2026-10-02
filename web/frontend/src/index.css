@@ -19,6 +19,16 @@
     box-sizing: border-box;
   }
 
+  /* 常驻预留纵向滚动条的位置。
+     自定义滚动条宽 6px 且**占布局宽度**，于是内容高的页面（出现纵向滚动条）
+     可用宽度比内容矮的少 6px —— 账户详情页切 Tab 时高度变化，均分宽度的
+     Tab 栏就跟着缩一下，看着就是在「抖动」。
+     预留之后有没有滚动条宽度都一样。
+     不支持的浏览器会忽略这条，退回原行为，不会更糟。 */
+  html {
+    scrollbar-gutter: stable;
+  }
+
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
       'Helvetica Neue', Arial, sans-serif;
