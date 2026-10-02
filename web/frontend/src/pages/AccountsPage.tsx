@@ -417,21 +417,21 @@ export function AccountsPage() {
                 { id: 'normal', label: '正常', count: accounts.length - expiredCount },
                 { id: 'expired', label: '已过期', count: expiredCount },
               ] as const}
-              value={statusFilter} onChange={setStatusFilter} />
+              value={statusFilter} onChange={setStatusFilter} block />
             <FilterChips
               options={[
                 { id: 'all', label: '全部 Bot' },
                 { id: 'public', label: '公共', count: publicCount },
                 { id: 'private', label: '私有', count: accounts.length - publicCount },
               ] as const}
-              value={modeFilter} onChange={setModeFilter} />
+              value={modeFilter} onChange={setModeFilter} block />
             <FilterChips
               options={[
                 { id: 'all', label: '全部开播' },
                 { id: 'live', label: '已开播', count: liveCount },
                 { id: 'offline', label: '未开播', count: accounts.length - liveCount },
               ] as const}
-              value={liveFilter} onChange={setLiveFilter} />
+              value={liveFilter} onChange={setLiveFilter} block />
             <FilterChips
               options={[
                 { id: 'all', label: '全部状态' },
@@ -439,7 +439,7 @@ export function AccountsPage() {
                 { id: 'notready', label: '未就绪', count: botNotReadyCount },
                 { id: 'off', label: '已停用', count: botOffCount },
               ] as const}
-              value={botFilter} onChange={setBotFilter} />
+              value={botFilter} onChange={setBotFilter} block />
           </div>
         </div>
       )}
