@@ -3,11 +3,11 @@ import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import Convert from 'ansi-to-html';
 import {
   Terminal, Download, X, ArrowDown, Search, RefreshCw, Package, Loader2,
-  SlidersHorizontal,
 } from 'lucide-react';
 import { useLogStream, type LogEntry } from '../hooks/useLogStream';
 import { Button } from '../components/Button';
 import { AccountFilter } from '../components/AccountFilter';
+import { FilterToggle } from '../components/ListControls';
 import { fetchAccounts } from '../api/client';
 import type { AccountSummary } from '../api/types';
 import { showToast } from '../hooks/useToast';
@@ -36,7 +36,7 @@ export function LogsPage() {
   // 账户筛选可多选：空数组 = 不过滤；含 '' 表示只看面板级；其余为账户名
   const [filterAccounts, setFilterAccounts] = useState<string[]>([]);
   const [accountOptions, setAccountOptions] = useState<AccountSummary[]>([]);
-  // 窄屏下筛选区默认折叠（sm 起常驻展开，由 CSS 控制）
+  // 窄屏下筛选区默认折叠（md 起常驻展开，由 CSS 控制）—— 断点与账户总览一致
   const [filtersOpen, setFiltersOpen] = useState(false);
   const activeFilterCount = filterLevels.size + filterAccounts.length;
 
@@ -175,26 +175,28 @@ export function LogsPage() {
         </div>
         {/* 窄屏收起筛选：日志页的主角是日志本身，6 个级别 + 账户 + 3 个操作
             能占掉三行。折叠后默认只留搜索行，点「筛选」展开。 */}
-        <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex
-                         flex-wrap items-center gap-1 w-full sm:w-auto`}>
-          {/* 级别药丸独占一行并横向滚动，避免窄屏折成两行且不挤压其它控件 */}
-          <div className="flex items-center gap-1 overflow-x-auto max-w-full sm:max-w-none
-                          shrink-0 pb-0.5 sm:pb-0">
+        <div className={`${filtersOpen ? 'flex' : 'hidden'} md:flex
+                         flex-wrap items-center gap-1 w-full md:w-auto`}>
+          {/* 级别药丸：容器样式与账户总览的筛选胶囊组对齐（浅底圆角 + 内边距）。
+              窄屏独占一行并横向滚动，避免折成两行且不挤压其它控件 */}
+          <div className="flex items-center gap-1 overflow-x-auto max-w-full md:max-w-none
+                          shrink-0 p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
             {levels.map((lv) => {
               const active = filterLevels.has(lv);
               return (
                 <button key={lv} onClick={() => toggleLevel(lv)}
-                  className={`px-2 py-1 text-[11px] font-medium rounded transition-colors shrink-0
+                  className={`px-2 py-1 text-xs font-medium rounded-md transition-colors shrink-0
                     ${active
-                      ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white'
-                      : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                   {lv}
                 </button>
               );
             })}
             {filterLevels.size > 0 && (
               <button onClick={() => setFilterLevels(new Set())}
-                className="px-2 py-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors shrink-0">清除</button>
+                className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-red-500
+                           transition-colors shrink-0">清除</button>
             )}
           </div>
           <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
@@ -207,15 +209,15 @@ export function LogsPage() {
           {/* 次要操作窄屏只留图标（display:none 的子节点不占 flex 间距） */}
           <Button variant="ghost" size="sm" icon={<RefreshCw />}
             title="刷新" aria-label="刷新" onClick={refresh}>
-            <span className="hidden sm:inline">刷新</span>
+            <span className="hidden md:inline">刷新</span>
           </Button>
           <Button variant="ghost" size="sm" icon={<Package />}
             title="安装包" aria-label="安装包" onClick={() => setPipOpen(true)}>
-            <span className="hidden sm:inline">安装包</span>
+            <span className="hidden md:inline">安装包</span>
           </Button>
           <Button variant="ghost" size="sm" icon={<Download />}
             title="导出" aria-label="导出" onClick={handleExport}>
-            <span className="hidden sm:inline">导出</span>
+            <span className="hidden md:inline">导出</span>
           </Button>
         </div>
       </div>
@@ -235,20 +237,12 @@ export function LogsPage() {
             <X className="w-3 h-3" />
           </button>
         )}
-        <button onClick={() => setFiltersOpen((v) => !v)}
-          aria-expanded={filtersOpen}
-          className={`sm:hidden shrink-0 flex items-center gap-1 h-8 px-2.5 rounded-md text-xs
-                      border transition-colors
-            ${filtersOpen || activeFilterCount > 0
-              ? 'border-primary-400 dark:border-primary-600 text-primary-600 dark:text-primary-400'
-              : 'border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400'}`}>
-          <SlidersHorizontal className="w-3.5 h-3.5" />
-          筛选
-          {activeFilterCount > 0 && (
-            <span className="min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white
-                             text-[10px] leading-4 text-center">{activeFilterCount}</span>
-          )}
-        </button>
+        {/* 与账户总览共用同一组件，窄屏观感一致（此前这里是描边式、断点 sm） */}
+        <FilterToggle
+          open={filtersOpen}
+          count={activeFilterCount}
+          onToggle={() => setFiltersOpen((v) => !v)}
+        />
       </div>
 
       {/* Log area */}
