@@ -32,15 +32,19 @@ const levelColors: Record<string, string> = {
 const levels = ['DEBUG', 'INFO', 'SUCCESS', 'WARNING', 'ERROR', 'CRITICAL'];
 
 /**
- * 窄屏用的三字母缩写 —— 六个全称在手机上要占两行还挤。
+ * 窄屏下**仅对过长的级别**用缩写；短的（INFO / ERROR / DEBUG）保持原样 ——
+ * 它们本来就不占地方，缩写反而平添认知成本。
  *
- * 取的是各自的通用缩写而非机械截前三位：WAR（前三位）会被读成英文单词
- * 「战争」，DBG 也比 DEB 更常见。过滤值仍是全称（`filterLevels` 存的是
- * `levels` 里的原值），缩写只作用于显示。
+ * 阈值取 7 个字符：DEBUG/INFO/ERROR 是 4~5 字符，SUCCESS/WARNING/CRITICAL
+ * 是 7~8 字符，正好卡在「一行放得下 / 放不下」的分界上。
+ *
+ * 缩写取通用写法而非机械截前三位：WARNING 截前三位会变成 WAR（英文「战争」）。
+ * 过滤值仍是全称（`filterLevels` 存的是 `levels` 里的原值），缩写只影响显示。
  */
 const levelShort: Record<string, string> = {
-  DEBUG: 'DBG', INFO: 'INF', SUCCESS: 'SUC',
-  WARNING: 'WRN', ERROR: 'ERR', CRITICAL: 'CRT',
+  SUCCESS: 'SUC',
+  WARNING: 'WARN',
+  CRITICAL: 'CRT',
 };
 
 export function LogsPage() {
@@ -254,10 +258,17 @@ export function LogsPage() {
                   ${active
                     ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
                     : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
-                {/* 窄屏显示缩写、md 起显示全称。两份都渲染、由 CSS 决定显示哪份 ——
-                    比用 matchMedia 监听宽度简单，也不会有首帧闪烁 */}
-                <span className="md:hidden">{levelShort[lv] ?? lv}</span>
-                <span className="hidden md:inline">{lv}</span>
+                {/* 只有过长的级别才双份渲染（窄屏缩写 / md 起全称），由 CSS 决定
+                    显示哪份 —— 比用 matchMedia 监听宽度简单，也没有首帧闪烁。
+                    短的那些直接输出，不多塞一个节点。 */}
+                {levelShort[lv] ? (
+                  <>
+                    <span className="md:hidden">{levelShort[lv]}</span>
+                    <span className="hidden md:inline">{lv}</span>
+                  </>
+                ) : (
+                  lv
+                )}
               </button>
             );
           })}
