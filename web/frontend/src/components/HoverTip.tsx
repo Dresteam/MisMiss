@@ -23,20 +23,40 @@ export function HoverTip({ text }: { text: string }) {
 
   const clamp = useCallback(() => {
     const el = ref.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (!rect.width) return; // 尚未布局
+    const host = el?.parentElement; // 宿主按钮，即气泡定位的基准
+    if (!el || !host) return;
+
+    // ⚠️ 不能量气泡自己的 getBoundingClientRect —— 它返回的是**已应用 transform
+    // 之后**的盒子。那样再量一次会算出「已经修正过」的位置、把偏移撤销掉，
+    // 气泡就在居中与夹取之间来回横跳。
+    // 改为量宿主（不受 transform 影响）+ 气泡自身宽度（offsetWidth 同样不受影响），
+    // 反推它在未变换时的左边缘。
+    const width = el.offsetWidth;
+    if (!width) return; // 尚未布局
     const pad = 8; // 与视口留一点缝，贴着边不好看
+    const hostRect = host.getBoundingClientRect();
+    const left = hostRect.left + hostRect.width / 2 - width / 2;
+
     let dx = 0;
-    if (rect.left < pad) dx = pad - rect.left;
-    else if (rect.right > window.innerWidth - pad) dx = window.innerWidth - pad - rect.right;
+    if (left < pad) dx = pad - left;
+    else if (left + width > window.innerWidth - pad) dx = window.innerWidth - pad - (left + width);
     setShift(dx);
   }, []);
 
   useLayoutEffect(() => {
     clamp();
+    // 挂载时若宿主尚未完成布局（字体未就绪、父容器宽度未定）宽度会量到 0 而被跳过，
+    // 所以悬停（即将显示）前再算一次；resize 同样要重算。
+    //
+    // 重算之所以安全，是因为上一版把「量气泡自己」改成了「量宿主 + 气泡宽度」——
+    // 结果与当前偏移无关，重复调用是幂等的，不会在居中与夹取之间来回跳。
+    const host = ref.current?.parentElement;
+    host?.addEventListener('mouseenter', clamp);
     window.addEventListener('resize', clamp);
-    return () => window.removeEventListener('resize', clamp);
+    return () => {
+      host?.removeEventListener('mouseenter', clamp);
+      window.removeEventListener('resize', clamp);
+    };
   }, [clamp, text]);
 
   return (
