@@ -1,7 +1,16 @@
+import { Loader2 } from 'lucide-react';
+
 interface Props {
   checked: boolean;
   onChange: (next: boolean) => void;
   disabled?: boolean;
+  /**
+   * 保存中。转圈显示在**旋钮内部**，并自动禁用避免连点。
+   *
+   * 调用方不要把 spinner 放在开关外面 —— 飘在旁边的转圈既不归属这个控件，
+   * 也会把标签与开关的间距撑开、保存前后位置跳动。
+   */
+  loading?: boolean;
   /** 悬浮提示；开关本身没有文字，建议传 */
   title?: string;
   /** 无障碍名称（读屏用），通常与旁边的说明文字一致 */
@@ -21,24 +30,28 @@ interface Props {
  * 所以周围排版一个像素都不会动。
  */
 export function Switch({
-  checked, onChange, disabled = false, title, label, className = '',
+  checked, onChange, disabled = false, loading = false, title, label, className = '',
 }: Props) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-busy={loading}
       aria-label={label}
       title={title}
-      disabled={disabled}
+      disabled={disabled || loading}
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full
                   transition-colors disabled:opacity-50 disabled:cursor-not-allowed
                   after:absolute after:-inset-x-2 after:-inset-y-3 after:content-['']
                   ${checked ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'}
                   ${className}`}>
-      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform
-                        ${checked ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
+      <span className={`inline-flex items-center justify-center h-3.5 w-3.5 rounded-full
+                        bg-white shadow-sm transition-transform
+                        ${checked ? 'translate-x-[18px]' : 'translate-x-[3px]'}`}>
+        {loading && <Loader2 className="h-2.5 w-2.5 animate-spin text-primary-600" />}
+      </span>
     </button>
   );
 }

@@ -1491,16 +1491,33 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // 父组件刷新账户摘要后同步（如切回本 Tab、面板重新拉取）
-  useEffect(() => { setAutoEnable(acc.auto_enable_on_install); }, [acc.auto_enable_on_install]);
+  /**
+   * 刚写入、但父组件的 acc 还没刷新到的值；null 表示没有未决改动。
+   *
+   * 父组件会（按需或定期）重新拉账户摘要。若在保存在途时拿**旧值**把乐观更新
+   * 顶回去，开关就会「开 → 关 → 开」地抽搐 —— 线上就是这么抖的。
+   */
+  const pendingAutoEnable = useRef<boolean | null>(null);
+
+  // 父组件刷新账户摘要后同步（如切回本 Tab、面板重新拉取）。
+  // 有未决写入时先不同步：等父组件真的拉到我们刚写的那个值，再恢复正常同步。
+  useEffect(() => {
+    if (pendingAutoEnable.current === null) {
+      setAutoEnable(acc.auto_enable_on_install);
+    } else if (acc.auto_enable_on_install === pendingAutoEnable.current) {
+      pendingAutoEnable.current = null;
+    }
+  }, [acc.auto_enable_on_install]);
 
   const toggleAutoEnable = async (next: boolean) => {
+    pendingAutoEnable.current = next;
     setSavingPref(true);
     setAutoEnable(next); // 乐观更新，失败回滚
     try {
       await updateAccountPreferences(acc.id, next);
       showToast('success', next ? '安装插件后将自动启用' : '安装插件后将保持停用', '');
     } catch (e: any) {
+      pendingAutoEnable.current = null;
       setAutoEnable(!next);
       showToast('error', '设置失败', e.message);
     } finally { setSavingPref(false); }
@@ -1527,11 +1544,12 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
             <span className="text-sm text-gray-600 dark:text-gray-300 select-none">
               安装后自动启用
             </span>
-            {savingPref && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+            {/* 转圈由 Switch 内部渲染（旋钮里）—— 放在外面会飘在标签与开关之间，
+                保存前后还把间距撑得一跳一跳 */}
             <Switch
               checked={autoEnable}
               onChange={toggleAutoEnable}
-              disabled={savingPref}
+              loading={savingPref}
               label="安装后自动启用"
               title="开启后，从插件库安装插件会立即启用它；默认关闭（安装后保持停用）。点击即保存"
             />
