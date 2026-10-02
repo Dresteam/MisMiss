@@ -1810,17 +1810,22 @@ export function AccountDetailPage() {
         </div>
       </div>
 
-      {/* Tabs(移动端均分,无横向滚动条) */}
+      {/* Tabs(移动端均分,无横向滚动条)
+          六个 Tab 均分窄屏宽度后每个只有 60px 上下，图标+四字标签放不下，
+          标签会在按钮**内部**折成两行 —— 之前看到的「双行」就是这个。
+          移动端隐藏图标把宽度让给文字，六个入口全部保留可见（比横向滚动藏起
+          一部分更适合导航）；标签加 nowrap 兜底，宁可略挤也不折行。 */}
       <div className="flex border-b border-gray-200 dark:border-gray-700">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => switchTab(t.key)}
             className={
-              'flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 px-1 sm:px-4 py-2.5 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors ' +
+              'flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 px-0.5 sm:px-4 py-2.5 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors ' +
               (tab === t.key
                 ? 'border-primary-500 text-primary-600 dark:text-primary-400'
                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300')
             }>
-            {t.icon}{t.label}
+            <span className="hidden sm:flex shrink-0">{t.icon}</span>
+            <span className="whitespace-nowrap">{t.label}</span>
           </button>
         ))}
       </div>
