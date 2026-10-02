@@ -4,6 +4,7 @@ import {
   Plus, Trash2, Bot as BotIcon,
   Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink, CalendarCog,
   CirclePlay, CircleStop, Plug, Unplug, ListOrdered,
+  SlidersHorizontal, ChevronDown, X,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
@@ -89,7 +90,19 @@ export function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'expired'>('all');
   const [modeFilter, setModeFilter] = useState<'all' | 'public' | 'private'>('all');
   const [liveFilter, setLiveFilter] = useState<'all' | 'live' | 'offline'>('all');
+  // Bot 状态分三态而非两态：「已启用」用卡片徽标的判定（enabled && available），
+  // 这样筛选结果与徽标永远一致；「已启用但不可用」单独成一档 —— 正是平台风控
+  // 期间账户起不来时的样子，与用户主动停用是两回事，混在一起会误导排查。
+  const [botFilter, setBotFilter] = useState<'all' | 'ready' | 'notready' | 'off'>('all');
   const [page, setPage] = useState(1);
+  // 移动端默认折叠筛选胶囊：四组共 13 个，展开会占满整屏；桌面端不受影响
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  /** 当前生效的筛选项数量（不含关键字搜索）—— 移动端折叠时用它提示"有筛选在生效" */
+  const activeFilterCount =
+    (statusFilter !== 'all' ? 1 : 0) +
+    (modeFilter !== 'all' ? 1 : 0) +
+    (liveFilter !== 'all' ? 1 : 0) +
+    (botFilter !== 'all' ? 1 : 0);
 
   const load = useCallback(async () => {
     try {
@@ -208,6 +221,9 @@ export function AccountsPage() {
   const expiredCount = accounts.filter((a) => a.expired).length;
   const publicCount = accounts.filter((a) => a.bot_public).length;
   const liveCount = accounts.filter((a) => a.room_streaming).length;
+  const botReadyCount = accounts.filter((a) => a.bot_enabled && a.bot_available).length;
+  const botNotReadyCount = accounts.filter((a) => a.bot_enabled && !a.bot_available).length;
+  const botOffCount = accounts.filter((a) => !a.bot_enabled).length;
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -221,6 +237,10 @@ export function AccountsPage() {
       // 与卡片显示一致，不会出现「筛出来却在卡片上看着是开播」的矛盾
       if (liveFilter === 'live' && !a.room_streaming) return false;
       if (liveFilter === 'offline' && a.room_streaming) return false;
+      // Bot 三态：判定口径与卡片上那个 Bot 徽标完全一致
+      if (botFilter === 'ready' && !(a.bot_enabled && a.bot_available)) return false;
+      if (botFilter === 'notready' && !(a.bot_enabled && !a.bot_available)) return false;
+      if (botFilter === 'off' && a.bot_enabled) return false;
       if (!kw) return true;
       // 命中范围：直播间名称 / 登录用户名 / 主播名 / 直播间简介 / 主播简介，
       // 外加账户名、Bot 名与房间 ID —— 管理端多半只记得住其中某一个片段
@@ -230,7 +250,7 @@ export function AccountsPage() {
         a.bot_name, a.room_id == null ? '' : String(a.room_id),
       ].some((s) => (s || '').toLowerCase().includes(kw));
     });
-  }, [accounts, keyword, statusFilter, modeFilter, liveFilter]);
+  }, [accounts, keyword, statusFilter, modeFilter, liveFilter, botFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / ACCOUNTS_PER_PAGE));
   // 筛选后页码可能越界（比如在第 5 页时把条件收窄到只剩 1 页），夹回有效范围
@@ -238,7 +258,7 @@ export function AccountsPage() {
   const paged = filtered.slice((safePage - 1) * ACCOUNTS_PER_PAGE, safePage * ACCOUNTS_PER_PAGE);
 
   // 改筛选条件就回到第一页，否则会停在一个空的页码上
-  useEffect(() => { setPage(1); }, [keyword, statusFilter, modeFilter, liveFilter]);
+  useEffect(() => { setPage(1); }, [keyword, statusFilter, modeFilter, liveFilter, botFilter]);
 
   /**
    * 默认用户名 `user_{账户总数 + 1}`。
@@ -346,7 +366,51 @@ export function AccountsPage() {
         <div className="space-y-2">
           <SearchInput value={keyword} onChange={setKeyword}
             placeholder="搜索账户名 / 用户名 / 直播间 / 房间 ID…" />
-          <div className="flex flex-wrap items-center gap-2">
+
+          {/* 移动端：折叠开关。四组筛选在窄屏上展开会占满整屏，
+              折叠后用一个按钮 + 生效数量提示，桌面端（md 起）始终展开、看不到这个按钮 */}
+          <div className="flex items-center gap-2 md:hidden">
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              aria-expanded={filtersOpen}
+              className="inline-flex items-center gap-1.5 min-h-9 px-3 rounded-lg
+                bg-gray-100 dark:bg-gray-800 text-xs font-medium
+                text-gray-600 dark:text-gray-300 active:bg-gray-200 dark:active:bg-gray-700"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              筛选
+              {activeFilterCount > 0 && (
+                <span className="min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white text-[10px]
+                  leading-4 text-center font-semibold">
+                  {activeFilterCount}
+                </span>
+              )}
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {activeFilterCount > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('all'); setModeFilter('all');
+                  setLiveFilter('all'); setBotFilter('all');
+                }}
+                className="inline-flex items-center gap-1 min-h-9 px-2 text-xs text-gray-500 dark:text-gray-400
+                  active:text-gray-700 dark:active:text-gray-200"
+              >
+                <X className="w-3.5 h-3.5" />
+                清除
+              </button>
+            )}
+          </div>
+
+          {/* 展开时移动端竖排（每组独占一行；组内过宽由 FilterChips 自己的 flex-wrap
+              换行，不会横向溢出），桌面端维持原本的换行排布 */}
+          <div
+            className={`${filtersOpen ? 'flex' : 'hidden'} md:flex
+              flex-col md:flex-row md:flex-wrap items-stretch md:items-center gap-2
+              md:gap-2`}
+          >
             <FilterChips
               options={[
                 { id: 'all', label: '全部', count: accounts.length },
@@ -368,6 +432,14 @@ export function AccountsPage() {
                 { id: 'offline', label: '未开播', count: accounts.length - liveCount },
               ] as const}
               value={liveFilter} onChange={setLiveFilter} />
+            <FilterChips
+              options={[
+                { id: 'all', label: '全部状态' },
+                { id: 'ready', label: '已启用', count: botReadyCount },
+                { id: 'notready', label: '未就绪', count: botNotReadyCount },
+                { id: 'off', label: '已停用', count: botOffCount },
+              ] as const}
+              value={botFilter} onChange={setBotFilter} />
           </div>
         </div>
       )}
