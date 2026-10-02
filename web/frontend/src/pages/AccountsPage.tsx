@@ -24,6 +24,12 @@ import { livePageUrl } from '../utils/live';
 /** 账户列表每页条数 —— 3 列 × 4 行 */
 const ACCOUNTS_PER_PAGE = 12;
 
+/**
+ * 「即将过期」的判定阈值（天）。7 天足够提前续期，又不至于把大半个列表都算进来。
+ * 与「正常」「已过期」互斥：已过期的不再算即将过期。
+ */
+const EXPIRING_SOON_DAYS = 7;
+
 /** 卡片上的运行时快捷开关:Bot 启停 / 直播间连断 */
 type RuntimeKind = 'bot' | 'live';
 
@@ -86,13 +92,14 @@ export function AccountsPage() {
 
   // ---- 列表筛选与分页（全在浏览器里做，后端不动） ----
   const [keyword, setKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'expired'>('all');
-  const [modeFilter, setModeFilter] = useState<'all' | 'public' | 'private'>('all');
-  const [liveFilter, setLiveFilter] = useState<'all' | 'live' | 'offline'>('all');
-  // Bot 状态分三态而非两态：「已启用」用卡片徽标的判定（enabled && available），
-  // 这样筛选结果与徽标永远一致；「已启用但不可用」单独成一档 —— 正是平台风控
-  // 期间账户起不来时的样子，与用户主动停用是两回事，混在一起会误导排查。
-  const [botFilter, setBotFilter] = useState<'all' | 'ready' | 'notready' | 'off'>('all');
+  // 四组筛选一律「全部 + 三个互斥状态」= 4 项，正好排满 4 列网格、不留空格
+  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'expiring' | 'expired'>('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'public' | 'private' | 'broken'>('all');
+  const [liveFilter, setLiveFilter] = useState<'all' | 'live' | 'offline' | 'unbound'>('all');
+  // Bot 状态：「已启用」用卡片徽标的判定（enabled && available），这样筛选结果与
+  // 徽标永远一致；「未就绪」= 已启用但不可用（平台风控期间账户起不来的样子），
+  // 与用户主动「已停用」是两回事，混在一起会误导排查。
+  const [botFilter, setBotFilter] = useState<'all' | 'ready' | 'off' | 'notready'>('all');
   const [page, setPage] = useState(1);
   // 移动端默认折叠筛选胶囊：四组共 13 个，展开会占满整屏；桌面端不受影响
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -217,9 +224,24 @@ export function AccountsPage() {
 
   const accounts = overview?.accounts ?? [];
   const runtimeIt = runtimeTarget ? runtimeIntent(runtimeTarget.acc, runtimeTarget.kind) : null;
+  /** 公有模式但面板没配公共 Cookie —— 该模式下 Bot 根本起不来，属于配置异常 */
+  const publicCookieMissing = !(overview?.public_bot_configured ?? true);
+  const isBrokenMode = (a: AccountSummary) => a.bot_public && publicCookieMissing;
+  const isExpiring = (a: AccountSummary) =>
+    !a.expired && a.days_left != null && a.days_left <= EXPIRING_SOON_DAYS;
+
+  // ⚠️ 状态这组不是三分：**「即将过期」是「正常」的子集** —— 快到期但还没过期的
+  // 账户本来就是正常账户，硬把它从「正常」里摘出去是错的。
+  // 所以正常 + 即将过期 + 已过期 ≠ 总数，这是有意为之，不是计数 bug。
   const expiredCount = accounts.filter((a) => a.expired).length;
+  const expiringCount = accounts.filter(isExpiring).length;
+  const normalCount = accounts.length - expiredCount;
   const publicCount = accounts.filter((a) => a.bot_public).length;
+  const brokenModeCount = accounts.filter(isBrokenMode).length;
+  const privateCount = accounts.length - publicCount;
   const liveCount = accounts.filter((a) => a.room_streaming).length;
+  const unboundCount = accounts.filter((a) => a.room_id == null).length;
+  const offlineCount = accounts.length - liveCount - unboundCount;
   const botReadyCount = accounts.filter((a) => a.bot_enabled && a.bot_available).length;
   const botNotReadyCount = accounts.filter((a) => a.bot_enabled && !a.bot_available).length;
   const botOffCount = accounts.filter((a) => !a.bot_enabled).length;
@@ -227,16 +249,19 @@ export function AccountsPage() {
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return accounts.filter((a) => {
+      // 判定口径与卡片上的徽标一致，不会出现「筛出来却在卡片上看着是另一回事」
+      // 的矛盾。注意状态这组的「正常」**包含**「即将过期」—— 后者只是个提醒性的
+      // 细分，不是与「正常」并列的第三态。
       if (statusFilter === 'normal' && a.expired) return false;
+      if (statusFilter === 'expiring' && !isExpiring(a)) return false;
       if (statusFilter === 'expired' && !a.expired) return false;
       if (modeFilter === 'public' && !a.bot_public) return false;
       if (modeFilter === 'private' && a.bot_public) return false;
-      // 开播状态与卡片上的徽标同源（都取 room_streaming）：
-      // 账户未就绪 / 直播间没 join 时该值为 false，会被归入「未开播」，
-      // 与卡片显示一致，不会出现「筛出来却在卡片上看着是开播」的矛盾
+      if (modeFilter === 'broken' && !isBrokenMode(a)) return false;
+      // 开播：未绑定的账户压根没有直播间，与「已绑定但没开播」是两回事
       if (liveFilter === 'live' && !a.room_streaming) return false;
-      if (liveFilter === 'offline' && a.room_streaming) return false;
-      // Bot 三态：判定口径与卡片上那个 Bot 徽标完全一致
+      if (liveFilter === 'offline' && !(a.room_id != null && !a.room_streaming)) return false;
+      if (liveFilter === 'unbound' && a.room_id != null) return false;
       if (botFilter === 'ready' && !(a.bot_enabled && a.bot_available)) return false;
       if (botFilter === 'notready' && !(a.bot_enabled && !a.bot_available)) return false;
       if (botFilter === 'off' && a.bot_enabled) return false;
@@ -400,30 +425,33 @@ export function AccountsPage() {
             <FilterChips
               options={[
                 { id: 'all', label: '全部', count: accounts.length },
-                { id: 'normal', label: '正常', count: accounts.length - expiredCount },
+                { id: 'normal', label: '正常', count: normalCount },
+                { id: 'expiring', label: '即将过期', count: expiringCount },
                 { id: 'expired', label: '已过期', count: expiredCount },
               ] as const}
               value={statusFilter} onChange={setStatusFilter} block />
             <FilterChips
               options={[
                 { id: 'all', label: '全部 Bot' },
-                { id: 'public', label: '公共', count: publicCount },
-                { id: 'private', label: '私有', count: accounts.length - publicCount },
+                { id: 'public', label: '公有', count: publicCount },
+                { id: 'private', label: '私有', count: privateCount },
+                { id: 'broken', label: '异常', count: brokenModeCount },
               ] as const}
               value={modeFilter} onChange={setModeFilter} block />
             <FilterChips
               options={[
                 { id: 'all', label: '全部开播' },
                 { id: 'live', label: '已开播', count: liveCount },
-                { id: 'offline', label: '未开播', count: accounts.length - liveCount },
+                { id: 'offline', label: '未开播', count: offlineCount },
+                { id: 'unbound', label: '未绑定', count: unboundCount },
               ] as const}
               value={liveFilter} onChange={setLiveFilter} block />
             <FilterChips
               options={[
                 { id: 'all', label: '全部状态' },
                 { id: 'ready', label: '已启用', count: botReadyCount },
-                { id: 'notready', label: '未就绪', count: botNotReadyCount },
                 { id: 'off', label: '已停用', count: botOffCount },
+                { id: 'notready', label: '未就绪', count: botNotReadyCount },
               ] as const}
               value={botFilter} onChange={setBotFilter} block />
           </div>
