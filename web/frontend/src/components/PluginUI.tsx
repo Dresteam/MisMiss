@@ -4,6 +4,7 @@ import {ExternalLink, Loader2, RefreshCw, Trash2, X} from 'lucide-react';
 import {Button} from './Button';
 import {Select} from './Select';
 import {ConfirmDialog} from './ConfirmDialog';
+import {Switch} from './Switch';
 
 // =====================================================================
 // Schema 定义 —— 所有预设类型及其字段
@@ -133,17 +134,11 @@ function renderCell(col: ColumnDef, value: any, row: any, onToggle?: (col: Colum
     case 'switch': {
       const checked = Boolean(val);
       return (
-        <button
-          role="switch" aria-checked={checked}
-          onClick={(e) => { e.stopPropagation(); onToggle?.(col, row, !checked); }}
-          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-1 ${
-            checked ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'
-          }`}
-        >
-          <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-            checked ? 'translate-x-[18px]' : 'translate-x-[3px]'
-          }`} />
-        </button>
+        <Switch
+          checked={checked}
+          // 表格行本身可点，开关必须拦掉冒泡否则会连带触发整行动作
+          onChange={(next, e) => { e.stopPropagation(); onToggle?.(col, row, next); }}
+        />
       );
     }
     // ── number ──
@@ -1012,15 +1007,11 @@ export function PluginUI({ schema, pluginName, apiBase }: Props) {
 
             {/* switch */}
             {f.type === 'switch' && (
-              <button role="switch" aria-checked={!!formValues[f.key]}
-                onClick={() => updateField(f.key, !formValues[f.key])}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ${
-                  formValues[f.key] ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600'
-                }`}>
-                <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                  formValues[f.key] ? 'translate-x-6' : 'translate-x-1'
-                }`} />
-              </button>
+              <Switch
+                checked={!!formValues[f.key]}
+                onChange={(next) => updateField(f.key, next)}
+                label={f.label || f.key}
+              />
             )}
           </div>
         ))}

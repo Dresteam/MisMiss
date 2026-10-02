@@ -1272,30 +1272,17 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
 
               {/* 底部:开关 + 图标按钮组 */}
               <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50 rounded-b-xl">
-                <button
-                  onClick={() => act(p.name, () => p.enabled ? disableAccountPlugin(acc.id, p.name) : enableAccountPlugin(acc.id, p.name),
+                {/* 用共享开关：样式与全站其它开关一致，不再手抄一遍 class */}
+                <Switch
+                  checked={p.enabled}
+                  loading={processing === p.name}
+                  onChange={() => act(p.name, () => p.enabled
+                    ? disableAccountPlugin(acc.id, p.name)
+                    : enableAccountPlugin(acc.id, p.name),
                     p.enabled ? '已禁用' : '已启用')}
-                  disabled={processing === p.name}
-                  className={
-                    'relative group inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 ' +
-                    'focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 ' +
-                    'disabled:cursor-not-allowed disabled:opacity-60 ' +
-                    (p.enabled ? 'bg-primary-600' : 'bg-gray-300 dark:bg-gray-600')
-                  }>
-                  <span className={
-                    'inline-block h-4 w-4 rounded-full bg-white shadow-sm flex items-center justify-center transition-transform duration-200 ' +
-                    (p.enabled ? 'translate-x-6' : 'translate-x-1')
-                  }>
-                    {processing === p.name && <Loader2 className="h-2.5 w-2.5 animate-spin text-primary-500" />}
-                  </span>
-                  <span role="tooltip"
-                    className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
-                               whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
-                               bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                               opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-                    {p.enabled ? '点击禁用' : '点击启用'}
-                  </span>
-                </button>
+                  hint={p.enabled ? '点击禁用' : '点击启用'}
+                  label={`${p.display_name || p.name} 启用`}
+                />
 
                 <div className="flex items-center gap-0.5 lg:gap-1 flex-nowrap">
                   {updateVersion(p) && (

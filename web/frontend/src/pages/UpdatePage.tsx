@@ -535,13 +535,13 @@ export function UpdatePage() {
             <Megaphone className="w-4 h-4" /> 更新提示消息
           </h2>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              启用更新提示{notifySaving && <span className="ml-1 text-gray-400">保存中…</span>}
-            </span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">启用更新提示</span>
+            {/* 保存中用 loading（转圈在旋钮里），与账户页的「安装后自动启用」一致；
+                原先用 disabled，只变淡、看不出在保存 */}
             <Switch
               checked={notifyEnabled}
               onChange={toggleNotify}
-              disabled={notifySaving}
+              loading={notifySaving}
               label="启用更新提示"
               title="点击即时生效，无需再点保存"
             />
