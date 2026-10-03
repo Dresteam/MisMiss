@@ -131,12 +131,21 @@ class HTTPClient:
                 raise err
 
             result: dict[str, Any] = resp.json()
-            # 平台把错误写在 body 里（code != 0）而不是 HTTP 状态码，
-            # 限流也可能这样返回，所以这里也判一次
-            if result.get("code") == 0:
+            # 平台把错误写在 body 里（code != 0）而不是 HTTP 状态码，所以这里也要判。
+            #
+            # ⚠️ 但**不能**把非零业务码一律当成失败：那等于把「平台正常应答但业务
+            # 拒绝」也算进限流计数。给未开播房间发消息返回的「主播休息」就是典型
+            # —— 平台明明好好回复了我们。32 个账户发定时消息，8 次就攒满阈值，
+            # 闸门于是反复进入全局退避，把欢迎消息这类实时消息一并压后几十秒。
+            # （线上就这么发生过：加入事件实时到达，欢迎语却迟迟不发。）
+            #
+            # 只有**确实表明被限流**的才计入失败，其余按成功处理 —— 能拿到规范
+            # 应答本身就说明链路是通的。
+            err = CoreApiException(str(result.get("info", "")))
+            if result.get("code") == 0 or not gate.is_rate_limit_error(err):
                 gate.note_success()
             else:
-                gate.note_failure(CoreApiException(str(result.get("info", ""))))
+                gate.note_failure(err)
             return result
 
         except httpx.TimeoutException:

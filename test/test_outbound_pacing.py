@@ -113,6 +113,44 @@ async def test_consecutive_failure_backoff() -> None:
     check("连续失败达阈值后也退避", g.backoff_remaining > 0)
 
 
+async def test_business_error_does_not_trip_gate() -> None:
+    """200 + 非零业务码（如「主播休息」）**不算**限流失败。
+
+    平台正常应答、只是业务上拒绝（给未开播房间发消息），说明链路是通的。
+    若把它计入连续失败，32 个账户发定时消息 8 次就攒满阈值，闸门会反复进入
+    全局退避 —— 线上表现为「加入事件实时到达，欢迎语却迟迟不发」。
+    """
+    import core.network.client as C
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self) -> dict:
+            return {"code": 500030011, "info": "直播间未开播（主播休息）"}
+
+    class _Client:
+        async def get(self, url, headers=None):  # noqa: ANN001, ANN201
+            return _Resp()
+
+        async def post(self, url, headers=None, content=None):  # noqa: ANN001, ANN201
+            return _Resp()
+
+    original = C._get_shared_client
+    C._get_shared_client = lambda: _Client()  # type: ignore[assignment]
+    gate.reset()
+    gate.configure(0.0)
+    try:
+        for _ in range(50):
+            await C.HTTPClient("").get("https://example.invalid/x")
+    finally:
+        C._get_shared_client = original  # type: ignore[assignment]
+        gate.reset()
+
+    check("业务错误不计入限流失败", gate.backoff_remaining == 0,
+          f"退避剩余 {gate.backoff_remaining:.0f}s")
+
+
 # ------------------------------------------------------------------ #
 # 3. _safe_call：预期错误不触发 Cookie 校验 + 校验节流
 # ------------------------------------------------------------------ #
@@ -294,6 +332,7 @@ async def main() -> None:
     await test_gate_rate_limit()
     await test_global_backoff()
     await test_consecutive_failure_backoff()
+    await test_business_error_does_not_trip_gate()
     await test_safe_call_skips_benign_and_throttles()
     await test_bot_restore_cooldown()
     await test_refresh_cooldown_and_meta_ttl()
