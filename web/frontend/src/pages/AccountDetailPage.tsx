@@ -1211,10 +1211,17 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                                      dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
                         >
                           <MarqueeText text={p.display_name || p.name} />
-                          {/* 有插件主页的才给这个外链图标 —— 卡片刻意不做得「看起来都能点」，
-                              否则用户点没有主页的插件没反应，会以为是坏了 */}
-                          <ExternalLink className="w-3 h-3 shrink-0 text-gray-400 dark:text-gray-500
-                                                    group-hover/link:text-primary-500" />
+                          {/* 「插件主页」这几个字比光一个图标说得清楚：只放图标时，
+                              用户仍不知道点进去是什么。字号与颜色都比插件名轻一档，
+                              读起来是附属标签而不是标题的一部分。
+                              只有 has_ui 的插件才有 —— 卡片刻意不做得「看起来都能点」。 */}
+                          <span className="shrink-0 inline-flex items-center gap-0.5
+                                           text-[11px] font-normal
+                                           text-gray-400 dark:text-gray-500
+                                           group-hover/link:text-primary-500">
+                            插件主页
+                            <ExternalLink className="w-3 h-3" />
+                          </span>
                         </Link>
                       ) : (
                         <MarqueeText text={p.display_name || p.name} />
