@@ -46,6 +46,13 @@ _SCHEMA_VERSION = 1
 # 直播弹幕有长度上限，超出会被平台拒绝，故统一在入库前裁剪
 BROADCAST_MAX_LEN = 80
 
+# 账户端「操作指引」的版本号。
+#
+# **改了指引内容就把这个值加一**（内容在 web/frontend/src/pages/AccountPortalPages.tsx
+# 的 GUIDE_SECTIONS）。账户记录里存的是「已读版本」，与此不等——包括从没读过
+# 的老账户——下次登录就会自动跳进指引。与更新日志同一套思路。
+GUIDE_VERSION = "1"
+
 # 新建账户时预填的默认登录密码。仍是这个密码的账户会被要求登录后立即修改
 # （见 api/routes/auth.py 的登录标记）—— 默认密码人人皆知，留着等于没设防。
 # 前端预填的也是这个值，改动时两处要一起改（components/AccountDialogs.tsx）
@@ -123,8 +130,8 @@ class AccountRecord:
     password_hash: str = ""
     # 最后一次确认已读更新日志的版本；"" = 尚未确认过（升级到本版本后会弹一次）
     seen_changelog_version: str = ""
-    # 是否已看过账户端「操作指引」—— 首次登录会自动跳过去，看过一次就不再跳
-    guide_seen: bool = False
+    # 已读过的操作指引版本号；"" = 没读过。与 GUIDE_VERSION 不等时登录自动跳转
+    guide_seen_version: str = ""
     # 从插件库安装插件后是否自动启用（账户级偏好，默认关闭）
     auto_enable_on_install: bool = False
 
@@ -166,7 +173,7 @@ class AccountRecord:
             "username": self.username,
             "password_hash": self.password_hash,
             "seen_changelog_version": self.seen_changelog_version,
-            "guide_seen": self.guide_seen,
+            "guide_seen_version": self.guide_seen_version,
             "auto_enable_on_install": self.auto_enable_on_install,
         }
 
@@ -186,7 +193,7 @@ class AccountRecord:
             username=str(d.get("username", "")),
             password_hash=str(d.get("password_hash", "")),
             seen_changelog_version=str(d.get("seen_changelog_version", "")),
-            guide_seen=bool(d.get("guide_seen", False)),
+            guide_seen_version=str(d.get("guide_seen_version", "")),
             auto_enable_on_install=bool(d.get("auto_enable_on_install", False)),
         )
 
@@ -492,12 +499,16 @@ class AccountManager:
         _log.info("账户 {} 已确认更新日志 v{}", rec.id, version)
         return rec
 
-    def mark_guide_seen(self, account_id: int) -> AccountRecord:
-        """标记该账户已看过「操作指引」—— 之后登录不再自动跳转。"""
+    def mark_guide_seen(self, account_id: int, version: str) -> AccountRecord:
+        """记录该账户已读的操作指引版本（离开指引页时调用）。
+
+        版本号由调用方取服务端的 :data:`GUIDE_VERSION` 传入，不信任客户端上报。
+        指引内容更新后版本号上调，所有账户（含读过旧版的）下次登录都会再跳一次。
+        """
         rec = self.get_record(account_id)
-        if rec.guide_seen:
+        if rec.guide_seen_version == version:
             return rec
-        rec.guide_seen = True
+        rec.guide_seen_version = version
         rec.updated_at = _now_iso()
         self._save_panel()
         return rec
@@ -553,7 +564,7 @@ class AccountManager:
             "id": rec.id,
             "name": rec.name,
             "username": rec.username,
-            "guide_seen": rec.guide_seen,
+            "guide_seen_version": rec.guide_seen_version,
             "room_id": rec.room_id,
             "bot_mode": rec.bot_mode,
             "expires_at": rec.expires_at,

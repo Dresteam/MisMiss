@@ -207,11 +207,14 @@ def _should_show_guide(role: str, account_id: int | None) -> bool:
     if role != "account" or account_id is None:
         return False
     from api.deps import get_account_manager
+    from core.account.manager import GUIDE_VERSION
     from core.exceptions import CoreAccountNotFoundException
     try:
-        return not get_account_manager().get_record(int(account_id)).guide_seen
+        rec = get_account_manager().get_record(int(account_id))
     except (RuntimeError, CoreAccountNotFoundException, TypeError, ValueError):
         return False
+    # 已读版本与当前不一致（含从没读过的老账户、以及指引改版后）都要跳
+    return rec.guide_seen_version != GUIDE_VERSION
 
 
 def _pending_changelog(role: str, account_id: int | None) -> dict | None:
@@ -388,7 +391,8 @@ async def ack_guide(authorization: str = Header(default="")):
     from api.deps import get_account_manager
     from core.exceptions import CoreAccountNotFoundException
     try:
-        get_account_manager().mark_guide_seen(int(account_id))
+        from core.account.manager import GUIDE_VERSION
+        get_account_manager().mark_guide_seen(int(account_id), GUIDE_VERSION)
     except CoreAccountNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"success": True}
