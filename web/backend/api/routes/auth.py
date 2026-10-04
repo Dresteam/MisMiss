@@ -199,6 +199,21 @@ def token_info(token: str) -> dict | None:
 
 # ---- 更新日志 ----
 
+def _should_show_guide(role: str, account_id: int | None) -> bool:
+    """账户角色、且还没看过「操作指引」→ 登录后自动跳过去。
+
+    与更新日志同样处理：任何异常都回落为「不跳」，失败方向是安全的那一侧。
+    """
+    if role != "account" or account_id is None:
+        return False
+    from api.deps import get_account_manager
+    from core.exceptions import CoreAccountNotFoundException
+    try:
+        return not get_account_manager().get_record(int(account_id)).guide_seen
+    except (RuntimeError, CoreAccountNotFoundException, TypeError, ValueError):
+        return False
+
+
 def _pending_changelog(role: str, account_id: int | None) -> dict | None:
     """账户角色待确认的更新日志；已确认过或管理员返回 None。
 
@@ -275,6 +290,7 @@ async def login(body: dict):
         "role": role,
         "account_id": account_id,
         "must_change_password": must_change_password,
+        "show_guide": _should_show_guide(role, account_id),
         "pending_changelog": _pending_changelog(role, account_id),
     }
 
@@ -338,6 +354,9 @@ async def check_auth(authorization: str = Header(default="")):
         ),
         "role": role,
         "account_id": account_id,
+        # 与 pending_changelog 同理：刷新页面也要能恢复「还没看过指引」的状态，
+        # 否则重新加载后自动跳转就丢了
+        "show_guide": _should_show_guide(role, account_id),
         "pending_changelog": _pending_changelog(role, account_id),
     }
 
@@ -349,6 +368,30 @@ async def skip_first_login():
     auth["first_login"] = False
     _save_auth(auth)
     return {"success": True, "message": "已跳过首次登录引导"}
+
+
+@router.post("/auth/ack-guide")
+async def ack_guide(authorization: str = Header(default="")):
+    """标记当前账户已看过操作指引（离开指引页时调用）。
+
+    ``/api/auth/*`` 不经中间件鉴权，故这里自行校验 token。
+    """
+    token = authorization.removeprefix("Bearer ")
+    info = token_info(token) if token else None
+    if info is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+
+    account_id = info.get("account_id")
+    if info.get("role") != "account" or account_id is None:
+        return {"success": True, "message": "无需确认"}
+
+    from api.deps import get_account_manager
+    from core.exceptions import CoreAccountNotFoundException
+    try:
+        get_account_manager().mark_guide_seen(int(account_id))
+    except CoreAccountNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"success": True}
 
 
 @router.post("/auth/ack-changelog")

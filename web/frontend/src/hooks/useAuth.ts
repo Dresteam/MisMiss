@@ -18,18 +18,22 @@ interface AuthState {
   mustChangePassword: boolean;
   /** 服务器更新后首次登录时非空,关闭弹窗并 ack 后清空 */
   pendingChangelog: PendingChangelog | null;
+  /** 账户角色还没看过「操作指引」—— 登录后自动跳过去，看过一次就不再跳 */
+  showGuide: boolean;
 }
 
 const EMPTY_STATE = {
   token: null, username: null, firstLogin: false,
   role: 'admin' as const, accountId: null, mustChangePassword: false,
-  pendingChangelog: null,
+  pendingChangelog: null, showGuide: false,
 };
 
 interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   changePassword: (current: string, newPwd: string) => Promise<void>;
+  /** 看过指引后清掉标记，避免再点「/」时被重复跳转 */
+  clearShowGuide: () => void;
   loading: boolean;
 }
 
@@ -57,6 +61,7 @@ export function useAuthState(): AuthContextType {
               accountId: d.account_id ?? null,
               mustChangePassword: !!d.must_change_password,
               pendingChangelog: d.pending_changelog ?? null,
+              showGuide: !!d.show_guide,
             }));
           } else {
             localStorage.removeItem('auth_token');
@@ -86,6 +91,7 @@ export function useAuthState(): AuthContextType {
       accountId: data.account_id ?? null,
       mustChangePassword: !!data.must_change_password,
       pendingChangelog: data.pending_changelog ?? null,
+      showGuide: !!data.show_guide,
     });
   };
 
@@ -105,5 +111,7 @@ export function useAuthState(): AuthContextType {
     setState(s => ({ ...s, firstLogin: false }));
   };
 
-  return { ...state, login, logout, changePassword, loading };
+  const clearShowGuide = () => setState((s) => ({ ...s, showGuide: false }));
+
+  return { ...state, login, logout, changePassword, clearShowGuide, loading };
 }
