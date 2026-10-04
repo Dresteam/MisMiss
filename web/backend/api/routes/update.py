@@ -714,7 +714,14 @@ def _spawn_recreate() -> None:
         "sleep 3; cd /app/deploy && docker compose --env-file /app/deploy/.env "
         "-f /app/deploy/docker-compose.yml up -d --force-recreate",
     ]
-    log_path = Path(home) / "logs" / "update-recreate.log"
+    # ⚠️ 日志路径必须用**容器内**的挂载点（_DEPLOY_DIR），不能拼 .env 里的宿主路径。
+    # _deploy_home() 返回的是宿主绝对路径（如 /www/wwwroot/MisMiss），那是给下面
+    # `docker run -v` 挂载用的；它在本容器内**并不存在**，拿它写文件会让
+    # mkdir(parents=True) 试图从根开始创建 /www/... 整条链 —— 应用以 mismiss
+    # （非 root）运行，创建 /www 直接 EACCES，报「Permission denied: '/www'」，
+    # 更新就卡在最后一步派发重建上。
+    # _DEPLOY_DIR 本身就是宿主部署目录的挂载点，写它等于写宿主的 logs/。
+    log_path = _DEPLOY_DIR / "logs" / "update-recreate.log"
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "ab") as log:
