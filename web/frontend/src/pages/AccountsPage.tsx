@@ -345,7 +345,11 @@ export function AccountsPage() {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in max-w-6xl">
+    <div className="space-y-6 animate-fade-in max-w-7xl">
+      {/* 上面用 max-w-7xl 而非 6xl：四组筛选要在桌面端排进同一行，合计宽度已接近
+          1152px，六档只剩二十几像素余量 —— 字体度量稍有出入就会翻到第二行。
+          放到七档留出约 150px，请求才真正被保证（卡片会相应略宽一点） */}
+
       {/* 头部(移动端可换行) */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
