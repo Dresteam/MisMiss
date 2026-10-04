@@ -318,7 +318,13 @@ export function AccountPasswordPage() {
 // 操作指引
 // ================================================================== //
 
-/** 指引条目 —— 页面与文案分开列，改文案不用动结构 */
+/**
+ * 指引条目 —— 页面与文案分开列，改文案不用动结构。
+ *
+ * ⚠️ **改了这里的内容，记得把后端的 `GUIDE_VERSION` 加一**
+ * （`src/core/account/manager.py`）。账户记录里存的是「已读版本」，不升版本的话
+ * 老用户不会再被跳进来。改文案的人多半只翻到这一个文件，所以提醒写在这儿。
+ */
 const GUIDE_SECTIONS: { icon: React.ReactNode; title: string; body: string }[] = [
   { icon: <LayoutDashboard className="w-4 h-4" />, title: '概览',
     body: '一眼看到自己的 Bot、直播间、插件与订阅状态。到期时间也在这里，快到期时卡片上会有提示。' },
@@ -360,16 +366,27 @@ export function AccountGuidePage() {
   }, [auth]);
 
   // 离开本页即视为看过 —— 用户完全可能直接点侧栏走人，
-  // 不能只认「开始使用」那一个按钮，否则每次登录都要被跳一次
+  // 不能只认按钮，否则每次登录都要被跳一次
   useEffect(() => ack, [ack]);
+
+  /** 跳过 / 开始使用 走同一条路：标记已看 + 回主界面。留着从侧栏再进来。 */
+  const skip = () => {
+    ack();
+    navigate('/account/home');
+  };
 
   return (
     <div className="space-y-6 animate-fade-in max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">操作指引</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          这里是你的直播间控制台。下面按侧栏顺序过一遍，看完就可以开始了。
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">操作指引</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            这里是你的直播间控制台。下面按侧栏顺序过一遍，看完就可以开始了。
+          </p>
+        </div>
+        {/* 跳过放标题行而不是只放页尾：一进页面就看得到，不必先滚到底。
+            本页也随时能从侧栏「操作指引」再进来，所以跳过没有任何损失 */}
+        <Button variant="secondary" size="sm" onClick={skip}>跳过</Button>
       </div>
 
       <div className="card">
@@ -391,10 +408,8 @@ export function AccountGuidePage() {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2">
-        {/* 本页随时能从侧栏再进来，所以不强制「读完」 */}
-        <Button variant="secondary" onClick={() => navigate('/account/home')}>稍后再看</Button>
-        <Button variant="primary" onClick={() => { ack(); navigate('/account/home'); }}>开始使用</Button>
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={skip}>开始使用</Button>
       </div>
     </div>
   );
