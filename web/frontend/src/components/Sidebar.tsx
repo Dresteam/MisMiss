@@ -3,20 +3,40 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Puzzle, Server, Settings,
   Moon, Sun, Terminal, ChevronLeft, ChevronRight, LogOut,
-  Download, Radio, Bot, Clock, KeyRound, BookOpen } from 'lucide-react';
+  Download, Radio, Bot, Clock, KeyRound, BookOpen, type LucideIcon } from 'lucide-react';
 import { t } from '../i18n';
 import { useAuth } from '../hooks/useAuth';
-import { HoverTip } from './HoverTip';
 
 interface Props {
   dark: boolean;
   onToggleDark: () => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** 点「重看指引」—— 该入口不跳路由，理由见 NavItem.action */
+  onReplayGuide: () => void;
 }
 
+/**
+ * 导航项。多数项靠 `to` 跳路由；`action` 项**不占路由**，点了就地做一件事。
+ * 「重看指引」是后者：指引现在就是在主页上浮的一层蒙版，没有独立页面可去。
+ */
+export interface NavItem {
+  icon: LucideIcon;
+  label: string;
+  to?: string;
+  end?: boolean;
+  action?: 'replay-guide';
+  /**
+   * 操作指引的「切到这一页」步骤靠它高亮（值要与 GuideOverlay 的 navTarget 对上）。
+   * 只有指引覆盖到的那几页标了 —— 定时消息、修改密码不在指引里，标了也没人用。
+   */
+  guide?: string;
+}
+
+export interface NavGroup { title: string; items: NavItem[] }
+
 // 与移动端菜单相同的分组分类
-const adminNavGroups = [
+const adminNavGroups: NavGroup[] = [
   {
     title: t('sidebar.groupMonitor'),
     items: [
@@ -41,33 +61,33 @@ const adminNavGroups = [
 ];
 
 // 账户持有者:v1.0.1 风格左侧导航(无面板功能)
-const accountNavGroups = [
+const accountNavGroups: NavGroup[] = [
   {
     title: '监控',
     items: [
-      { to: '/account/home', icon: LayoutDashboard, label: '概览', end: true },
+      { to: '/account/home', icon: LayoutDashboard, label: '概览', end: true, guide: 'nav-home' },
     ],
   },
   {
     title: '管理',
     items: [
-      { to: '/account/live', icon: Radio, label: '直播间' , end: false },
-      { to: '/account/bot', icon: Bot, label: 'Bot' , end: false },
+      { to: '/account/live', icon: Radio, label: '直播间' , end: false, guide: 'nav-live' },
+      { to: '/account/bot', icon: Bot, label: 'Bot' , end: false, guide: 'nav-bot' },
       { to: '/account/timer', icon: Clock, label: '定时消息' , end: false },
-      { to: '/account/plugins', icon: Puzzle, label: '插件' , end: false },
-      { to: '/account/library', icon: Puzzle, label: '插件库' , end: false },
+      { to: '/account/plugins', icon: Puzzle, label: '插件' , end: false, guide: 'nav-plugins' },
+      { to: '/account/library', icon: Puzzle, label: '插件库' , end: false, guide: 'nav-library' },
     ],
   },
   {
     title: '系统',
     items: [
       { to: '/account/password', icon: KeyRound, label: '修改密码' , end: false },
-      { to: '/account/guide', icon: BookOpen, label: '操作指引' , end: false },
+      { icon: BookOpen, label: '重看指引', action: 'replay-guide' },
     ],
   },
 ];
 
-export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Props) {
+export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse, onReplayGuide }: Props) {
   const { logout, role } = useAuth();
   const navGroups = role === 'account' ? accountNavGroups : adminNavGroups;
   const [version, setVersion] = useState('');
@@ -136,35 +156,46 @@ export function Sidebar({ dark, onToggleDark, collapsed, onToggleCollapse }: Pro
                 </p>
               )}
               <div className="space-y-1">
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    className={({ isActive }) =>
-                      `relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
-                       transition-all duration-200 group
-                       ${isActive
-                          ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400'
-                          : 'text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 hover:text-surface-900 dark:hover:text-surface-200'
-                       }`
-                    }
-                  >
-                    <item.icon className="w-5 h-5 shrink-0" />
-                    {!collapsed && <span className="truncate">{item.label}</span>}
-                    {collapsed && (
-                      <span
-                        role="tooltip"
-                        className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 z-50
-                                   whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
-                                   bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                                   opacity-0 group-hover:opacity-100 transition-opacity duration-100"
-                      >
-                        {item.label}
-                      </span>
-                    )}
-                  </NavLink>
-                ))}
+                {group.items.map((item) => {
+                  const content = (
+                    <>
+                      <item.icon className="w-5 h-5 shrink-0" />
+                      {!collapsed && <span className="truncate">{item.label}</span>}
+                      {collapsed && (
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 z-50
+                                     whitespace-nowrap px-2 py-1 rounded-md text-[11px] font-medium
+                                     bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
+                                     opacity-0 group-hover:opacity-100 transition-opacity duration-100"
+                        >
+                          {item.label}
+                        </span>
+                      )}
+                    </>
+                  );
+                  // w-full 是给下面那个 <button> 用的：<a> 是块级盒子，宽度本来就撑满，
+                  // 而按钮不写就只裹住文字，点起来比上面几项窄一截
+                  const cls = (isActive: boolean) =>
+                    `relative flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium
+                     transition-all duration-200 group
+                     ${isActive
+                        ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400'
+                        : 'text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-800 hover:text-surface-900 dark:hover:text-surface-200'
+                     }`;
+                  // action 项点了就地做事、不跳路由，所以是 button 不是 NavLink
+                  return item.to ? (
+                    <NavLink key={item.label} to={item.to} end={item.end} data-guide={item.guide}
+                      className={({ isActive }) => cls(isActive)}>
+                      {content}
+                    </NavLink>
+                  ) : (
+                    <button key={item.label} type="button" onClick={onReplayGuide}
+                      className={cls(false)}>
+                      {content}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}

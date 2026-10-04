@@ -375,7 +375,10 @@ async def skip_first_login():
 
 @router.post("/auth/ack-guide")
 async def ack_guide(authorization: str = Header(default="")):
-    """标记当前账户已看过操作指引（离开指引页时调用）。
+    """标记当前账户已看过操作指引（点「跳过」或「完成」时调用）。
+
+    指引现在是主页上浮的一层蒙版、没有自己的页面，所以**只有那两个按钮会走到这里**；
+    从侧栏切走、刷新、退出登录都不算读过，下次进来仍会弹。
 
     ``/api/auth/*`` 不经中间件鉴权，故这里自行校验 token。
     """

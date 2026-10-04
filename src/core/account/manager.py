@@ -48,10 +48,14 @@ BROADCAST_MAX_LEN = 80
 
 # 账户端「操作指引」的版本号。
 #
-# **改了指引内容就把这个值加一**（内容在 web/frontend/src/pages/AccountPortalPages.tsx
-# 的 GUIDE_SECTIONS）。账户记录里存的是「已读版本」，与此不等——包括从没读过
-# 的老账户——下次登录就会自动跳进指引。与更新日志同一套思路。
-GUIDE_VERSION = "1"
+# **改了指引内容就把这个值加一**（步骤与文案在
+# web/frontend/src/components/GuideOverlay.tsx 的 GUIDE_PAGES）。账户记录里存的是
+# 「已读版本」，与此不等——包括从没读过的老账户——下次登录就会自动跳进指引。
+# 与更新日志同一套思路。
+#
+# "2"：指引从「手抄一份模拟界面」改成「直接在真实页面上浮蒙版」，内容与讲法全变了，
+# 读过 v1 的账户需要再看一次新的。
+GUIDE_VERSION = "2"
 
 # 新建账户时预填的默认登录密码。仍是这个密码的账户会被要求登录后立即修改
 # （见 api/routes/auth.py 的登录标记）—— 默认密码人人皆知，留着等于没设防。
@@ -500,7 +504,7 @@ class AccountManager:
         return rec
 
     def mark_guide_seen(self, account_id: int, version: str) -> AccountRecord:
-        """记录该账户已读的操作指引版本（离开指引页时调用）。
+        """记录该账户已读的操作指引版本（点「跳过」或「完成」时调用）。
 
         版本号由调用方取服务端的 :data:`GUIDE_VERSION` 传入，不信任客户端上报。
         指引内容更新后版本号上调，所有账户（含读过旧版的）下次登录都会再跳一次。

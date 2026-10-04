@@ -10,6 +10,7 @@ import {
 } from '../api/client';
 import type { AccountSummary } from '../api/types';
 import { Button } from '../components/Button';
+import { useGuideActive } from '../components/GuideOverlay';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { RenewDialog } from '../components/AccountDialogs';
@@ -108,7 +109,7 @@ export function AccountOverviewPage() {
           {acc.bot_public ? '公共 Bot' : '私有 Bot'}
         </span>
         <ExpiryBadge expiresAt={acc.expires_at} pausedReason={acc.paused_reason} />
-        <div className="ml-auto">
+        <div className="ml-auto" data-guide="ov-redeem">
           <Button size="sm" variant="secondary" icon={<KeyRound className="w-4 h-4" />}
             onClick={() => setRedeemOpen(true)}>
             兑换授权码
@@ -118,7 +119,10 @@ export function AccountOverviewPage() {
 
       {/* 统计卡片 */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="card">
+        {/* 下面这几个 data-guide 是「操作指引」的定位锚点（见 components/GuideOverlay.tsx）——
+            纯标记，不影响样式与行为。改结构时若删掉了带标记的元素，指引那一步会
+            退化成「只有文字、没有高亮」，不会报错，所以容易不知不觉漏掉 */}
+        <div className="card" data-guide="ov-bot">
           <div className="card-body">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
@@ -128,7 +132,7 @@ export function AccountOverviewPage() {
                 label={acc.bot_enabled ? '已启用' : '已停用'} />
             </div>
             <p className="mt-2 font-semibold text-lg truncate">{acc.bot_name || '未配置 Bot'}</p>
-            <div className="mt-3">
+            <div className="mt-3" data-guide="ov-bot-toggle">
               <Button size="sm" variant={acc.bot_enabled ? 'secondary' : 'success'}
                 loading={toggling} disabled={toggling || !acc.bot_available} onClick={toggleBot}>
                 {acc.bot_enabled ? '停用 Bot' : '启用 Bot'}
@@ -255,18 +259,27 @@ function PageShell({ title, children }: { title: string; children: React.ReactNo
 
 export function AccountLibraryPage() {
   const { acc } = useAccountSummary();
+  const guideActive = useGuideActive();
   if (!acc) {
     return <div className="flex justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-primary-500" /></div>;
   }
-  return <LibraryTab acc={acc} />;
+  // 指引期间摆固定的演示清单：库可能是空的，「插件库」那一步就没东西可指
+  return <LibraryTab acc={acc} demo={guideActive} />;
 }
 
 export function AccountLivePage() {
   const { acc } = useAccountSummary(8000);
+  const guideActive = useGuideActive();
   if (!acc) {
     return <div className="flex justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-primary-500" /></div>;
   }
-  return <PageShell title="直播间"><LiveTab acc={acc} /></PageShell>;
+  // 没绑直播间 + 指引正浮着 → 进演示态，渲染一个可点的虚拟房间。
+  // 少了 guideActive 这个条件，正常使用时也会冒出一个假房间来
+  return (
+    <PageShell title="直播间">
+      <LiveTab acc={acc} demo={guideActive && acc.room_id == null} />
+    </PageShell>
+  );
 }
 
 export function AccountBotPage() {
@@ -287,10 +300,12 @@ export function AccountTimerPage() {
 
 export function AccountPluginsPage() {
   const { acc } = useAccountSummary();
+  const guideActive = useGuideActive();
   if (!acc) {
     return <div className="flex justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-primary-500" /></div>;
   }
-  return <PageShell title="插件"><PluginsTab acc={acc} /></PageShell>;
+  // 指引期间摆固定的演示清单：账户可能一个插件都没装，那两步就没东西可指
+  return <PageShell title="插件"><PluginsTab acc={acc} demo={guideActive} /></PageShell>;
 }
 export function AccountPasswordPage() {
   const auth = useAuth();
