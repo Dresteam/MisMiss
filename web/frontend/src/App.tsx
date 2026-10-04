@@ -105,16 +105,6 @@ function App() {
   // 放在最前面且直接 return —— 不发更新日志、不渲染面板，避免「先关弹窗再改」
   // 或从侧边栏绕过。改密成功后服务端会作废该账户的 token，这里清掉本地登录态
   // 回到登录页用新密码登一次。
-  // 操作指引：账户端专有。**渲染在 Layout 之外** —— 它自己就是一整套与账户端
-  // 一模一样的界面（自带左侧导航），套在 Layout 里会出现两条侧栏。
-  if (auth.role === 'account' && auth.showGuide) {
-    return (
-      <AuthContext.Provider value={auth}>
-        <AccountGuidePage />
-      </AuthContext.Provider>
-    );
-  }
-
   if (auth.role === 'account' && auth.mustChangePassword && auth.accountId != null) {
     const handleForcedDone = () => {
       localStorage.removeItem('auth_token');
@@ -166,6 +156,12 @@ function App() {
             <Route path="update" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <UpdatePage />} />
             <Route path="*" element={<Navigate to={auth.role === 'account' ? '/account/home' : '/'} replace />} />
           </Route>
+          {/* 操作指引：挂在 Layout **之外** —— 它自己就是一整套与账户端一样的
+              界面（自带左侧导航），放进 Layout 里会出现两条侧栏。
+              ⚠️ 这一条不能少：侧栏入口指向 /account/guide，路由缺席时点它
+              什么都不渲染（曾经就这么漏过一次） */}
+          <Route path="account/guide"
+            element={auth.role === 'account' ? <AccountGuidePage /> : <Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </AuthContext.Provider>
