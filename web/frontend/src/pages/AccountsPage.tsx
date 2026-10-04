@@ -267,11 +267,14 @@ export function AccountsPage() {
       if (botFilter === 'off' && a.bot_enabled) return false;
       if (!kw) return true;
       // 命中范围：直播间名称 / 登录用户名 / 主播名 / 直播间简介 / 主播简介，
-      // 外加账户名、Bot 名与房间 ID —— 管理端多半只记得住其中某一个片段
+      // 外加账户名、Bot 名、房间 ID 与**账户编号** —— 管理端多半只记得住其中某一片段。
+      // 编号写成 `#12` 而非 `12`：前者同时能命中「#12」与「12」两种输入，
+      // 后者只沾得上不带井号的写法
       return [
         a.name, a.username,
         a.room_name, a.room_description, a.creator_name, a.creator_intro,
         a.bot_name, a.room_id == null ? '' : String(a.room_id),
+        `#${a.id}`,
       ].some((s) => (s || '').toLowerCase().includes(kw));
     });
   }, [accounts, keyword, statusFilter, modeFilter, liveFilter, botFilter]);
@@ -393,7 +396,7 @@ export function AccountsPage() {
       {accounts.length > 0 && (
         <div className="space-y-2">
           <SearchInput value={keyword} onChange={setKeyword}
-            placeholder="搜索账户名 / 用户名 / 直播间 / 房间 ID…" />
+            placeholder="搜索账户名 / 用户名 / 直播间 / 房间 ID / 编号 #12…" />
 
           {/* 移动端：折叠开关。四组筛选在窄屏上展开会占满整屏，
               折叠后用一个按钮 + 生效数量提示，桌面端（md 起）始终展开、看不到这个按钮 */}
@@ -488,6 +491,13 @@ export function AccountsPage() {
           {paged.map((acc) => (
             <div key={acc.id}
               className="card hover:shadow-lg transition-shadow relative group/card">
+              {/* 账户编号放右上角：与标题分开，既不挤占标题宽度，也方便和搜索里
+                  输入的「#12」对上。pointer-events-none —— 卡片整卡可点，
+                  这个纯标签不该在角落里挡掉一块点击热区 */}
+              <span className="absolute top-3 right-4 pointer-events-none select-none
+                               font-mono text-xs text-gray-400 dark:text-gray-500">
+                #{acc.id}
+              </span>
               <div className="card-header">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
