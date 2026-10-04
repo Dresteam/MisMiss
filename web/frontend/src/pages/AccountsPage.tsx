@@ -608,13 +608,19 @@ export function AccountsPage() {
                         : <CirclePlay className="w-4 h-4" />}
                       tooltip={acc.bot_enabled ? '停止 Bot' : '启动 Bot'}
                       onClick={() => setRuntimeTarget({ acc, kind: 'bot' })} />
-                    {acc.room_id != null && (
+                    {acc.room_id != null ? (
                       <Button variant="ghost" size="sm"
                         icon={acc.room_enabled
                           ? <Unplug className="w-4 h-4" />
                           : <Plug className="w-4 h-4" />}
                         tooltip={acc.room_enabled ? '断开直播间' : '连接直播间'}
                         onClick={() => setRuntimeTarget({ acc, kind: 'live' })} />
+                    ) : (
+                      /* 未绑定的账户谈不上「连接/断开」—— 给绑定入口，
+                         直接落到账户详情页的直播间标签页（绑定表单在那儿） */
+                      <Button variant="ghost" size="sm" icon={<Plug className="w-4 h-4" />}
+                        tooltip="绑定直播间"
+                        onClick={() => navigate(`/account/${acc.id}?tab=live`)} />
                     )}
                     {/* 剩余天数 / 续期 / 兑换授权码 / 设为永久 / 设为停用 全在同一个对话框里，
                         卡片上只留这一个入口 —— 几项可在弹窗顶部切换，不必每项一个按钮 */}
