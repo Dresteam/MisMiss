@@ -27,15 +27,23 @@ const DEMO_NAV: { key: DemoPage; label: string; icon: React.ReactNode }[] = [
  * 老用户不会再被跳进来 —— 改文案的人多半只翻到这一个文件，提醒写在这儿。
  */
 const GUIDE_STEPS: { page: DemoPage; target: string; title: string; body: string }[] = [
-  { page: 'overview', target: 'ov-bot', title: '概览 · 账户状态', body: '进来先看这几张卡：Bot 是否启用、直播间连着没有、插件启用了几个、订阅还剩多少天。' },
-  { page: 'overview', target: 'ov-bot-toggle', title: '启用 / 停用 Bot', body: '停用后这个账户的机器人整体停工 —— 定时消息与插件推送都会停。临时不想让它发言时用它。' },
+  { page: 'overview', target: 'ov-bot', title: '概览 · 账户状态', body: '这是「概览」页。先看这几张卡：Bot 是否启用、直播间连着没有、插件启用了几个、订阅还剩多少天。' },
+  { page: 'overview', target: 'ov-bot-toggle', title: '启用 / 停用 Bot', body: '停用后这个账户的机器人整体停工 —— 定时消息与插件推送都会停。可以点一下试试，这里怎么点都不影响你的账户。' },
   { page: 'overview', target: 'ov-redeem', title: '兑换码续期', body: '订阅快到期时点这里输入授权码；永久账户不需要续期。' },
+  { page: 'overview', target: 'nav-live', title: '切到「直播间」', body: '绑定与连接直播间在另一页 —— **点左侧的「直播间」**切过去。以后自己用面板也是这样切页。' },
+
   { page: 'live', target: 'lv-bind', title: '绑定直播间', body: '填入直播间 ID 或粘贴直播间链接即可绑定；已绑定的可以在这里换绑。' },
-  { page: 'live', target: 'lv-control', title: '连接 / 断开直播间', body: '绑定只是「知道是哪个房间」，还要连接才会真正接收弹幕与礼物。不看了就断开。' },
+  { page: 'live', target: 'lv-control', title: '连接 / 断开直播间', body: '绑定只是「知道是哪个房间」，还要连接才会真正接收弹幕与礼物。' },
+  { page: 'live', target: 'nav-bot', title: '切到「Bot」', body: '**点左侧的「Bot」**，那里管 Cookie。' },
+
   { page: 'bot', target: 'bt-cookie', title: '更换 Cookie', body: '私有模式下 Cookie 过期会连不上。用面板给的书签脚本一键取回新 Cookie，不用再找管理员。' },
+  { page: 'bot', target: 'nav-plugins', title: '切到「插件」', body: '**点左侧的「插件」**。' },
+
   { page: 'plugins', target: 'pg-list', title: '插件管理', body: '启用 / 停用、改配置、设权限都在这里。每个插件的配置项由插件自己声明。' },
   { page: 'plugins', target: 'pg-page', title: '插件主页', body: '带「插件主页」标记的插件有自己的独立界面（比如点歌、抽签），点卡片即可进入。' },
-  { page: 'library', target: 'lb-list', title: '插件库', body: '面板统一维护的插件来源。库里有新版本时插件页会提示，也可以一键更新全部。' },
+  { page: 'plugins', target: 'nav-library', title: '切到「插件库」', body: '**点左侧的「插件库」**。' },
+
+  { page: 'library', target: 'lb-list', title: '插件库', body: '面板统一维护的插件来源。库里有新版本时插件页会提示，也可以一键更新全部。到这里就讲完了。' },
 ];
 
 /**
@@ -63,7 +71,10 @@ export function AccountGuidePage() {
 
   const cur = GUIDE_STEPS[step];
   const isLast = step === GUIDE_STEPS.length - 1;
-  const demoPage = cur.page;
+  // 切页由**用户点左侧导航**驱动，不跟着步骤自动切 —— 指引要教的就是「怎么切」。
+  // 本步要求的页面对不上时，提示卡会变成「请点左侧「XX」」并禁用「下一步」。
+  const [demoPage, setDemoPage] = useState<DemoPage>('overview');
+  const onRightPage = demoPage === cur.page;
 
   const ack = useCallback(() => {
     if (acked.current || !auth.token) return;
@@ -88,7 +99,7 @@ export function AccountGuidePage() {
 
   // 切到本步所在分页后再量 —— layoutEffect 保证量的是渲染后的 DOM，
   // 否则跨页那一步会量到上一页的残留坐标（或量到空，蒙版直接不出现）
-  useLayoutEffect(() => { measure(); }, [measure, step]);
+  useLayoutEffect(() => { measure(); }, [measure, step, demoPage]);
 
   useEffect(() => {
     window.addEventListener('resize', measure);
@@ -97,7 +108,7 @@ export function AccountGuidePage() {
       window.removeEventListener('resize', measure);
       window.removeEventListener('scroll', measure, true);
     };
-  }, [measure]);
+  }, [measure, demoPage]);
 
   useEffect(() => { window.scrollTo({ top: 0 }); }, [step]);
 
@@ -111,6 +122,9 @@ export function AccountGuidePage() {
   };
   const tipTop = hole ? hole.top + hole.height + 10 : 0;
   const flipUp = hole ? tipTop + 190 > vh : false;
+  const targetPageLabel = DEMO_NAV.find((n) => n.key === cur.page)?.label ?? '';
+  const hintText = `请点左侧的「${targetPageLabel}」切到这一页 —— 以后自己用面板也是这样切。`;
+
   const tipLeft = hole ? Math.min(Math.max(hole.left, 8), Math.max(8, vw - 8 - TIP_W)) : 8;
 
   return (
@@ -127,16 +141,18 @@ export function AccountGuidePage() {
               这也是整页不套在应用 Layout 里的原因（否则会出现两条侧栏） */}
 
           {DEMO_NAV.map((n) => (
-            <span key={n.key}
+            // 点它切的是演示分页（本地 state），不是真路由
+            <button key={n.key} type="button" data-guide={`nav-${n.key}`}
+              onClick={() => setDemoPage(n.key)}
               className={
-                'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ' +
+                'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left transition-colors ' +
                 (n.key === demoPage
                   ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
-                  : 'text-gray-500 dark:text-gray-400')
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800')
               }>
               {n.icon}
               <span className="truncate">{n.label}</span>
-            </span>
+            </button>
           ))}
         </nav>
       </aside>
@@ -303,9 +319,11 @@ export function AccountGuidePage() {
       </main>
 
       {/* ---------- 蒙版 + 提示卡 ---------- */}
-      {hole ? (
+      {/* 提示卡常驻：页面对不上或首帧量不到目标时也要给引导，只是不画蒙版 */}
+      {(
         <>
           {/* 用超大 box-shadow 造「四周变暗、中间留洞」：比 clip-path 稳 */}
+          {hole && onRightPage && (
           <div
             className="fixed z-[90] rounded-lg ring-2 ring-primary-400 pointer-events-none
                        transition-all duration-200"
@@ -314,16 +332,22 @@ export function AccountGuidePage() {
               boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.55)',
             }}
           />
+          )}
           <div
             className="fixed z-[95] rounded-xl shadow-2xl bg-white dark:bg-gray-800
                        border border-gray-200 dark:border-gray-700 p-4"
             style={{
-              width: TIP_W, maxWidth: 'calc(100vw - 1rem)', left: tipLeft,
-              ...(flipUp ? { bottom: vh - hole.top + 10 } : { top: tipTop }),
+              width: TIP_W, maxWidth: 'calc(100vw - 1rem)',
+              // 量不到目标（页面对不上 / 首帧）时钉在右下角，别飘到屏幕外
+              ...(hole && onRightPage
+                ? { left: tipLeft, ...(flipUp ? { bottom: vh - hole.top + 10 } : { top: tipTop }) }
+                : { right: 16, bottom: 16 }),
             }}
           >
             <p className="font-semibold text-sm text-gray-900 dark:text-white">{cur.title}</p>
-            <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{cur.body}</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+              {onRightPage ? cur.body : hintText}
+            </p>
             <div className="flex items-center justify-between mt-3 gap-2">
               <button
                 onClick={finish}
@@ -337,7 +361,9 @@ export function AccountGuidePage() {
                   onClick={() => setStep((s) => s - 1)}>
                   上一步
                 </Button>
-                <Button variant="primary" size="sm"
+                {/* 还没切到本步要求的页面就不放行 —— 否则下一步的目标元素不在
+                    当前页，蒙版会整个消失，看着像卡住了 */}
+                <Button variant="primary" size="sm" disabled={!onRightPage}
                   onClick={() => (isLast ? finish() : setStep((s) => s + 1))}>
                   {isLast ? '完成' : '下一步'}
                 </Button>
@@ -345,7 +371,7 @@ export function AccountGuidePage() {
             </div>
           </div>
         </>
-      ) : null}
+      )}
     </div>
   );
 }
