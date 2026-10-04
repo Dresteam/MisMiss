@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Bot as BotIcon, Radio, Puzzle, Clock, LayoutDashboard, KeyRound, Loader2,
+  Bot as BotIcon, Radio, Puzzle, Clock, LayoutDashboard, KeyRound,
 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
@@ -114,52 +114,35 @@ export function AccountGuidePage() {
   const tipLeft = hole ? Math.min(Math.max(hole.left, 8), Math.max(8, vw - 8 - TIP_W)) : 8;
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">操作指引</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            下面是<strong className="font-medium">模拟界面</strong>，怎么点都不会
-            影响你的账户；每次进来都会重置。
-          </p>
+    <div className="min-h-screen bg-surface-50 dark:bg-surface-950 flex animate-fade-in">
+      {/* ---------- 整页界面：与账户端同款左侧导航 + 内容区 ---------- */}
+      <aside className="w-40 sm:w-56 shrink-0 border-r border-gray-200 dark:border-gray-800
+                        bg-white dark:bg-gray-900 flex flex-col">
+        <div className="h-14 flex items-center px-4 font-semibold text-gray-900 dark:text-white
+                        border-b border-gray-200 dark:border-gray-800 shrink-0">
+          MisMiss
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-gray-400 dark:text-gray-500 tabular-nums">
-            第 {step + 1} / {GUIDE_STEPS.length} 步
-          </span>
-          <Button variant="secondary" size="sm" onClick={finish}>跳过</Button>
-        </div>
-      </div>
+        <nav className="flex-1 p-3 space-y-1">
+          {/* 左栏是**模拟**的：点它切的是演示分页，不动真路由，
+              这也是整页不套在应用 Layout 里的原因（否则会出现两条侧栏） */}
 
-      {/* ---------- 模拟外壳：左侧导航 + 右侧内容，与账户端同款布局 ---------- */}
-      <div className="rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-700/60
-                      overflow-hidden bg-white dark:bg-gray-800">
-        <div className="px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-500
-                        bg-amber-50 dark:bg-amber-900/20
-                        border-b border-dashed border-amber-300 dark:border-amber-700/60">
-          模拟界面 · 这里的操作只改本页状态，不会影响你的账户，退出即重置
-        </div>
+          {DEMO_NAV.map((n) => (
+            <span key={n.key}
+              className={
+                'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm ' +
+                (n.key === demoPage
+                  ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
+                  : 'text-gray-500 dark:text-gray-400')
+              }>
+              {n.icon}
+              <span className="truncate">{n.label}</span>
+            </span>
+          ))}
+        </nav>
+      </aside>
 
-        <div className="flex min-h-[22rem]">
-          {/* 左栏导航 —— 点它切的是模拟分页，不是真路由 */}
-          <nav className="w-32 sm:w-40 shrink-0 border-r border-gray-200 dark:border-gray-700
-                          p-2 space-y-0.5 bg-gray-50 dark:bg-gray-900/40">
-            {DEMO_NAV.map((n) => (
-              <span key={n.key}
-                className={
-                  'flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm ' +
-                  (n.key === demoPage
-                    ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
-                    : 'text-gray-500 dark:text-gray-400')
-                }>
-                {n.icon}
-                <span className="truncate">{n.label}</span>
-              </span>
-            ))}
-          </nav>
-
-          {/* 右栏内容 */}
-          <div className="flex-1 min-w-0 p-4 space-y-4">
+      <main className="flex-1 min-w-0 overflow-y-auto">
+        <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-4">
             {demoPage === 'overview' && (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="card" data-guide="ov-bot">
@@ -316,9 +299,8 @@ export function AccountGuidePage() {
                 </div>
               </div>
             )}
-          </div>
         </div>
-      </div>
+      </main>
 
       {/* ---------- 蒙版 + 提示卡 ---------- */}
       {hole ? (
@@ -363,11 +345,7 @@ export function AccountGuidePage() {
             </div>
           </div>
         </>
-      ) : (
-        <p className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1.5">
-          <Loader2 className="w-3 h-3 animate-spin" /> 正在载入演示…
-        </p>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -105,6 +105,16 @@ function App() {
   // 放在最前面且直接 return —— 不发更新日志、不渲染面板，避免「先关弹窗再改」
   // 或从侧边栏绕过。改密成功后服务端会作废该账户的 token，这里清掉本地登录态
   // 回到登录页用新密码登一次。
+  // 操作指引：账户端专有。**渲染在 Layout 之外** —— 它自己就是一整套与账户端
+  // 一模一样的界面（自带左侧导航），套在 Layout 里会出现两条侧栏。
+  if (auth.role === 'account' && auth.showGuide) {
+    return (
+      <AuthContext.Provider value={auth}>
+        <AccountGuidePage />
+      </AuthContext.Provider>
+    );
+  }
+
   if (auth.role === 'account' && auth.mustChangePassword && auth.accountId != null) {
     const handleForcedDone = () => {
       localStorage.removeItem('auth_token');
@@ -146,8 +156,6 @@ function App() {
             <Route path="account/plugins" element={auth.role === 'account' ? <AccountPluginsPage /> : <Navigate to="/" replace />} />
             <Route path="account/library" element={auth.role === 'account' ? <AccountLibraryPage /> : <Navigate to="/" replace />} />
             <Route path="account/password" element={auth.role === 'account' ? <AccountPasswordPage /> : <Navigate to="/" replace />} />
-            {/* 操作指引：账户端专有，管理端访问一律回首页 */}
-            <Route path="account/guide" element={auth.role === 'account' ? <AccountGuidePage /> : <Navigate to="/" replace />} />
             <Route path="account/plugin/:name/page" element={auth.role === 'account' ? <PluginPageView /> : <Navigate to="/" replace />} />
             <Route path="account/:id" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <AccountDetailPage />} />
             <Route path="account/:id/plugin/:name/page" element={<PluginPageView />} />
