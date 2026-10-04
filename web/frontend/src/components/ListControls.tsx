@@ -115,9 +115,11 @@ export function FilterChips<T extends string>({ options, value, onChange, block 
     // 等分会让每行的胶囊宽度不一致、列对不齐，看着别扭。固定列数后所有行的
     // 胶囊等宽、上下对齐，选项少的那行末尾留一个空格（容器底色，视觉上
     // 读作「这组少一个选项」而不是破版）。
+    // 桌面端用 flex-nowrap 保证四组**排在同一行**：四组加起来的宽度已经很贴近
+    // 页面容器（max-w-6xl = 1152px）的上限，再允许换行就会掉到第二行去。
     <div className={`p-1 rounded-lg bg-gray-100 dark:bg-gray-800 gap-1 ${
       block
-        ? 'grid grid-cols-4 w-full md:flex md:flex-wrap md:w-fit'
+        ? 'grid grid-cols-4 w-full md:flex md:flex-nowrap md:w-fit'
         : 'flex flex-wrap w-fit'}`}>
       {options.map((o) => (
         <button
@@ -125,9 +127,10 @@ export function FilterChips<T extends string>({ options, value, onChange, block 
           type="button"
           onClick={() => onChange(o.id)}
           className={
-            'inline-flex items-center min-h-8 px-3 py-1.5 text-xs font-medium rounded-md transition-all ' +
-            // block 模式下由网格分配宽度（移动端），桌面端恢复按内容宽度
-            (block ? 'justify-center md:flex-none ' : '') +
+            'inline-flex items-center min-h-8 py-1.5 text-xs font-medium rounded-md transition-all ' +
+            // block 模式：移动端由网格分配宽度；桌面端四组要挤在一行，内边距收窄一档
+            // 留出余量（否则三位的计数就能把某组挤到第二行去）
+            (block ? 'px-2 justify-center md:flex-none ' : 'px-3 ') +
             (value === o.id
               ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
               : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300')

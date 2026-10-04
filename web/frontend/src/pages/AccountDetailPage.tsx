@@ -1204,12 +1204,17 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                       {p.has_ui ? (
                         <Link
                           to={`${pluginPageBase ?? '/account/plugin'}/${p.name}/page`}
-                          className="rounded hover:text-primary-600 dark:hover:text-primary-400
+                          className="group/link inline-flex items-center gap-1 rounded
+                                     hover:text-primary-600 dark:hover:text-primary-400
                                      transition-colors focus:outline-none focus-visible:ring-2
                                      focus-visible:ring-primary-500 focus-visible:ring-offset-2
                                      dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
                         >
                           <MarqueeText text={p.display_name || p.name} />
+                          {/* 有插件主页的才给这个外链图标 —— 卡片刻意不做得「看起来都能点」，
+                              否则用户点没有主页的插件没反应，会以为是坏了 */}
+                          <ExternalLink className="w-3 h-3 shrink-0 text-gray-400 dark:text-gray-500
+                                                    group-hover/link:text-primary-500" />
                         </Link>
                       ) : (
                         <MarqueeText text={p.display_name || p.name} />
