@@ -5,7 +5,8 @@ import { AccountsPage } from './pages/AccountsPage';
 import { AccountDetailPage } from './pages/AccountDetailPage';
 import {
   AccountOverviewPage, AccountLivePage, AccountBotPage, AccountTimerPage, AccountPluginsPage,
-  AccountLibraryPage, AccountPasswordPage, AccountGuidePage } from './pages/AccountPortalPages';
+  AccountLibraryPage, AccountPasswordPage } from './pages/AccountPortalPages';
+import { AccountGuidePage } from './pages/AccountGuidePage';
 import { PluginLibraryPage } from './pages/PluginLibraryPage';
 import { ServerPage } from './pages/ServerPage';
 import { LogsPage } from './pages/LogsPage';
