@@ -5,8 +5,7 @@ import { AccountsPage } from './pages/AccountsPage';
 import { AccountDetailPage } from './pages/AccountDetailPage';
 import {
   AccountOverviewPage, AccountLivePage, AccountBotPage, AccountTimerPage, AccountPluginsPage,
-  AccountLibraryPage, AccountPasswordPage,
-} from './pages/AccountPortalPages';
+  AccountLibraryPage, AccountPasswordPage, AccountGuidePage } from './pages/AccountPortalPages';
 import { PluginLibraryPage } from './pages/PluginLibraryPage';
 import { ServerPage } from './pages/ServerPage';
 import { LogsPage } from './pages/LogsPage';
@@ -136,7 +135,9 @@ function App() {
       >
         <Routes>
           <Route element={<Layout {...shell} />}>
-            <Route index element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <AccountsPage />} />
+            <Route index element={auth.role === 'account'
+            ? <Navigate to={auth.showGuide ? '/account/guide' : '/account/home'} replace />
+            : <AccountsPage />} />
             <Route path="account/home" element={<AccountOverviewPage />} />
             <Route path="account/live" element={auth.role === 'account' ? <AccountLivePage /> : <Navigate to="/" replace />} />
             <Route path="account/bot" element={auth.role === 'account' ? <AccountBotPage /> : <Navigate to="/" replace />} />
@@ -144,6 +145,8 @@ function App() {
             <Route path="account/plugins" element={auth.role === 'account' ? <AccountPluginsPage /> : <Navigate to="/" replace />} />
             <Route path="account/library" element={auth.role === 'account' ? <AccountLibraryPage /> : <Navigate to="/" replace />} />
             <Route path="account/password" element={auth.role === 'account' ? <AccountPasswordPage /> : <Navigate to="/" replace />} />
+            {/* 操作指引：账户端专有，管理端访问一律回首页 */}
+            <Route path="account/guide" element={auth.role === 'account' ? <AccountGuidePage /> : <Navigate to="/" replace />} />
             <Route path="account/plugin/:name/page" element={auth.role === 'account' ? <PluginPageView /> : <Navigate to="/" replace />} />
             <Route path="account/:id" element={auth.role === 'account' ? <Navigate to="/account/home" replace /> : <AccountDetailPage />} />
             <Route path="account/:id/plugin/:name/page" element={<PluginPageView />} />

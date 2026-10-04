@@ -1,10 +1,11 @@
 /** 账户界面页面(v1.0.1 风格左侧导航,独立于面板)。 */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
 } from 'recharts';
-import { Bot as BotIcon, Radio, Puzzle, Clock, Loader2, KeyRound } from 'lucide-react';
+import { Bot as BotIcon, Radio, Puzzle, Clock, Loader2, KeyRound, LayoutDashboard } from 'lucide-react';
 import {
   fetchAccountSummary, enableAccountBot, disableAccountBot, redeemAccountCode,
 } from '../api/client';
@@ -309,5 +310,92 @@ export function AccountPasswordPage() {
         </div>
       </div>
     </PageShell>
+  );
+}
+
+
+// ================================================================== //
+// 操作指引
+// ================================================================== //
+
+/** 指引条目 —— 页面与文案分开列，改文案不用动结构 */
+const GUIDE_SECTIONS: { icon: React.ReactNode; title: string; body: string }[] = [
+  { icon: <LayoutDashboard className="w-4 h-4" />, title: '概览',
+    body: '一眼看到自己的 Bot、直播间、插件与订阅状态。到期时间也在这里，快到期时卡片上会有提示。' },
+  { icon: <Radio className="w-4 h-4" />, title: '直播间',
+    body: '绑定或更换直播间。绑定后还要「连接」才会开始接收弹幕与礼物事件 —— 只绑定不连接是不会响应的。' },
+  { icon: <BotIcon className="w-4 h-4" />, title: 'Bot',
+    body: '查看 Bot 的 Cookie 模式。私有模式下可自助更新 Cookie（面板会指引你用书签脚本一键取回），不用再找管理员。' },
+  { icon: <Clock className="w-4 h-4" />, title: '定时消息',
+    body: '设置按间隔轮播的消息，用来维持直播间热度。可以调整间隔、上下移动顺序、复制或删除。' },
+  { icon: <Puzzle className="w-4 h-4" />, title: '插件',
+    body: '启用或停用插件、改配置、设权限。每个插件的功能不同，配置项由插件自己声明。' },
+  { icon: <Puzzle className="w-4 h-4" />, title: '插件库',
+    body: '面板统一维护的插件来源。库里有新版本时，插件页会提示更新；也可以一键更新全部。' },
+  { icon: <KeyRound className="w-4 h-4" />, title: '修改密码',
+    body: '更换本账户的登录密码。仍在使用初始密码时，面板会要求你先改密才能使用。' },
+];
+
+/**
+ * 账户端操作指引。
+ *
+ * 首次登录时由 App 导到这里（见 useAuth 的 showGuide）；看过一次后标记落盘，
+ * 之后只作为侧栏里的常驻入口存在，不再自动跳转。
+ */
+export function AccountGuidePage() {
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const acked = useRef(false);
+
+  const ack = useCallback(() => {
+    if (acked.current || !auth.token) return;
+    acked.current = true;
+    // 上报失败不重试：指引看过就是看过了，万一下次登录再跳一次也无伤大雅，
+    // 比在这里做重试队列划算得多
+    fetch('/api/auth/ack-guide', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + auth.token },
+    }).catch(() => { /* ignore */ });
+    auth.clearShowGuide();
+  }, [auth]);
+
+  // 离开本页即视为看过 —— 用户完全可能直接点侧栏走人，
+  // 不能只认「开始使用」那一个按钮，否则每次登录都要被跳一次
+  useEffect(() => ack, [ack]);
+
+  return (
+    <div className="space-y-6 animate-fade-in max-w-3xl">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">操作指引</h1>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          这里是你的直播间控制台。下面按侧栏顺序过一遍，看完就可以开始了。
+        </p>
+      </div>
+
+      <div className="card">
+        <div className="card-body space-y-4">
+          {GUIDE_SECTIONS.map((s, i) => (
+            <div key={s.title} className="flex gap-3">
+              <span className="shrink-0 mt-0.5 flex items-center justify-center w-7 h-7 rounded-lg
+                               bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400">
+                {s.icon}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900 dark:text-white">
+                  {i + 1}. {s.title}
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-0.5">{s.body}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        {/* 本页随时能从侧栏再进来，所以不强制「读完」 */}
+        <Button variant="secondary" onClick={() => navigate('/account/home')}>稍后再看</Button>
+        <Button variant="primary" onClick={() => { ack(); navigate('/account/home'); }}>开始使用</Button>
+      </div>
+    </div>
   );
 }

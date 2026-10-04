@@ -123,6 +123,8 @@ class AccountRecord:
     password_hash: str = ""
     # 最后一次确认已读更新日志的版本；"" = 尚未确认过（升级到本版本后会弹一次）
     seen_changelog_version: str = ""
+    # 是否已看过账户端「操作指引」—— 首次登录会自动跳过去，看过一次就不再跳
+    guide_seen: bool = False
     # 从插件库安装插件后是否自动启用（账户级偏好，默认关闭）
     auto_enable_on_install: bool = False
 
@@ -164,6 +166,7 @@ class AccountRecord:
             "username": self.username,
             "password_hash": self.password_hash,
             "seen_changelog_version": self.seen_changelog_version,
+            "guide_seen": self.guide_seen,
             "auto_enable_on_install": self.auto_enable_on_install,
         }
 
@@ -183,6 +186,7 @@ class AccountRecord:
             username=str(d.get("username", "")),
             password_hash=str(d.get("password_hash", "")),
             seen_changelog_version=str(d.get("seen_changelog_version", "")),
+            guide_seen=bool(d.get("guide_seen", False)),
             auto_enable_on_install=bool(d.get("auto_enable_on_install", False)),
         )
 
@@ -488,6 +492,16 @@ class AccountManager:
         _log.info("账户 {} 已确认更新日志 v{}", rec.id, version)
         return rec
 
+    def mark_guide_seen(self, account_id: int) -> AccountRecord:
+        """标记该账户已看过「操作指引」—— 之后登录不再自动跳转。"""
+        rec = self.get_record(account_id)
+        if rec.guide_seen:
+            return rec
+        rec.guide_seen = True
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        return rec
+
     def set_auto_enable_on_install(self, account_id: int, enabled: bool) -> AccountRecord:
         """设置「从插件库安装插件后自动启用」偏好（账户自助，默认关闭）。
 
@@ -539,6 +553,7 @@ class AccountManager:
             "id": rec.id,
             "name": rec.name,
             "username": rec.username,
+            "guide_seen": rec.guide_seen,
             "room_id": rec.room_id,
             "bot_mode": rec.bot_mode,
             "expires_at": rec.expires_at,
