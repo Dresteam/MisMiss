@@ -1219,8 +1219,8 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                                            text-[11px] font-normal
                                            text-gray-400 dark:text-gray-500
                                            group-hover/link:text-primary-500">
-                            插件主页
                             <ExternalLink className="w-3 h-3" />
+                            插件主页
                           </span>
                         </Link>
                       ) : (
