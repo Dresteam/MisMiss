@@ -1204,7 +1204,7 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                       {p.has_ui ? (
                         <Link
                           to={`${pluginPageBase ?? '/account/plugin'}/${p.name}/page`}
-                          className="group/link inline-flex items-center gap-1 rounded
+                          className="group/link inline-flex items-center gap-2 rounded
                                      hover:text-primary-600 dark:hover:text-primary-400
                                      transition-colors focus:outline-none focus-visible:ring-2
                                      focus-visible:ring-primary-500 focus-visible:ring-offset-2
