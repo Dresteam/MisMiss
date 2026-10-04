@@ -49,6 +49,15 @@ interface Props {
   initialTab?: string;
   /** 库模式下是否显示「使用账户」标签(面板显示,账户界面不显示)。 */
   showAccountsTab?: boolean;
+  /**
+   * 操作指引的演示态：直接喂一份假详情，**一个请求都不发**。
+   *
+   * 演示插件的名字（demo.song-list）在账户里根本不存在，照常去拉就是 404，
+   * 抽屉会显示成报错。传了它就同时起到「这是演示」的标记作用 ——
+   * 指引的蒙版靠抽屉上的 `data-guide-drawer` 判断要不要整体让位（抽屉是
+   * z-40/50，在蒙版 z-84 之下，不让位就会打开在蒙版底下，看不见也点不到）。
+   */
+  demoDetail?: PluginDetail | null;
 }
 
 type TabId = 'info' | 'handlers' | 'permissions' | 'config' | 'readme' | 'changelog' | 'accounts';
@@ -83,7 +92,7 @@ const libraryTabs: Tab[] = [
   { id: 'accounts', label: '使用账户', icon: Puzzle },
 ];
 
-export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, accounts, usedByAccounts, libraryMeta, initialTab, showAccountsTab = true }: Props) {
+export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, accounts, usedByAccounts, libraryMeta, initialTab, showAccountsTab = true, demoDetail = null }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>('info');
   const [detail, setDetail] = useState<PluginDetail | null>(null);
   const [permissions, setPermissions] = useState<PluginPermissionInfo | null>(null);
@@ -128,6 +137,22 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, a
   }, [open, onClose]);
 
   const loadAll = async () => {
+    // 演示态：一份假详情喂满各 tab，一个请求都不发（见 Props.demoDetail 的注释）
+    if (demoDetail) {
+      setDetail(demoDetail);
+      setPermissions({
+        permissions: demoDetail.permissions ?? {},
+        effective_flag: 0,
+        effective_names: Object.keys(demoDetail.permissions ?? {}),
+        bot_permissions: ['SEND_LIVESTREAM_MESSAGE'],
+        missing_in_bot: [],
+      });
+      setConfig({ schema: demoDetail.config_schema, values: demoDetail.config_values });
+      setReadme('# 演示插件\n\n这是操作指引生成的演示内容，不是真实插件的文档。');
+      setChangelog('');
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       if (accountId) {
@@ -209,6 +234,13 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, a
 
   const handlePermToggle = async (key: string, value: boolean) => {
     if (!accountId) return;
+    // 演示态：只改本地显示、不落库（同上，真发就是 404）
+    if (demoDetail) {
+      if (permissions) {
+        setPermissions({ ...permissions, permissions: { ...permissions.permissions, [key]: value } });
+      }
+      return;
+    }
     if (permLoading) return;
     if (value && permissions && !permissions.bot_permissions.includes(key)) {
       showToast('warning', `Bot 未授予此项权限，无法启用`);
@@ -231,6 +263,12 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, a
   };
 
   const handleConfigSave = async (values: Record<string, unknown>) => {
+    // 演示态：只改本地显示、不落库 —— 演示插件名在账户里不存在，真存就是 404
+    if (demoDetail) {
+      setConfig({ schema: demoDetail.config_schema, values });
+      showToast('success', '演示：配置没有真的保存', '');
+      return;
+    }
     if (!accountId) return;
     await updateAccountPluginConfig(accountId, pluginName, values);
     showToast('success', '配置已保存');
@@ -247,8 +285,11 @@ export function PluginDrawer({ pluginName, open, onClose, onUpdate, accountId, a
       {/* Overlay */}
       <div className="drawer-overlay" onClick={onClose} />
 
-      {/* Drawer panel —— 居中弹窗样式 */}
-      <div className="drawer-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Drawer panel —— 居中弹窗样式。
+          data-guide-drawer：告诉操作指引的蒙版「抽屉开着，你先让开」——
+          抽屉是 z-40/50，蒙版是 z-84 起，不让位抽屉就开在蒙版底下 */}
+      <div className="drawer-panel" data-guide-drawer={demoDetail ? '1' : undefined}
+        style={{ display: 'flex', flexDirection: 'column' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 lg:px-6 py-3 lg:py-4
                         bg-white dark:bg-surface-800 border-b border-surface-200 dark:border-surface-700 rounded-t-2xl"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Bot as BotIcon, Radio, Puzzle, Clock, Send, RefreshCw,
@@ -25,6 +25,7 @@ import {
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
   TimerData, TimerMessageItem, BulkGroup, RenewRequest,
+  PluginDetail, ConfigFieldSchema,
 } from '../api/types';
 import { Button } from '../components/Button';
 import { Select } from '../components/Select';
@@ -117,7 +118,180 @@ export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; 
 // 直播间 Tab(单房间)
 // ================================================================== //
 
-export function LiveTab({ acc }: { acc: AccountSummary }) {
+/**
+ * 演示用的虚拟直播间。只在「操作指引」浮着、且账户还没绑直播间时喂给 LiveTab ——
+ * 没有它，「连接 / 断开」那一步对空账户就是死的（页面上压根没有房间卡片可指）。
+ *
+ * 三条底线：
+ *   - 封面与头像留空，免得拿着假 URL 去请求图片代理（裂图 + 白跑一趟），
+ *     卡片会自动退回默认头像;
+ *   - 所有动作都不走 API（见 `act` 与「启用 / 停用」的 demo 分支），
+ *     怎么点都作用不到账户上;
+ *   - 卡片顶部必须有显眼的「演示用」标记 —— **假数据得一眼看得出是假的**，
+ *     否则用户会以为自己真绑了个直播间。
+ */
+const makeDemoRoom = (): LivestreamInfo => ({
+  live_id: 0,
+  room_name: '演示直播间',
+  room_description: '这是操作指引生成的临时虚拟直播间，只在指引期间出现。',
+  score: 1280,
+  online_count: 12,
+  creator_name: '演示主播',
+  creator_id: 0,
+  creator_is_online: true,
+  is_connected: false,
+  enabled: false,
+  medal_name: '演示勋章',
+  medal_level: 3,
+  cover_url: '',
+  creator_avatar: '',
+  creator_intro: '虚拟主播，仅在操作指引里出现，不是真实直播间。',
+  is_streaming: true,
+});
+
+/**
+ * 演示用的插件清单。指引期间顶掉账户真实的插件列表，理由和虚拟直播间一样：
+ * 账户可能一个插件都没装，「插件管理」那一步就没有卡片可指；而「插件主页」
+ * 那一步还要求清单里**至少有一个 has_ui 的插件**，真实账户不一定有。
+ *
+ * ⚠️ 假数据必须一眼看得出是假的：作者统一写「演示插件」、plugin_id 走 demo.* 前缀，
+ * 页头另挂一条横幅。**别**把它们改成看起来像真插件的样子。
+ */
+const DEMO_PLUGINS: PluginSummary[] = [
+  {
+    // 带插件主页的那个排在**第一个**：卡片上「插件主页」「详情」「配置」三个锚点
+    // 都取 DOM 里第一个命中的元素，排第一才能保证指引四步指的是同一张卡
+    name: 'song_list', plugin_id: 'demo.song-list', author: '演示插件', version: '1.2.0',
+    display_name: '点歌', short_desc: '观众发「点歌 歌名」即可点播',
+    desc: '观众发「点歌 歌名」即可点播',
+    enabled: true, has_config: true, has_readme: true, has_changelog: true, has_ui: true,
+  },
+  {
+    name: 'welcome', plugin_id: 'demo.welcome', author: '演示插件', version: '1.0.0',
+    display_name: '欢迎插件', short_desc: '新观众进入直播间时自动发送欢迎语',
+    desc: '新观众进入直播间时自动发送欢迎语',
+    enabled: true, has_config: true, has_readme: true, has_changelog: false, has_ui: false,
+  },
+  {
+    name: 'gift_thanks', plugin_id: 'demo.gift-thanks', author: '演示插件', version: '0.9.0',
+    display_name: '礼物答谢', short_desc: '收到礼物时自动致谢',
+    desc: '收到礼物时自动致谢',
+    enabled: false, has_config: false, has_readme: true, has_changelog: false, has_ui: false,
+  },
+];
+
+/** 演示用的插件库清单（插件库页用）。字段比插件清单多几个库专有的。 */
+const DEMO_LIBRARY: LibraryPlugin[] = [
+  {
+    name: 'song_list', plugin_id: 'demo.song-list', author: '演示插件', version: '1.2.0',
+    display_name: '点歌', short_desc: '观众发「点歌 歌名」即可点播',
+    desc: '观众发「点歌 歌名」即可点播',
+    has_config: true, has_readme: true, has_changelog: true, has_ui: true,
+    is_default: false, used_by_accounts: [], installed: false,
+  },
+  {
+    name: 'welcome', plugin_id: 'demo.welcome', author: '演示插件', version: '1.0.0',
+    display_name: '欢迎插件', short_desc: '新观众进入直播间时自动发送欢迎语',
+    desc: '新观众进入直播间时自动发送欢迎语',
+    has_config: true, has_readme: true, has_changelog: false, has_ui: false,
+    is_default: false, used_by_accounts: [], installed: true,
+  },
+  {
+    name: 'gift_thanks', plugin_id: 'demo.gift-thanks', author: '演示插件', version: '0.9.0',
+    display_name: '礼物答谢', short_desc: '收到礼物时自动致谢',
+    desc: '收到礼物时自动致谢',
+    has_config: false, has_readme: true, has_changelog: false, has_ui: false,
+    is_default: true, used_by_accounts: [], installed: true,
+  },
+];
+
+/** 指引要引导用户装的那个演示插件 —— 带插件主页，装完插件页那几步才有东西可点 */
+const DEMO_INSTALL_NAME = 'song_list';
+/** 一开始就「装着」的演示插件（装了的才出现在插件页列表里） */
+const DEMO_INITIAL_INSTALLED = ['welcome', 'gift_thanks'];
+
+// ---- 演示态的「已安装」集合 ----
+// 插件库页点安装、插件页读列表，是**两条路由、同一时刻只挂载一个**，
+// 所以这份进度不能放在组件里 —— 一换页就断了，用户会看到「刚装的插件不见了」。
+// 插件库页每次挂载都会重置（见 LibraryTab），保证重看指引时从头演一遍。
+let demoInstalled = new Set<string>(DEMO_INITIAL_INSTALLED);
+const demoInstallListeners = new Set<() => void>();
+const subscribeDemoInstall = (l: () => void) => {
+  demoInstallListeners.add(l);
+  return () => { demoInstallListeners.delete(l); };
+};
+function setDemoInstalled(next: Set<string>) {
+  demoInstalled = next;
+  demoInstallListeners.forEach((l) => l());
+}
+function useDemoInstalled(): Set<string> {
+  return useSyncExternalStore(subscribeDemoInstall, () => demoInstalled);
+}
+
+/**
+ * 清掉演示进度（哪些演示插件被「装」过）。指引结束（完成 / 跳过）时由
+ * GuideOverlay 调用 —— 这份状态是模块级的，不主动清就会留到下一轮。
+ */
+export function resetPluginDemo() {
+  setDemoInstalled(new Set(DEMO_INITIAL_INSTALLED));
+}
+
+/**
+ * 演示用的插件详情。指引期间抽屉不再按插件名去后端拉 —— 演示插件的名字
+ * （demo.song-list）在账户里根本不存在，拉就是 404。这里一份假数据喂满
+ * 「基本信息」与「配置」两个 tab。
+ *
+ * ⚠️ 配置 schema 是按「点歌」写的固定值。指引的「配置」那一步指的就是点歌
+ * 那张卡，换成别的演示插件会显得文不对题 —— 真要加别的，这里得按名字分支。
+ */
+export function makeDemoPluginDetail(name: string): PluginDetail {
+  const meta = DEMO_LIBRARY.find((p) => p.name === name) ?? DEMO_LIBRARY[0];
+  return {
+    name: meta.name,
+    plugin_id: meta.plugin_id,
+    author: meta.author,
+    version: meta.version,
+    display_name: meta.display_name,
+    short_desc: meta.short_desc,
+    desc: meta.desc,
+    repo: null,
+    enabled: true,
+    has_config: meta.has_config,
+    has_readme: meta.has_readme,
+    has_changelog: meta.has_changelog,
+    handlers: [
+      { method_name: 'on_live_message', event_type: 'LiveMessageEvent' },
+      { method_name: 'on_live_gift', event_type: 'LiveGiftEvent' },
+    ],
+    permissions: { SEND_LIVESTREAM_MESSAGE: true },
+    config_schema: DEMO_CONFIG_SCHEMA,
+    config_values: DEMO_CONFIG_VALUES,
+    ui_schema: null,
+  };
+}
+
+const DEMO_CONFIG_SCHEMA: Record<string, ConfigFieldSchema> = {
+  max_queue: { type: 'int', default: 5, description: '每人最多排队几首', group: '常用' },
+  allow_duplicate: { type: 'bool', default: false, description: '允许同一首歌重复排队', group: '常用' },
+  reply_text: { type: 'string', default: '已为你点播《{song}》', description: '点歌成功后的回复话术', group: '高级' },
+};
+const DEMO_CONFIG_VALUES: Record<string, unknown> = {
+  max_queue: 5, allow_duplicate: false, reply_text: '已为你点播《{song}》',
+};
+
+/** 用了假数据的页面顶部都得挂一条 —— 别让用户以为这是自己账户的真实状态 */
+function DemoBanner({ what }: { what: string }) {
+  return (
+    <div className="flex items-center gap-2 px-4 py-2.5 text-xs rounded-lg
+                    bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300
+                    border border-amber-200 dark:border-amber-800/60">
+      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+      {what}
+    </div>
+  );
+}
+
+export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boolean }) {
   const [room, setRoom] = useState<LivestreamInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
@@ -127,20 +301,27 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
   const [msgPriority, setMsgPriority] = useState(0);
 
   const load = useCallback(async () => {
+    // 演示态：直接把假房间塞进去，**一个请求都不发**（账户本来就没绑直播间）
+    if (demo) { setRoom(makeDemoRoom()); setLoading(false); return; }
     try {
       const data = await fetchAccountLive(acc.id);
       setRoom(data);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [acc.id]);
+  }, [acc.id, demo]);
 
   useEffect(() => {
     load();
+    // 演示态不轮询：每 8 秒重拉一次会把用户刚点出来的「已连接」冲回初始值
+    if (demo) return;
     const t = setInterval(load, 8000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, demo]);
 
   const act = async (key: string, fn: () => Promise<unknown>, okMsg: string) => {
+    // 演示态一律不碰 API —— 虚拟房间上的刷新 / 更换 / 解绑 / 发弹幕都不该作用到账户上。
+    //（「启用 / 停用」也不走这里，它有自己的 demo 分支）
+    if (demo) return;
     setProcessing(key);
     try {
       await fn();
@@ -172,27 +353,35 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
     return id;
   };
 
+  /**
+   * 未绑定时先摆出来的绑定入口。演示态也要用它 —— 指引第一步（绑定直播间）
+   * 指的就是这里，不能因为进了演示就把真实入口抽掉。
+   */
+  const bindCard = (
+    <div className="card" data-guide="lv-bind">
+      <div className="card-body">
+        <div className="flex gap-2">
+          <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
+            className="input flex-1" placeholder="输入直播间 ID 或粘贴直播间链接" />
+          <Button loading={processing === 'add'} disabled={btn('add')}
+            onClick={() => act('add', () => addAccountLive(acc.id, resolveLiveInput()), '直播间已绑定')}>
+            绑定
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {loading && !room ? (
         <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-primary-500" /></div>
       ) : room === null && acc.room_id == null ? (
-        <div className="card">
-          <div className="card-body">
-            <div className="flex gap-2">
-              <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
-                className="input flex-1" placeholder="输入直播间 ID 或粘贴直播间链接" />
-              <Button loading={processing === 'add'} disabled={btn('add')}
-                onClick={() => act('add', () => addAccountLive(acc.id, resolveLiveInput()), '直播间已绑定')}>
-                绑定
-              </Button>
-            </div>
-          </div>
-        </div>
+        bindCard
       ) : room === null ? (
         /* 已绑定直播间但加载不出来（不存在 / 已被封禁 / 已注销）——
            不能当作「未绑定」直接给输入框，否则用户看不出绑定还在、只会以为没绑 */
-        <div className="card">
+        <div className="card" data-guide="lv-bind">
           <div className="card-body space-y-3">
             <div className="flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
@@ -242,6 +431,9 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
         </div>
       ) : (
         <>
+        {/* 演示态：账户没绑直播间，先摆真实绑定入口（上面那步讲的就是它），
+            下面再补一张虚拟房间 —— 否则「连接 / 断开」那一步对空账户是死的 */}
+        {demo && bindCard}
         {/* 更换直播间输入行 */}
         {switching && (
           <div className="card">
@@ -266,6 +458,15 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
           </div>
         )}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+          {/* 演示标记：假房间必须一眼看得出来的假的，否则用户会以为自己真绑了直播间 */}
+          {demo && (
+            <div className="flex items-center gap-2 px-5 py-2.5 text-xs
+                            bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300
+                            border-b border-amber-200 dark:border-amber-800/60">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              演示用虚拟直播间「{room.room_name}」 —— 这里怎么点都不会影响你的账户
+            </div>
+          )}
           {/* 封面 */}
           {room.cover_url && (
             <div className="relative h-40 sm:h-52 bg-surface-100 dark:bg-surface-900">
@@ -356,19 +557,35 @@ export function LiveTab({ acc }: { acc: AccountSummary }) {
               </div>
             </div>
 
-            {/* 操作:启用即自动进入,停用即断开 */}
+            {/* 操作:启用即自动进入,停用即断开。
+                指引「连接 / 断开」那一步指的是**这一个按钮**，不是整行 —— 整行里还有
+                「更换直播间」「解绑」，锚点落在整行上的话，那两个会跟着一起漏出可点区 */}
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant={room.enabled ? 'secondary' : 'success'}
+                data-guide="lv-control"
+                // 只有虚拟房间才允许在指引里点。真实房间没有这个声明，照样挡住 ——
+                // 那里按一下「停用」就真的断开了
+                data-guide-clickable={demo ? '1' : undefined}
                 loading={processing === 'enable'} disabled={btn('enable')}
-                onClick={() => act('enable', () => room.enabled
-                  ? disableAccountLive(acc.id)
-                  : enableAccountLive(acc.id), room.enabled ? '直播间已停用' : '直播间已启用并自动进入')}>
+                onClick={() => {
+                  // 演示态只切本地状态：不请求、不落盘，纯粹给用户按着玩
+                  if (demo) {
+                    setRoom((r) => (r ? { ...r, enabled: !r.enabled, is_connected: !r.enabled } : r));
+                    return;
+                  }
+                  act('enable', () => room.enabled
+                    ? disableAccountLive(acc.id)
+                    : enableAccountLive(acc.id), room.enabled ? '直播间已停用' : '直播间已启用并自动进入');
+                }}>
                 {room.enabled ? '停用' : '启用'}
               </Button>
               <Button size="sm" variant="ghost" icon={<RefreshCw className="w-4 h-4" />}
                 loading={processing === 'refresh'} disabled={btn('refresh')}
                 onClick={() => act('refresh', () => refreshAccountLive(acc.id), '已刷新')} />
+              {/* 已绑定状态下，输入框本身是折叠的 —— 指到这里，用户看到的
+                  就是「换绑入口」，与未绑定时指向输入卡是同一个意思 */}
               <Button size="sm" variant="secondary" icon={<Radio className="w-4 h-4" />}
+                data-guide="lv-bind"
                 loading={processing === 'switch'} disabled={btn('switch')}
                 onClick={() => { setSwitching(!switching); setLiveIdInput(''); }}>
                 更换直播间
@@ -507,6 +724,14 @@ export function BotTab({ acc, onAccountChanged }: {
           <div className="flex gap-2">
             {(['public', 'private'] as const).map((m) => (
               <button key={m} onClick={() => switchMode(m)}
+                // 指引先指「自定义 Cookie」这一步 —— 换 Cookie 得先切过来，
+                // 而且这张卡始终在，比下面的 Cookie 表单卡可靠（公共模式没有那张）
+                data-guide={m === 'private' ? 'bt-mode' : undefined}
+                // 允许指引里点它：切到自定义**本来就只切本地视图、不发请求**
+                // （真正换 Cookie 是下面表单里点保存，那个按钮指引期间照旧挡住）。
+                // 「公共 Cookie」那个按钮**不能**放行 —— 它会弹二次确认框，而确认框
+                // 在蒙版之下（z-80 < 85），弹出来会既看不见也点不到，看着像卡死
+                data-guide-clickable={m === 'private' ? '1' : undefined}
                 className={
                   'flex-1 h-9 rounded-lg border text-sm transition-colors ' +
                   (mode === m
@@ -608,9 +833,11 @@ export function BotTab({ acc, onAccountChanged }: {
         </div>
       )}
 
-      {/* 自定义 Cookie 表单(含完整权限设置) */}
+      {/* 自定义 Cookie 表单(含完整权限设置)。
+          data-guide 指到这里：公共 Cookie 模式下这张卡不渲染，指引那一步会
+          退化成「只有文字、没有高亮」—— 可以接受，公共 Cookie 本来就换不了 */}
       {mode === 'private' && (
-        <div className="card">
+        <div className="card" data-guide="bt-cookie">
           <div className="card-header"><h3 className="font-semibold">{bot ? '更换 Cookie' : '配置自定义 Cookie'}</h3></div>
           <div className="card-body space-y-3">
             <textarea value={cookie} onChange={(e) => setCookie(e.target.value)} rows={3}
@@ -1012,14 +1239,17 @@ const PLUGIN_FILTERS = [
 ] as const;
 type PluginFilter = (typeof PLUGIN_FILTERS)[number]['id'];
 
-export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
+export function PluginsTab({ acc, pluginPageBase, onOpenLibrary, demo = false }: {
   acc: AccountSummary;
   pluginPageBase?: string;
   /** 提供时(管理端 Tab 模式)按钮切换回调;未提供时(账户门户)链接到 /account/library */
   onOpenLibrary?: () => void;
+  /** 指引期间为真：不拉账户真实插件，改摆固定的演示清单（见 DEMO_PLUGINS） */
+  demo?: boolean;
 }) {
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [libraryVersions, setLibraryVersions] = useState<Record<string, string>>({});
+  const demoInstalledNow = useDemoInstalled();
   const [filter, setFilter] = useState<PluginFilter>('all');
   const [kwRaw, setKwRaw] = useState('');
 
@@ -1053,6 +1283,16 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
   const [logHint, setLogHint] = useState('');
 
   const load = useCallback(async () => {
+    // 演示态：不拉账户真实的插件与库版本，直接摆一份固定清单 ——
+    // 指引那两步要有东西可指，账户自己装了什么不重要。
+    // 不拉库版本 = 卡片上不会出现「可更新」角标，演示态更干净
+    if (demo) {
+      // 只列「已安装」的演示插件 —— 用户刚在插件库装的那个，切过来就该出现在这儿
+      setPlugins(DEMO_PLUGINS.filter((p) => demoInstalled.has(p.name)));
+      setLibraryVersions({});
+      setLoading(false);
+      return;
+    }
     try {
       const [installed, library] = await Promise.all([
         fetchAccountPlugins(acc.id),
@@ -1069,6 +1309,11 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
   }, [acc.id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 演示态：列表跟着演示的「已安装」走 —— 用户刚在插件库装的插件，切过来就该在这儿
+  useEffect(() => {
+    if (demo) setPlugins(DEMO_PLUGINS.filter((p) => demoInstalledNow.has(p.name)));
+  }, [demo, demoInstalledNow]);
 
   const act = async (key: string, fn: () => Promise<unknown>, okMsg: string) => {
     setProcessing(key);
@@ -1141,6 +1386,7 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
 
   return (
     <div className="space-y-4">
+      {demo && <DemoBanner what="演示用插件清单 —— 这里显示的不是你账户里真实安装的插件" />}
       {/* 头部 */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -1187,7 +1433,7 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-guide="pg-list">
           {visible.map((p) => (
             <div key={p.name}
               className="relative bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
@@ -1204,11 +1450,23 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                       {p.has_ui ? (
                         <Link
                           to={`${pluginPageBase ?? '/account/plugin'}/${p.name}/page`}
-                          className="group/link inline-flex items-center gap-2 rounded
+                          // 锚点挂在这个 <Link> 上，**不能**挂到外层卡片：卡片的
+                          // 拉伸 ::after 虽然让整张卡看着可点，但卡片里还嵌着启用开关
+                          // 和那几个图标按钮 —— 锚点落在卡片上，指引给卡片开的那个可点
+                          // 的洞就会把它们一起放出去，点一下就真的打接口了。
+                          // 挂在这儿，洞就只有插件名那一块，正好是「点它进主页」
+                          data-guide={p.has_ui ? 'pg-page' : undefined}
+                          data-guide-clickable={demo ? '1' : undefined}
+                          // 指引期间**撤掉**那条拉伸覆盖整卡的 ::after：卡片的可点区
+                          // 这时只剩蒙版开的那一个洞，拉伸链接不起好作用，只会闯祸 ——
+                          // 洞是按矩形算的（比目标外扩一圈），按钮又是圆角，这两处
+                          // 漏出去的点全落在它上面：用户点「详情」稍微点歪就进了插件主页
+                          className={`group/link inline-flex items-center gap-2 rounded
                                      hover:text-primary-600 dark:hover:text-primary-400
                                      transition-colors focus:outline-none focus-visible:ring-2
                                      focus-visible:ring-primary-500 focus-visible:ring-offset-2
-                                     dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
+                                     dark:focus-visible:ring-offset-gray-800
+                                     ${demo ? '' : 'after:absolute after:inset-0'}`}
                         >
                           <MarqueeText text={p.display_name || p.name} />
                           {/* 「插件主页」这几个字比光一个图标说得清楚：只放图标时，
@@ -1290,8 +1548,12 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
                       loading={processing === `update-${p.name}`} disabled={processing === `update-${p.name}`}
                       onClick={() => act(`update-${p.name}`, () => updateAccountPlugin(acc.id, p.name), '已更新到库版本')} />
                   )}
-                  <IconBtn icon={<Eye className="w-3.5 h-3.5" />} label="基本信息" onClick={() => openDrawer(p.name, 'info')} />
-                  <IconBtn icon={<SettingsIcon />} label="配置" onClick={() => openDrawer(p.name, 'config')} />
+                  <IconBtn icon={<Eye className="w-3.5 h-3.5" />} label="基本信息"
+                    data-guide="pg-info" data-guide-clickable={demo ? '1' : undefined}
+                    onClick={() => openDrawer(p.name, 'info')} />
+                  <IconBtn icon={<SettingsIcon />} label="配置"
+                    data-guide="pg-config" data-guide-clickable={demo ? '1' : undefined}
+                    onClick={() => openDrawer(p.name, 'config')} />
                   <IconBtn icon={<RefreshCw className="w-3.5 h-3.5" />} label="重载"
                     loading={processing === `reload-${p.name}`} disabled={processing === `reload-${p.name}`}
                     onClick={() => act(`reload-${p.name}`, () => reloadAccountPlugin(acc.id, p.name), '已重载')} />
@@ -1313,6 +1575,8 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
           open
           accountId={acc.id}
           initialTab={drawerTarget.tab}
+          // 演示态喂假详情：演示插件名在账户里不存在，照常去拉会 404
+          demoDetail={demo ? makeDemoPluginDetail(drawerTarget.name) : null}
           onClose={() => setDrawerTarget(null)}
           onUpdate={load}
         />
@@ -1391,15 +1655,17 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary }: {
 }
 
 /** 底部图标按钮(v1.0.1 样式:ghost + 悬浮提示) */
-function IconBtn({ icon, label, onClick, loading, disabled }: {
+/** `...rest` 透传是为了让操作指引能往上挂 data-guide / data-guide-clickable */
+function IconBtn({ icon, label, onClick, loading, disabled, ...rest }: {
   icon: React.ReactNode;
   label: string;
   onClick?: () => void;
   loading?: boolean;
   disabled?: boolean;
-}) {
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
+      {...rest}
       onClick={onClick}
       disabled={disabled}
       className="relative group inline-flex items-center justify-center font-medium rounded-lg
@@ -1441,7 +1707,11 @@ function BookOpenIcon() {
 // 账户持有者门户与管理端账户详情共用。
 // ================================================================== //
 
-export function LibraryTab({ acc }: { acc: AccountSummary }) {
+export function LibraryTab({ acc, demo = false }: {
+  acc: AccountSummary;
+  /** 指引期间为真：不拉真实插件库，改摆固定的演示清单（见 DEMO_LIBRARY） */
+  demo?: boolean;
+}) {
   const [library, setLibrary] = useState<LibraryPlugin[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
@@ -1463,14 +1733,36 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
     });
   }, [library, libKw, libFilter]);
 
+  const demoInstalledNow = useDemoInstalled();
+
   const load = useCallback(async () => {
+    // 演示态：不拉真实插件库，直接摆一份固定清单 —— 空库会让「插件库」那一步没东西可指。
+    // 「是否已安装」读的是演示状态，不是数据里写死的那份
+    if (demo) {
+      setLibrary(DEMO_LIBRARY.map((p) => ({ ...p, installed: demoInstalled.has(p.name) })));
+      setLoading(false);
+      return;
+    }
     try {
       setLibrary(await fetchAccountLibrary(acc.id));
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, [acc.id]);
+  }, [acc.id, demo]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 每次进这一页都把演示进度重置：重看指引时要从「还没装」从头演，
+  // 否则上一次装过的还留着，那一步就没得演了。
+  // （指引期间导航是挡着的，用户不会中途回到这页，所以不会误reset 掉刚装的）
+  useEffect(() => {
+    if (demo) setDemoInstalled(new Set(DEMO_INITIAL_INSTALLED));
+  }, [demo]);
+
+  // 用户点了「安装」之后，把「已安装」反映到列表上
+  useEffect(() => {
+    if (!demo) return;
+    setLibrary(DEMO_LIBRARY.map((p) => ({ ...p, installed: demoInstalledNow.has(p.name) })));
+  }, [demo, demoInstalledNow]);
 
   /**
    * 刚写入、但父组件的 acc 还没刷新到的值；null 表示没有未决改动。
@@ -1510,6 +1802,7 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
 
   return (
     <div className="space-y-6">
+      {demo && <DemoBanner what="演示用插件库清单 —— 这里显示的不是面板上真实的插件库内容" />}
       {/* 头部 */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -1568,7 +1861,7 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
           </p>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-guide="lb-list">
           {libFiltered.map((p) => (
             <div key={p.name}
               className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col">
@@ -1585,7 +1878,9 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
                       <span className="text-xs text-gray-400 dark:text-gray-500">{p.author}</span>
                     </div>
                   </div>
-                  <span className={
+                  {/* 这个角标是「装好了没」最直白的信号，指引拿它当那一步的完成判据 */}
+                  <span data-guide={demo && p.name === DEMO_INSTALL_NAME && p.installed ? 'lb-installed' : undefined}
+                    className={
                     'inline-flex items-center gap-1.5 rounded-full font-medium text-[10px] px-1.5 py-0 ' +
                     (p.installed
                       ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
@@ -1610,8 +1905,18 @@ export function LibraryTab({ acc }: { acc: AccountSummary }) {
                 </Button>
                 {!p.installed ? (
                   <Button size="sm" variant="success" icon={<Plus className="w-4 h-4" />}
+                    // 指引引导用户装的就是这一个（带插件主页的那个）。
+                    // 锚点与可点声明都只挂它一个 —— 别的卡的「安装」仍然点不动
+                    data-guide={demo && p.name === DEMO_INSTALL_NAME ? 'lb-install' : undefined}
+                    data-guide-clickable={demo && p.name === DEMO_INSTALL_NAME ? '1' : undefined}
                     loading={processing === p.name} disabled={processing === p.name}
                     onClick={async () => {
+                      // 演示态只改本地演示状态：不请求、不落盘
+                      if (demo) {
+                        setDemoInstalled(new Set(demoInstalled).add(p.name));
+                        showToast('success', `已安装 ${p.display_name || p.name}（演示，没有真的装）`, '');
+                        return;
+                      }
                       setProcessing(p.name);
                       try {
                         await installAccountPlugin(acc.id, p.name);

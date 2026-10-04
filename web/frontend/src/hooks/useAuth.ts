@@ -18,7 +18,7 @@ interface AuthState {
   mustChangePassword: boolean;
   /** 服务器更新后首次登录时非空,关闭弹窗并 ack 后清空 */
   pendingChangelog: PendingChangelog | null;
-  /** 账户角色还没看过「操作指引」—— 登录后自动跳过去，看过一次就不再跳 */
+  /** 账户角色还没看过「操作指引」—— 登录后在主页上浮一层蒙版，看过一次就不再浮 */
   showGuide: boolean;
 }
 
@@ -32,7 +32,7 @@ interface AuthContextType extends AuthState {
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   changePassword: (current: string, newPwd: string) => Promise<void>;
-  /** 看过指引后清掉标记，避免再点「/」时被重复跳转 */
+  /** 看过指引后清掉标记，免得这一轮会话里再浮一次 */
   clearShowGuide: () => void;
   loading: boolean;
 }
