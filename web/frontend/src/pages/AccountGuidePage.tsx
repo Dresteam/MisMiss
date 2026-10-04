@@ -1,30 +1,33 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot as BotIcon, Radio, Puzzle, Clock, Loader2 } from 'lucide-react';
+import {
+  Bot as BotIcon, Radio, Puzzle, Clock, LayoutDashboard, KeyRound, Loader2,
+} from 'lucide-react';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
 import { useAuth } from '../hooks/useAuth';
 
-/** 模拟界面的分页 —— 与账户端真实标签页一一对应 */
-type MockPage = 'overview' | 'live' | 'bot' | 'plugins' | 'library';
+/** 模拟界面的分页 —— 与账户端左侧导航一一对应 */
+type DemoPage = 'overview' | 'live' | 'bot' | 'timer' | 'plugins' | 'library';
 
-const MOCK_TABS: { key: MockPage; label: string }[] = [
-  { key: 'overview', label: '概览' },
-  { key: 'live', label: '直播间' },
-  { key: 'bot', label: 'Bot' },
-  { key: 'plugins', label: '插件' },
-  { key: 'library', label: '插件库' },
+const DEMO_NAV: { key: DemoPage; label: string; icon: React.ReactNode }[] = [
+  { key: 'overview', label: '概览', icon: <LayoutDashboard className="w-4 h-4" /> },
+  { key: 'live', label: '直播间', icon: <Radio className="w-4 h-4" /> },
+  { key: 'bot', label: 'Bot', icon: <BotIcon className="w-4 h-4" /> },
+  { key: 'timer', label: '定时消息', icon: <Clock className="w-4 h-4" /> },
+  { key: 'plugins', label: '插件', icon: <Puzzle className="w-4 h-4" /> },
+  { key: 'library', label: '插件库', icon: <Puzzle className="w-4 h-4" /> },
 ];
 
 /**
- * 漫游步骤。`page` 是这一步所在的模拟分页，`target` 对应元素的 `data-guide`。
+ * 漫游步骤：`page` 是这一步所在的模拟分页，`target` 对应元素的 `data-guide`。
  *
  * ⚠️ **改了步骤或文案，记得把后端的 `GUIDE_VERSION` 加一**
  * （`src/core/account/manager.py`）。账户记录里存的是「已读版本」，不升版本
  * 老用户不会再被跳进来 —— 改文案的人多半只翻到这一个文件，提醒写在这儿。
  */
-const GUIDE_STEPS: { page: MockPage; target: string; title: string; body: string }[] = [
-  { page: 'overview', target: 'ov-bot', title: '概览 · 账户状态', body: '进来先看这四张卡：Bot 是否启用、直播间连着没有、插件启用了几个、订阅还剩多少天。' },
+const GUIDE_STEPS: { page: DemoPage; target: string; title: string; body: string }[] = [
+  { page: 'overview', target: 'ov-bot', title: '概览 · 账户状态', body: '进来先看这几张卡：Bot 是否启用、直播间连着没有、插件启用了几个、订阅还剩多少天。' },
   { page: 'overview', target: 'ov-bot-toggle', title: '启用 / 停用 Bot', body: '停用后这个账户的机器人整体停工 —— 定时消息与插件推送都会停。临时不想让它发言时用它。' },
   { page: 'overview', target: 'ov-redeem', title: '兑换码续期', body: '订阅快到期时点这里输入授权码；永久账户不需要续期。' },
   { page: 'live', target: 'lv-bind', title: '绑定直播间', body: '填入直播间 ID 或粘贴直播间链接即可绑定；已绑定的可以在这里换绑。' },
@@ -36,11 +39,12 @@ const GUIDE_STEPS: { page: MockPage; target: string; title: string; body: string
 ];
 
 /**
- * 账户端「操作指引」—— 一页**模拟界面**（带分页）+ 蒙版逐步高亮。
+ * 账户端「操作指引」—— 模拟界面 + 左侧导航切换 + 蒙版逐步高亮。
  *
- * 之所以用模拟而非真实面板：列出的操作里有「兑换码续期」这类一旦真做就会
- * 消耗掉东西的动作，拿真实界面做演示不安全。这里的卡片与按钮全是摆设，
- * 点了不会发生任何事；漫游推进到下一步时，模拟界面会**自动切到对应的分页**。
+ * **全套都是本页的局部状态**：左侧导航、各页内容、按钮点击，都只改本组件的
+ * state，不发任何请求、碰不到真实账户。每次进入都从初始状态开始（组件重新
+ * 挂载即重置），所以过程中怎么点都没关系 —— 尤其是「兑换码续期」这类一旦
+ * 真做就会消耗掉东西的动作，拿真实界面演示是不安全的。
  *
  * 首次登录由 App 导到这里（见 useAuth 的 showGuide）；**只有点「跳过」或
  * 「完成」才算读过**，从侧栏溜走不算，下次进来仍会跳。
@@ -52,8 +56,14 @@ export function AccountGuidePage() {
   const [rect, setRect] = useState<DOMRect | null>(null);
   const acked = useRef(false);
 
+  // ---- 演示用的局部状态：全部随组件挂载重建，退出即丢弃 ----
+  const [botOn, setBotOn] = useState(true);
+  const [bound, setBound] = useState(false);
+  const [connected, setConnected] = useState(false);
+
   const cur = GUIDE_STEPS[step];
   const isLast = step === GUIDE_STEPS.length - 1;
+  const demoPage = cur.page;
 
   const ack = useCallback(() => {
     if (acked.current || !auth.token) return;
@@ -71,28 +81,24 @@ export function AccountGuidePage() {
     navigate('/account/home');
   }, [ack, navigate]);
 
-  // 切到本步所在的模拟分页后再量目标 —— 用 layoutEffect 保证量的是渲染后的 DOM，
-  // 否则跨页的那一步会量到上一页残留（或量到空）。
-  useLayoutEffect(() => {
+  const measure = useCallback(() => {
     const el = document.querySelector(`[data-guide="${cur.target}"]`);
     setRect(el ? el.getBoundingClientRect() : null);
-  }, [step, cur.target]);
+  }, [cur.target]);
 
-  // 位置随滚动 / 窗口尺寸变化，遮罩要跟着走
+  // 切到本步所在分页后再量 —— layoutEffect 保证量的是渲染后的 DOM，
+  // 否则跨页那一步会量到上一页的残留坐标（或量到空，蒙版直接不出现）
+  useLayoutEffect(() => { measure(); }, [measure, step]);
+
   useEffect(() => {
-    const measure = () => {
-      const el = document.querySelector(`[data-guide="${cur.target}"]`);
-      setRect(el ? el.getBoundingClientRect() : null);
-    };
     window.addEventListener('resize', measure);
     window.addEventListener('scroll', measure, true);
     return () => {
       window.removeEventListener('resize', measure);
       window.removeEventListener('scroll', measure, true);
     };
-  }, [cur.target]);
+  }, [measure]);
 
-  // 换步后把页面滚回顶部，避免目标元素在视口外
   useEffect(() => { window.scrollTo({ top: 0 }); }, [step]);
 
   const PAD = 6;
@@ -113,8 +119,8 @@ export function AccountGuidePage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">操作指引</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            下面是一个<strong className="font-medium">模拟界面</strong>
-            ，只作演示，期间不会真的执行任何操作。
+            下面是<strong className="font-medium">模拟界面</strong>，怎么点都不会
+            影响你的账户；每次进来都会重置。
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -125,162 +131,197 @@ export function AccountGuidePage() {
         </div>
       </div>
 
-      {/* ---------- 模拟界面：与账户端同款分页结构，内容全是摆设 ---------- */}
-      <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
-        <div className="px-3 py-1.5 text-[11px] text-gray-400 dark:text-gray-500
-                        border-b border-dashed border-gray-300 dark:border-gray-600">
-          模拟界面 · 下方内容不会真实生效
+      {/* ---------- 模拟外壳：左侧导航 + 右侧内容，与账户端同款布局 ---------- */}
+      <div className="rounded-xl border-2 border-dashed border-amber-300 dark:border-amber-700/60
+                      overflow-hidden bg-white dark:bg-gray-800">
+        <div className="px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-500
+                        bg-amber-50 dark:bg-amber-900/20
+                        border-b border-dashed border-amber-300 dark:border-amber-700/60">
+          模拟界面 · 这里的操作只改本页状态，不会影响你的账户，退出即重置
         </div>
 
-        {/* 分页条：跟随当前步骤自动切换 */}
-        <div className="flex border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
-          {MOCK_TABS.map((t) => (
-            <span
-              key={t.key}
-              className={
-                'flex-1 shrink-0 px-3 py-2.5 text-center text-sm font-medium border-b-2 -mb-px whitespace-nowrap ' +
-                (t.key === cur.page
-                  ? 'border-primary-500 text-primary-600 dark:text-primary-400'
-                  : 'border-transparent text-gray-400 dark:text-gray-500')
-              }
-            >
-              {t.label}
-            </span>
-          ))}
-        </div>
+        <div className="flex min-h-[22rem]">
+          {/* 左栏导航 —— 点它切的是模拟分页，不是真路由 */}
+          <nav className="w-32 sm:w-40 shrink-0 border-r border-gray-200 dark:border-gray-700
+                          p-2 space-y-0.5 bg-gray-50 dark:bg-gray-900/40">
+            {DEMO_NAV.map((n) => (
+              <span key={n.key}
+                className={
+                  'flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm ' +
+                  (n.key === demoPage
+                    ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 font-medium'
+                    : 'text-gray-500 dark:text-gray-400')
+                }>
+                {n.icon}
+                <span className="truncate">{n.label}</span>
+              </span>
+            ))}
+          </nav>
 
-        <div className="p-4 space-y-4 min-h-[16rem]">
-          {cur.page === 'overview' && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="card" data-guide="ov-bot">
-                <div className="card-body">
-                  <div className="flex items-center justify-between">
+          {/* 右栏内容 */}
+          <div className="flex-1 min-w-0 p-4 space-y-4">
+            {demoPage === 'overview' && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="card" data-guide="ov-bot">
+                  <div className="card-body">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                        <BotIcon className="w-4 h-4" /> Bot 状态
+                      </span>
+                      <StatusBadge status={botOn ? 'enabled' : 'disabled'}
+                        label={botOn ? '已启用' : '已停用'} />
+                    </div>
+                    <p className="mt-2 font-semibold text-lg truncate">示例 Bot</p>
+                    <div className="mt-3" data-guide="ov-bot-toggle">
+                      {/* 只改本地状态，不发请求 */}
+                      <Button size="sm" variant="secondary" onClick={() => setBotOn((v) => !v)}>
+                        {botOn ? '停用 Bot' : '启用 Bot'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card-body">
                     <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                      <BotIcon className="w-4 h-4" /> Bot 状态
+                      <Radio className="w-4 h-4" /> 直播间
                     </span>
+                    <p className="mt-2 font-semibold text-lg truncate">
+                      {bound ? '示例直播间' : '未绑定'}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {bound ? (connected ? '已连接' : '已绑定 · 未连接') : '尚未绑定直播间'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <div className="card-body">
+                    <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                      <Puzzle className="w-4 h-4" /> 插件
+                    </span>
+                    <p className="mt-2 font-semibold text-lg">6 启用</p>
+                    <p className="text-xs text-gray-400 mt-1">共 10 个插件</p>
+                  </div>
+                </div>
+
+                <div className="card" data-guide="ov-redeem">
+                  <div className="card-body">
+                    <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                      <KeyRound className="w-4 h-4" /> 订阅
+                    </span>
+                    <p className="mt-2 font-semibold text-lg">剩余 30 天</p>
+                    <div className="mt-3">
+                      <Button size="sm" variant="secondary">兑换授权码</Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {demoPage === 'live' && (
+              <>
+                <div className="card" data-guide="lv-bind">
+                  <div className="card-header"><h3 className="font-semibold">绑定直播间</h3></div>
+                  <div className="card-body space-y-3">
+                    <div className="h-9 rounded-lg border border-gray-300 dark:border-gray-600
+                                    px-3 flex items-center text-sm text-gray-400 dark:text-gray-500">
+                      直播间 ID 或链接
+                    </div>
+                    <Button size="sm" variant="secondary" onClick={() => setBound(true)}>
+                      绑定
+                    </Button>
+                  </div>
+                </div>
+                <div className="card" data-guide="lv-control">
+                  <div className="card-header"><h3 className="font-semibold">连接控制</h3></div>
+                  <div className="card-body flex flex-wrap gap-2">
+                    <Button size="sm" variant="secondary" disabled={!bound}
+                      onClick={() => setConnected(true)}>
+                      连接直播间
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={!connected}
+                      onClick={() => setConnected(false)}>
+                      断开
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {demoPage === 'bot' && (
+              <div className="card" data-guide="bt-cookie">
+                <div className="card-header"><h3 className="font-semibold">Cookie</h3></div>
+                <div className="card-body space-y-2 text-sm">
+                  <p className="text-gray-600 dark:text-gray-300">私有 Cookie · 有效</p>
+                  <p className="text-xs text-gray-400">用面板给的书签脚本一键取回新 Cookie</p>
+                  <div className="pt-1">
+                    <Button size="sm" variant="secondary">更换 Cookie</Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {demoPage === 'timer' && (
+              <div className="card">
+                <div className="card-header"><h3 className="font-semibold">定时消息</h3></div>
+                <div className="card-body text-sm text-gray-600 dark:text-gray-300">
+                  按间隔轮播的消息，可调整间隔、上下移动顺序、复制或删除。
+                </div>
+              </div>
+            )}
+
+            {demoPage === 'plugins' && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="card" data-guide="pg-list">
+                  <div className="card-header flex items-center justify-between">
+                    <h3 className="font-semibold">欢迎插件</h3>
                     <StatusBadge status="enabled" label="已启用" />
                   </div>
-                  <p className="mt-2 font-semibold text-lg truncate">示例 Bot</p>
-                  <div className="mt-3" data-guide="ov-bot-toggle">
-                    <Button size="sm" variant="secondary">停用 Bot</Button>
+                  <div className="card-body text-xs text-gray-500 dark:text-gray-400">
+                    新观众进入时发送欢迎语
+                  </div>
+                </div>
+                <div className="card" data-guide="pg-page">
+                  <div className="card-header flex items-center justify-between">
+                    <h3 className="font-semibold">点歌</h3>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">↗ 插件主页</span>
+                  </div>
+                  <div className="card-body text-xs text-gray-500 dark:text-gray-400">
+                    观众发「点歌 歌名」即可点播
                   </div>
                 </div>
               </div>
-              <div className="card">
-                <div className="card-body">
-                  <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                    <Radio className="w-4 h-4" /> 直播间
-                  </span>
-                  <p className="mt-2 font-semibold text-lg truncate">示例直播间</p>
-                  <p className="text-xs text-gray-400 mt-1">已绑定 · 已连接</p>
+            )}
+
+            {demoPage === 'library' && (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="card" data-guide="lb-list">
+                  <div className="card-header flex items-center justify-between">
+                    <h3 className="font-semibold">礼物答谢</h3>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">v1.3.6</span>
+                  </div>
+                  <div className="card-body text-xs text-gray-500 dark:text-gray-400">
+                    收到礼物时自动致谢
+                  </div>
                 </div>
-              </div>
-              <div className="card">
-                <div className="card-body">
-                  <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                    <Puzzle className="w-4 h-4" /> 插件
-                  </span>
-                  <p className="mt-2 font-semibold text-lg">6 启用</p>
-                  <p className="text-xs text-gray-400 mt-1">共 10 个插件</p>
-                </div>
-              </div>
-              <div className="card" data-guide="ov-redeem">
-                <div className="card-body">
-                  <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                    <Clock className="w-4 h-4" /> 订阅
-                  </span>
-                  <p className="mt-2 font-semibold text-lg">剩余 30 天</p>
-                  <div className="mt-3">
-                    <Button size="sm" variant="secondary">兑换授权码</Button>
+                <div className="card">
+                  <div className="card-header flex items-center justify-between">
+                    <h3 className="font-semibold">签到</h3>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">v1.0.2</span>
+                  </div>
+                  <div className="card-body text-xs text-gray-500 dark:text-gray-400">
+                    观众每日签到
                   </div>
                 </div>
               </div>
-            </div>
-          )}
-
-          {cur.page === 'live' && (
-            <>
-              <div className="card" data-guide="lv-bind">
-                <div className="card-header"><h3 className="font-semibold">绑定直播间</h3></div>
-                <div className="card-body space-y-3">
-                  <div className="h-9 rounded-lg border border-gray-300 dark:border-gray-600
-                                  px-3 flex items-center text-sm text-gray-400 dark:text-gray-500">
-                    直播间 ID 或链接
-                  </div>
-                  <Button size="sm" variant="secondary">绑定</Button>
-                </div>
-              </div>
-              <div className="card" data-guide="lv-control">
-                <div className="card-header"><h3 className="font-semibold">连接控制</h3></div>
-                <div className="card-body flex flex-wrap gap-2">
-                  <Button size="sm" variant="secondary">连接直播间</Button>
-                  <Button size="sm" variant="ghost">断开</Button>
-                </div>
-              </div>
-            </>
-          )}
-
-          {cur.page === 'bot' && (
-            <div className="card" data-guide="bt-cookie">
-              <div className="card-header"><h3 className="font-semibold">Cookie</h3></div>
-              <div className="card-body space-y-2 text-sm">
-                <p className="text-gray-600 dark:text-gray-300">私有 Cookie · 有效</p>
-                <p className="text-xs text-gray-400">用面板给的书签脚本一键取回新 Cookie</p>
-                <div className="pt-1"><Button size="sm" variant="secondary">更换 Cookie</Button></div>
-              </div>
-            </div>
-          )}
-
-          {cur.page === 'plugins' && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="card" data-guide="pg-list">
-                <div className="card-header flex items-center justify-between">
-                  <h3 className="font-semibold">欢迎插件</h3>
-                  <StatusBadge status="enabled" label="已启用" />
-                </div>
-                <div className="card-body text-xs text-gray-500 dark:text-gray-400">
-                  新观众进入时发送欢迎语
-                </div>
-              </div>
-              <div className="card" data-guide="pg-page">
-                <div className="card-header flex items-center justify-between">
-                  <h3 className="font-semibold">点歌</h3>
-                  <span className="text-xs text-gray-400 dark:text-gray-500">↗ 插件主页</span>
-                </div>
-                <div className="card-body text-xs text-gray-500 dark:text-gray-400">
-                  观众发「点歌 歌名」即可点播
-                </div>
-              </div>
-            </div>
-          )}
-
-          {cur.page === 'library' && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="card" data-guide="lb-list">
-                <div className="card-header flex items-center justify-between">
-                  <h3 className="font-semibold">礼物答谢</h3>
-                  <span className="text-xs text-gray-400 dark:text-gray-500">v1.3.6</span>
-                </div>
-                <div className="card-body text-xs text-gray-500 dark:text-gray-400">
-                  收到礼物时自动致谢
-                </div>
-              </div>
-              <div className="card">
-                <div className="card-header flex items-center justify-between">
-                  <h3 className="font-semibold">签到</h3>
-                  <span className="text-xs text-gray-400 dark:text-gray-500">v1.0.2</span>
-                </div>
-                <div className="card-body text-xs text-gray-500 dark:text-gray-400">
-                  观众每日签到
-                </div>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
 
       {/* ---------- 蒙版 + 提示卡 ---------- */}
-      {hole && (
+      {hole ? (
         <>
           {/* 用超大 box-shadow 造「四周变暗、中间留洞」：比 clip-path 稳 */}
           <div
@@ -322,10 +363,7 @@ export function AccountGuidePage() {
             </div>
           </div>
         </>
-      )}
-
-      {/* 空闲提示：目标还没量出来时（首帧）告诉用户下面可以点 */}
-      {!hole && (
+      ) : (
         <p className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1.5">
           <Loader2 className="w-3 h-3 animate-spin" /> 正在载入演示…
         </p>
