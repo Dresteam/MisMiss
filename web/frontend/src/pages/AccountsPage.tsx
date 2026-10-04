@@ -14,7 +14,7 @@ import type { AccountSummary, AccountCreateRequest, PanelOverview, RenewRequest 
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
-import { CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
+import { AccountCreatedDialog, CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
 import { CompensateDialog } from '../components/CompensateDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { SearchInput, FilterChips, FilterToggle, Pagination } from '../components/ListControls';
@@ -73,6 +73,10 @@ export function AccountsPage() {
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  /** 刚创建完的账户凭据 —— 面板不存明文密码，这是唯一一次能展示它的机会 */
+  const [createdInfo, setCreatedInfo] = useState<
+    { name: string; username: string; password: string } | null
+  >(null);
   const [renewTarget, setRenewTarget] = useState<AccountSummary | null>(null);
   const [renewMode, setRenewMode] = useState<'days' | 'set' | 'code' | 'permanent' | 'expire'>('days');
   const [renewing, setRenewing] = useState(false);
@@ -132,8 +136,15 @@ export function AccountsPage() {
     setCreating(true);
     try {
       const acc = await createAccount(data);
-      showToast('success', `账户「${acc.name}」已创建`, '');
       setCreateOpen(false);
+      // 面板只存密码哈希、不存明文 —— 创建这一刻输入框里的明文是唯一能拿到它的
+      // 时机，所以不再只是弹个 toast，而是把凭据摆出来供一次性复制
+      setCreatedInfo({
+        name: acc.name,
+        // 用提交值而非响应值：两者应当一致，但提交值才是用户真正看到并要复制的内容
+        username: data.username ?? '',
+        password: data.password ?? '',
+      });
       load();
     } catch (e: any) {
       showToast('error', '创建失败', e.message);
@@ -681,6 +692,14 @@ export function AccountsPage() {
         loading={runtimeBusy}
         onConfirm={runRuntimeIntent}
         onCancel={() => setRuntimeTarget(null)}
+      />
+
+      <AccountCreatedDialog
+        open={createdInfo !== null}
+        name={createdInfo?.name ?? ''}
+        username={createdInfo?.username ?? ''}
+        password={createdInfo?.password ?? ''}
+        onClose={() => setCreatedInfo(null)}
       />
 
       <ConfirmDialog

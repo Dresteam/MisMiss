@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Check, Copy, X } from 'lucide-react';
 import { Button } from './Button';
 import { checkUsername } from '../api/client';
+import { showToast } from '../hooks/useToast';
 import type { AccountCreateRequest, RenewRequest } from '../api/types';
 import { parseLiveId } from '../utils/live';
 
@@ -197,8 +198,107 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
 }
 
 // ================================================================== //
-// 续期 / 兑换对话框
+// 创建成功 —— 一次性展示凭据
 // ================================================================== //
+
+interface AccountCreatedDialogProps {
+  open: boolean;
+  name: string;
+  username: string;
+  /**
+   * 创建时**填入的明文**密码。
+   *
+   * 面板只保存 sha256、不存明文，所以这是唯一一次能拿到它的机会；
+   * 留空表示密码由后端随机生成，连创建方也不知道，只能事后重置。
+   */
+  password: string;
+  onClose: () => void;
+}
+
+/**
+ * 账户创建成功后的凭据展示窗。
+ *
+ * 之所以在这里给「复制」：面板刻意不保存明文密码（只存哈希），创建这一刻
+ * 输入框里的明文是**唯一**能拿到它的时机，错过就只能重置。
+ */
+export function AccountCreatedDialog({
+  open, name, username, password, onClose,
+}: AccountCreatedDialogProps) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => { if (open) setCopied(false); }, [open]);
+  if (!open) return null;
+
+  const loginUrl = window.location.origin;
+  const lines = [
+    'MisMiss 账户登录信息',
+    `账户：${name}`,
+    `用户名：${username}`,
+    password ? `密码：${password}` : '密码：（由系统随机生成，面板不保存，请用「重置凭据」另设）',
+    `登录网址：${loginUrl}`,
+  ];
+  const text = lines.join('\n');
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      // clipboard 需要安全上下文（https 或 localhost）；纯 http 的内网地址会失败
+      showToast('error', '复制失败', '请手动选中下面的内容复制');
+    }
+  };
+
+  const Row = ({ label, value, mono }: { label: string; value: string; mono?: boolean }) => (
+    <div className="flex gap-3 py-1.5">
+      <span className="w-16 shrink-0 text-sm text-gray-500 dark:text-gray-400">{label}</span>
+      <span className={`min-w-0 break-all text-sm ${mono ? 'font-mono' : ''} text-gray-900 dark:text-gray-100`}>
+        {value}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={onClose} />
+      <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 animate-slide-in-up">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h3 className="font-semibold text-gray-900 dark:text-white">账户已创建</h3>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <div className="rounded-lg bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 px-3 py-1.5">
+            <Row label="账户" value={name} />
+            <Row label="用户名" value={username} mono />
+            <Row label="密码" value={password || '（见下方说明）'} mono={!!password} />
+            <Row label="登录网址" value={loginUrl} mono />
+          </div>
+
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {password
+              ? '面板不保存明文密码，关闭本窗口后就看不到了 —— 请现在复制给对方。'
+              : '创建时未填密码，系统已随机生成一个，面板同样不保存 —— 该账户请用「重置凭据」另设密码。'}
+          </p>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="ghost" onClick={onClose}>完成</Button>
+            <Button variant="primary" onClick={copy}
+              icon={copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}>
+              {copied ? '已复制' : '复制信息'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================== //
+// 续期 / 兑换对话框
+// ================================================================== ////
 
 interface RenewDialogProps {
   open: boolean;
