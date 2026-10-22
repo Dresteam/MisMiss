@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
-import json
 import logging
 import asyncio
 from pathlib import Path
@@ -104,13 +104,10 @@ async def get_log_level():
     """获取当前 loguru 和 stdlib 的日志等级。"""
     levels = {}
 
-    # loguru
-    try:
-        from loguru import logger as _loguru_logger
-        # loguru 没有直接获取全局 level 的方法，返回每个 handler 的信息
-        levels["loguru"] = "active"
-    except ImportError:
-        levels["loguru"] = "not installed"
+    # loguru（只探测可导入性，不实际记录）
+    levels["loguru"] = (
+        "active" if importlib.util.find_spec("loguru") is not None else "not installed"
+    )
 
     # stdlib root logger
     root = logging.getLogger()

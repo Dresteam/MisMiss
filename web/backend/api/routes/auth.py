@@ -13,8 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Header
 
 from core.account import DEFAULT_ACCOUNT_PASSWORD
 from core.version import CURRENT_VERSION, load_changelog
@@ -300,11 +299,18 @@ async def login(body: dict):
 
 @router.post("/auth/change-password")
 async def change_password(body: dict):
-    """修改用户名和/或密码。"""
+    """修改面板管理员的用户名和/或密码。
+
+    ⚠️ 这是**面板管理员**的凭据接口，必须显式校验角色。``/api/auth/*`` 整体
+    在认证中间件的放行名单里，若只验 token 有效，任意账户令牌都能改掉管理员的
+    用户名/密码（first_login 期间甚至免原密码）。
+    """
     token = body.get("token", "")
-    user = verify_token(token)
-    if not user:
+    info = token_info(token)
+    if info is None:
         raise HTTPException(status_code=401, detail="未登录")
+    if info.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅面板管理员可修改面板凭据")
 
     current = body.get("current_password", "")
     new_username = body.get("new_username", "").strip()
@@ -365,8 +371,18 @@ async def check_auth(authorization: str = Header(default="")):
 
 
 @router.post("/auth/skip-first-login")
-async def skip_first_login():
-    """跳过首次登录的密码修改提示（标记 first_login=False）。"""
+async def skip_first_login(authorization: str = Header(default="")):
+    """跳过首次登录的密码修改提示（标记 first_login=False）。
+
+    路径在 PUBLIC_PATHS 里（中间件不鉴权），所以这里必须自己验：只允许
+    管理员令牌。否则任何匿名请求都能把全局首登改密提示关掉。
+    """
+    token = authorization.removeprefix("Bearer ")
+    info = token_info(token) if token else None
+    if info is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if info.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅面板管理员可跳过首登引导")
     auth = _load_auth()
     auth["first_login"] = False
     _save_auth(auth)

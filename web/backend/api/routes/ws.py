@@ -150,6 +150,30 @@ class RingBuffer:
                 len(all_entries),
             )
 
+    def get_after(
+        self,
+        since_seq: int,
+        limit: int = 500,
+        levels: set[str] | None = None,
+        plugin_only: bool = False,
+        accounts: list[str] | None = None,
+    ) -> list[dict]:
+        """获取 seq_id **大于** ``since_seq`` 的日志（断线补发用）。
+
+        与 :meth:`get_since`（向上翻页、取更早的日志）方向相反：
+        客户端重连时带的是**已收到的最大 seq**，要补的是它之后的新日志。
+        两者混用会让补发内容全是旧日志，被前端按 seq 去重后整段丢弃。
+        """
+        with self._lock:
+            entries = [e for e in self._buffer if e.seq_id > since_seq]
+            if levels:
+                entries = [e for e in entries if e.level in levels]
+            if plugin_only:
+                entries = [e for e in entries if _is_plugin_source(e.path)]
+            if accounts is not None:
+                entries = [e for e in entries if e.account in accounts]
+            return [_entry_to_dict(e) for e in entries[:limit]]
+
     def get_range(self, from_seq: int, to_seq: int) -> list[dict] | None:
         """获取 [from_seq, to_seq] 范围内的日志。若数据已被淘汰返回 None。"""
         with self._lock:
@@ -462,7 +486,7 @@ async def websocket_endpoint(ws: WebSocket):
 
     # 断线补发（按级别与账户过滤，批量单帧）
     if last_seq > 0:
-        gap, _, _ = _buffer.get_since(
+        gap = _buffer.get_after(
             last_seq, limit=500, levels=level_set, accounts=account_filter,
         )
         if gap:

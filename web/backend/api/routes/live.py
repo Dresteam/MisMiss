@@ -22,7 +22,6 @@ from api.schemas import (
     LiveAddRequest,
     LiveMessageRequest,
     LivestreamInfo,
-    LiveListResponse,
     StatusResponse,
 )
 
@@ -39,6 +38,19 @@ def _safe_creator_name(live) -> str:
         return live.creator_name or ""
     except Exception:
         return ""
+
+
+def _safe_creator_id(live) -> int:
+    """取主播 ID；与 :func:`_safe_creator_name` 同理。
+
+    ⚠️ 不能用 ``getattr(live, "creator_id", 0)`——``getattr`` 的默认值只在
+    属性不存在（AttributeError）时生效，而 ``creator_id`` 是转发 ``creator`` 的
+    property，未 join 时抛的是 ``CoreApiException``，会一路冒成 500。
+    """
+    try:
+        return int(live.creator_id or 0)
+    except Exception:
+        return 0
 
 
 def _live_to_info(live) -> LivestreamInfo:
@@ -71,7 +83,7 @@ def _live_to_info(live) -> LivestreamInfo:
         score=getattr(live, "score", 0) or 0,
         online_count=getattr(live, "online_count", 0) or 0,
         creator_name=_safe_creator_name(live),
-        creator_id=getattr(live, "creator_id", 0) or 0,
+        creator_id=_safe_creator_id(live),
         creator_is_online=creator_online,
         is_connected=live.is_connected,
         enabled=live.enabled,

@@ -14,11 +14,12 @@ import { useGuideActive } from '../components/GuideOverlay';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { RenewDialog } from '../components/AccountDialogs';
+import { MarqueeText } from '../components/MarqueeText';
 import { useAuth } from '../hooks/useAuth';
 import { AccountPasswordForm } from '../components/AccountPasswordForm';
 import { showToast } from '../hooks/useToast';
 import {
-  OverviewTab, LiveTab, BotTab, TimerTab, PluginsTab, LibraryTab,
+  OverviewTab, LiveTab, BotTab, TimerTab, PluginsTab, LibraryTab, ExpiryNoticeSwitch,
 } from './AccountDetailPage';
 
 // ================================================================== //
@@ -98,18 +99,24 @@ export function AccountOverviewPage() {
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl">
       {/* 头部 */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <h1 className="text-2xl font-bold">{acc.name}</h1>
-        <span className={
-          'rounded-full px-2 py-0.5 text-xs font-medium ' +
-          (acc.bot_public
-            ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-            : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300')
-        }>
-          {acc.bot_public ? '公共 Bot' : '私有 Bot'}
-        </span>
-        <ExpiryBadge expiresAt={acc.expires_at} pausedReason={acc.paused_reason} />
-        <div className="ml-auto" data-guide="ov-redeem">
+      {/* 不换行：账户名一长，名字 /「公共 Bot」/「剩余 N 天」就会折成两行。
+          改成名字在剩余宽度里自己滚动，其余元素 shrink-0 固定不缩 */}
+      <div className="flex items-center gap-2">
+        <h1 className="text-2xl font-bold min-w-0 flex-1">
+          <MarqueeText text={acc.name} />
+        </h1>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={
+            'rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ' +
+            (acc.bot_public
+              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+              : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300')
+          }>
+            {acc.bot_public ? '公共 Bot' : '私有 Bot'}
+          </span>
+          <ExpiryBadge expiresAt={acc.expires_at} pausedReason={acc.paused_reason} />
+        </div>
+        <div className="shrink-0" data-guide="ov-redeem">
           <Button size="sm" variant="secondary" icon={<KeyRound className="w-4 h-4" />}
             onClick={() => setRedeemOpen(true)}>
             兑换授权码
@@ -218,6 +225,20 @@ export function AccountOverviewPage() {
           {acc.resume_error}
         </div>
       )}
+
+      {/* 账户偏好 */}
+      <div className="card">
+        <div className="card-header"><h3 className="font-semibold">账户偏好</h3></div>
+        <div className="card-body flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm text-gray-700 dark:text-gray-200">开播临期提示</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              开播时若剩余有效期不足 3 天，自动在本直播间发一条续期提醒。默认开启
+            </p>
+          </div>
+          <ExpiryNoticeSwitch acc={acc} />
+        </div>
+      </div>
 
       {/* 兑换授权码 */}
       <RenewDialog

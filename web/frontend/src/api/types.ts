@@ -225,6 +225,10 @@ export interface AccountSummary {
   notice?: string | null;
   /** 账户级偏好：从插件库安装插件后是否自动启用（默认关闭） */
   auto_enable_on_install: boolean;
+  /** 管理端备注（仅面板可见，不参与登录） */
+  remark: string;
+  /** 开播时剩余不足 3 天是否发送临期提示（默认开启） */
+  expiry_notice_enabled: boolean;
 }
 
 export interface HelperTokenResponse {
@@ -266,6 +270,10 @@ export interface AccountUpdateRequest {
   room_id?: number | null;
   bot_mode?: 'private' | 'public';
   cookie?: string;
+  /** 管理端备注（仅面板可见） */
+  remark?: string;
+  /** 开播时剩余不足 3 天是否发送临期提示 */
+  expiry_notice_enabled?: boolean;
 }
 
 export interface RenewRequest {

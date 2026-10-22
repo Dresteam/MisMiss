@@ -32,8 +32,10 @@ from core.exceptions import (
     CoreApiException,
     CoreCookieException,
     CoreLicenseException,
+    CorePluginInstallException,
 )
 from core.logging import get_logger, reset_account, set_account
+from core.plugin.plugin_manager import _validate_plugin_name
 from core.server import MissevanServer
 from core.version import CURRENT_VERSION
 
@@ -102,6 +104,18 @@ def _safe_creator_intro(room: Any) -> str:
         return ""
 
 
+def _checked_plugin_name(name: str) -> str:
+    """校验来自 API / panel.json 的插件名。
+
+    插件名会直接参与 ``os.path.join`` 与 ``rmtree``：``".."`` 能删掉整个账户目录，
+    绝对路径能让 ``join`` 丢掉前缀。统一在这里转成 ``ValueError``，路由按 400 处理。
+    """
+    try:
+        return _validate_plugin_name(name)
+    except CorePluginInstallException as e:
+        raise ValueError(str(e)) from e
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -138,6 +152,10 @@ class AccountRecord:
     guide_seen_version: str = ""
     # 从插件库安装插件后是否自动启用（账户级偏好，默认关闭）
     auto_enable_on_install: bool = False
+    # 管理端备注（仅面板可见，不参与登录，也不进任何平台请求）
+    remark: str = ""
+    # 开播时若剩余有效期不足 3 天，是否发送一条临期提示（默认开启）
+    expiry_notice_enabled: bool = True
 
     @property
     def is_permanent(self) -> bool:
@@ -179,6 +197,8 @@ class AccountRecord:
             "seen_changelog_version": self.seen_changelog_version,
             "guide_seen_version": self.guide_seen_version,
             "auto_enable_on_install": self.auto_enable_on_install,
+            "remark": self.remark,
+            "expiry_notice_enabled": self.expiry_notice_enabled,
         }
 
     @classmethod
@@ -199,6 +219,9 @@ class AccountRecord:
             seen_changelog_version=str(d.get("seen_changelog_version", "")),
             guide_seen_version=str(d.get("guide_seen_version", "")),
             auto_enable_on_install=bool(d.get("auto_enable_on_install", False)),
+            remark=str(d.get("remark", "") or ""),
+            # 老账户没有这个键：默认开启（功能上线即生效），显式 False 才关闭
+            expiry_notice_enabled=bool(d.get("expiry_notice_enabled", True)),
         )
 
 
@@ -219,7 +242,10 @@ class AccountManager:
         try:
             from core.network.throttle import gate
 
-            gate.configure(self._config.get_float("ratelimit.min_interval", 0.1))
+            gate.configure(
+                self._config.get_float("ratelimit.min_interval", 0.1),
+                self._config.get_int("ratelimit.max_concurrency", 3),
+            )
         except Exception as e:  # pragma: no cover - 配置异常不该拖垮启动
             _log.warning("出站限速配置失败，沿用默认值: {}", e)
         self._panel_path: str = os.path.join(self._root_data_dir, _PANEL_FILE)
@@ -325,7 +351,6 @@ class AccountManager:
 
     def get_library_pm(self):
         if self._library_pm is None:
-            from core.command.router import CommandRouter
             from core.events.bus import EventBus
             from core.plugin.plugin_manager import PluginManager
             self._library_pm = PluginManager(
@@ -531,6 +556,35 @@ class AccountManager:
         _log.info("账户 {} 安装插件自动启用 = {}", rec.id, rec.auto_enable_on_install)
         return rec
 
+    def set_expiry_notice_enabled(
+        self, account_id: int, enabled: bool
+    ) -> AccountRecord:
+        """设置「开播时剩余不足 3 天就发临期提示」偏好（默认开启）。
+
+        可被管理员与账户本人关闭——提示是发给直播间观众的，要不要发应由
+        账户持有者决定。
+        """
+        rec = self.get_record(account_id)
+        if rec.expiry_notice_enabled == bool(enabled):
+            return rec
+        rec.expiry_notice_enabled = bool(enabled)
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        _log.info("账户 {} 开播临期提示 = {}", rec.id, rec.expiry_notice_enabled)
+        return rec
+
+    def set_remark(self, account_id: int, remark: str) -> AccountRecord:
+        """设置管理端备注（仅面板可见，不参与登录与平台请求）。"""
+        rec = self.get_record(account_id)
+        cleaned = (remark or "").strip()
+        if rec.remark == cleaned:
+            return rec
+        rec.remark = cleaned
+        rec.updated_at = _now_iso()
+        self._save_panel()
+        _log.info("账户 {} 备注已更新", rec.id)
+        return rec
+
     def get_record(self, account_id: int) -> AccountRecord:
         rec = self._records.get(int(account_id))
         if rec is None:
@@ -577,6 +631,8 @@ class AccountManager:
             "paused_reason": rec.paused_reason,
             "resume_error": rec.resume_error,
             "auto_enable_on_install": rec.auto_enable_on_install,
+            "remark": rec.remark,
+            "expiry_notice_enabled": rec.expiry_notice_enabled,
         }
         if server is not None:
             bot = server.bot
@@ -941,6 +997,11 @@ class AccountManager:
 
         if "name" in fields and fields["name"]:
             rec.name = str(fields["name"]).strip()
+        # 备注允许清空：空串也要写回，不能按「有值才更新」处理
+        if "remark" in fields:
+            rec.remark = str(fields["remark"] or "").strip()
+        if "expiry_notice_enabled" in fields:
+            rec.expiry_notice_enabled = bool(fields["expiry_notice_enabled"])
 
         # 房间切换
         new_room = fields.get("room_id", rec.room_id)
@@ -1487,6 +1548,7 @@ class AccountManager:
         :raises ValueError: 账户已安装该插件
         """
         from core.exceptions import CorePluginNotFoundException
+        plugin_name = _checked_plugin_name(plugin_name)
         src = os.path.join("plugins", plugin_name)
         if not os.path.isdir(src):
             raise CorePluginNotFoundException(plugin_name)
@@ -1527,6 +1589,7 @@ class AccountManager:
         :raises CorePluginNotFoundException: 插件库或账户中不存在
         """
         from core.exceptions import CorePluginNotFoundException
+        plugin_name = _checked_plugin_name(plugin_name)
         src = os.path.join("plugins", plugin_name)
         if not os.path.isdir(src):
             raise CorePluginNotFoundException(plugin_name)
@@ -1580,6 +1643,7 @@ class AccountManager:
 
         lib_pm = self.get_library_pm()
         if plugin_name is not None:
+            plugin_name = _checked_plugin_name(plugin_name)
             lib_meta = lib_pm.get_plugin(plugin_name)
             if lib_meta is None:
                 raise CorePluginNotFoundException(plugin_name)
@@ -1791,6 +1855,7 @@ class AccountManager:
         两者独立，都不选时数据目录原样保留（重新安装即可续用）。
         """
         server = self.get_server(account_id)
+        plugin_name = _checked_plugin_name(plugin_name)
         pm = server._plugin_manager
         meta = pm.get_plugin(plugin_name)
         if meta is not None and meta.enabled:
@@ -1859,6 +1924,7 @@ class AccountManager:
 
     async def reload_plugin_in_accounts(self, plugin_name: str) -> None:
         """插件库更新后,重载各账户中已启用该插件的实例。"""
+        plugin_name = _checked_plugin_name(plugin_name)
         for rec in self.list_records():
             server = self._servers.get(rec.id)
             if server is None:
@@ -1887,6 +1953,7 @@ class AccountManager:
         账户私有副本独立运行不受影响;``disable_in_accounts=True`` 时
         额外停用各账户中已启用的该插件实例(副本保留,可重新启用)。
         """
+        plugin_name = _checked_plugin_name(plugin_name)
         if disable_in_accounts:
             for rec in self.list_records():
                 server = self._servers.get(rec.id)

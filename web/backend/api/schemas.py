@@ -234,6 +234,12 @@ class AccountUpdateRequest(BaseModel):
     room_id: int | None = Field(default=None, gt=0)
     bot_mode: str | None = Field(default=None, description="private | public")
     cookie: str | None = Field(default=None, description="切换 private 模式时的 Cookie")
+    remark: str | None = Field(
+        default=None, max_length=200, description="管理端备注（仅面板可见）"
+    )
+    expiry_notice_enabled: bool | None = Field(
+        default=None, description="开播时剩余不足 3 天是否发送临期提示"
+    )
 
 
 class AccountCredentialsRequest(BaseModel):
@@ -271,10 +277,13 @@ class RedeemRequest(BaseModel):
 
 
 class AccountPreferencesRequest(BaseModel):
-    """账户级偏好更新请求。"""
+    """账户级偏好更新请求（只提交要改的项）。"""
 
-    auto_enable_on_install: bool = Field(
-        ..., description="从插件库安装插件后是否自动启用"
+    auto_enable_on_install: bool | None = Field(
+        default=None, description="从插件库安装插件后是否自动启用"
+    )
+    expiry_notice_enabled: bool | None = Field(
+        default=None, description="开播时剩余不足 3 天是否发送临期提示"
     )
 
 
@@ -308,6 +317,10 @@ class AccountSummary(BaseModel):
     notice: str | None = None
     # 账户级偏好：从插件库安装插件后是否自动启用（默认关闭）
     auto_enable_on_install: bool = False
+    # 管理端备注（仅面板可见）
+    remark: str = ""
+    # 开播时剩余不足 3 天是否发送临期提示（默认开启）
+    expiry_notice_enabled: bool = True
     enabled_plugin_count: int = 0
     timer_message_count: int = 0
     normal_timer_message_count: int = 0

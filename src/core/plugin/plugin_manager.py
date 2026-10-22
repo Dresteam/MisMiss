@@ -11,8 +11,10 @@ import hashlib
 import importlib
 import importlib.util
 import os
+import re
 import shutil
 import sys
+import tarfile
 import tempfile
 import urllib.error
 import urllib.request
@@ -39,6 +41,7 @@ from interfaces.plugin.plugin import Plugin
 from interfaces.plugin.plugin_metadata import PluginMetadata
 
 if TYPE_CHECKING:
+    from fastapi import APIRouter
     from core.events.bus import EventBus
     from core.command.router import CommandRouter
 
@@ -53,6 +56,65 @@ _METADATA_FILENAMES = ("metadata.yaml", "metadata.yml")
 
 _CONF_SCHEMA_FILENAME = "_conf_schema.json"
 """配置 schema 文件名。"""
+
+# 插件名 / 目录名白名单。**这不是装饰**：`dir_name` 直接参与
+# `os.path.join(self._plugin_dir, dir_name)`，随后可能被 `rmtree` / `copytree`。
+# 放行 `.`、`/`、`\` 就等于允许 `name: "../../src/core"` 先删掉再覆写后端源码。
+_PLUGIN_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+$")
+
+
+def _validate_plugin_name(name: str) -> str:
+    """校验插件名/目录名，返回清理后的名字；非法时抛安装异常。"""
+    cleaned = (name or "").strip()
+    if (
+        not cleaned
+        or cleaned in (".", "..")
+        or not _PLUGIN_NAME_RE.fullmatch(cleaned)
+    ):
+        raise CorePluginInstallException(
+            cleaned or "?",
+            "插件名非法：只允许字母、数字、下划线、连字符与中文",
+        )
+    return cleaned
+
+
+def _safe_member_path(name: str) -> str | None:
+    """校验压缩包成员名，返回可安全落盘的相对路径；非法成员返回 ``None``。
+
+    拒绝绝对路径、``..`` 路径段与 Windows 盘符，防止 Zip Slip。
+    这是全项目**唯一**实现：面板路由读元数据与真正解压都走它，
+    避免「防护写在一层、真正落盘在另一层」被绕过。
+    """
+    rel = name.replace("\\", "/")
+    if not rel or rel.startswith("/") or rel.startswith("../"):
+        return None
+    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if not parts or any(p == ".." for p in parts):
+        return None
+    # Windows 盘符前缀（C:/ 或 C:foo）——在 Windows 上会被当作绝对路径
+    if len(parts[0]) >= 2 and parts[0][1] == ":":
+        return None
+    return "/".join(parts)
+
+
+def _safe_extract_zip(zip_path: str, dest: str) -> None:
+    """逐成员校验后解压 zip。
+
+    不使用 ``ZipFile.extractall``——它会直接采用归档内的成员名，
+    含 ``../`` 或绝对路径的成员可写出 dest 之外。非法成员静默跳过。
+    """
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for info in zf.infolist():
+            rel = _safe_member_path(info.filename)
+            if rel is None:
+                continue
+            target = os.path.join(dest, *rel.split("/"))
+            if info.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
 
 
 class PluginManager:
@@ -364,8 +426,17 @@ class PluginManager:
         # 兼容 desc/description 两种写法
         desc = str(data.get("desc") or data.get("description") or "").strip()
 
+        # 插件名会作为 `_plugins` 的键、插件数据目录名与 UI 路由前缀的一部分，
+        # 必须和目录名一样过白名单——否则 `name: "../../x"` 能把数据目录也带出去。
+        plugin_name = str(data["name"]).strip()
+        if not _PLUGIN_NAME_RE.fullmatch(plugin_name):
+            raise CorePluginMetadataException(
+                dir_name,
+                f"name 非法: {plugin_name!r}（只允许字母、数字、下划线、连字符与中文）",
+            )
+
         return PluginMetadata(
-            name=str(data["name"]).strip(),
+            name=plugin_name,
             author=str(data["author"]).strip(),
             desc=desc,
             version=str(data["version"]).strip(),
@@ -581,6 +652,30 @@ class PluginManager:
         if added:
             _log.info("本次扫描发现 {} 个新插件: {}", len(added), "、".join(added))
 
+    def _plugin_path(self, dir_name: str) -> str:
+        """把插件目录名解析成 ``_plugin_dir`` 内的绝对路径。
+
+        名字先过白名单，再用 ``realpath`` + ``commonpath`` 断言仍在插件根目录内；
+        两道校验缺一不可——白名单挡住 ``../``，realpath 挡住符号链接逃逸。
+        """
+        try:
+            name = _validate_plugin_name(dir_name)
+        except CorePluginInstallException as e:
+            raise CorePluginLoadException(dir_name, str(e))
+        root = os.path.realpath(self._plugin_dir)
+        path = os.path.realpath(os.path.join(root, name))
+        if os.path.commonpath([root, path]) != root:
+            raise CorePluginLoadException(dir_name, "插件目录越界")
+        return path
+
+    def _assert_plugin_path(self, plugin_path: str, dir_name: str) -> str:
+        """断言调用方传入的插件路径仍在本管理器的插件根目录内。"""
+        root = os.path.realpath(self._plugin_dir)
+        path = os.path.realpath(plugin_path)
+        if os.path.commonpath([root, path]) != root:
+            raise CorePluginLoadException(dir_name, "插件路径越界")
+        return path
+
     async def load_plugin(
         self,
         dir_name: str,
@@ -607,7 +702,9 @@ class PluginManager:
         :raises CorePluginDependencyException: 依赖安装失败
         """
         if plugin_path is None:
-            plugin_path = os.path.join(self._plugin_dir, dir_name)
+            plugin_path = self._plugin_path(dir_name)
+        else:
+            plugin_path = self._assert_plugin_path(plugin_path, dir_name)
 
         if not os.path.isdir(plugin_path):
             raise CorePluginLoadException(dir_name, "插件目录不存在")
@@ -674,7 +771,7 @@ class PluginManager:
             if inspect.isabstract(obj):
                 continue
             # 只取本模块定义的类
-            if obj.__module__ != module.__name__:
+            if getattr(obj, "__module__", "") != getattr(module, "__name__", ""):
                 continue
             candidates.append(obj)
 
@@ -743,7 +840,7 @@ class PluginManager:
 
         # 删除插件目录
         if delete_data and root_dir:
-            plugin_path = os.path.join(self._plugin_dir, root_dir)
+            plugin_path = self._plugin_path(root_dir)
             if os.path.isdir(plugin_path):
                 try:
                     shutil.rmtree(plugin_path)
@@ -776,22 +873,26 @@ class PluginManager:
         if dir_name is None:
             raise CorePluginLoadException(plugin_name, "root_dir_name 为空")
 
+        # 保存启停标记 —— **必须在 unload 之前读**：_unload_plugin_instance
+        # 会把 metadata.enabled 置 False，之后读到的永远是 False，
+        # 重载就会静默把插件停掉（只能靠调用方补 resume 兜底）。
+        was_enabled = metadata.enabled
+
         # 终止旧实例
         self._unload_plugin_instance(metadata)
 
         # 清除模块缓存
         self._purge_modules(metadata)
 
-        # 保存启停标记
-        was_enabled = metadata.enabled
-
         # 移除旧条目
         del self._plugins[plugin_name]
 
         # 重新加载（load_plugin 会重新检测 requirements.txt 变更）
         new_meta = await self.load_plugin(dir_name)
+        if new_meta is None:
+            raise CorePluginLoadException(dir_name, "重载后未能读取插件元数据")
         new_meta.enabled = was_enabled  # 恢复原标记
-        return new_meta  # type: ignore[return-value]
+        return new_meta
 
     # ------------------------------------------------------------------ #
     # 启用 / 禁用（启动 / 停止）
@@ -814,7 +915,7 @@ class PluginManager:
             # _finish_activation 失败会抛出 CorePluginLoadException
             return
 
-        plugin_path = os.path.join(self._plugin_dir, dir_name)
+        plugin_path = self._plugin_path(dir_name)
 
         # 安装依赖
         req = self._find_requirements(plugin_path)
@@ -1221,8 +1322,10 @@ class PluginManager:
             with tempfile.TemporaryDirectory() as tmpdir:
                 if os.path.isdir(zip_path):
                     # 本地目录：直接复制
-                    dir_name = os.path.basename(zip_path.rstrip("/\\"))
-                    dest = os.path.join(self._plugin_dir, dir_name)
+                    dir_name = _validate_plugin_name(
+                        os.path.basename(zip_path.rstrip("/\\"))
+                    )
+                    dest = self._plugin_path(dir_name)
                     if os.path.exists(dest):
                         shutil.rmtree(dest)
                     shutil.copytree(zip_path, dest)
@@ -1242,14 +1345,14 @@ class PluginManager:
                         )
                     # 取第一个非隐藏目录
                     src_dir = os.path.join(tmpdir, extracted_dirs[0])
-                    dir_name = extracted_dirs[0]
+                    dir_name = _validate_plugin_name(extracted_dirs[0])
 
                     # 读取 metadata 获取正式名称
                     canonical_name = self._read_plugin_name_from_dir(src_dir)
                     if canonical_name:
-                        dir_name = canonical_name
+                        dir_name = _validate_plugin_name(canonical_name)
 
-                    dest = os.path.join(self._plugin_dir, dir_name)
+                    dest = self._plugin_path(dir_name)
                     if os.path.exists(dest):
                         shutil.rmtree(dest)
                     shutil.copytree(src_dir, dest)
@@ -1323,7 +1426,7 @@ class PluginManager:
 
     @staticmethod
     def _extract_archive(archive_path: str, dest_dir: str) -> None:
-        """解压 zip 或 tar.gz 到目标目录。
+        """解压 zip 或 tar.gz 到目标目录（逐成员校验，防 Zip Slip）。
 
         :param archive_path: 压缩包路径
         :param dest_dir: 目标目录
@@ -1331,13 +1434,11 @@ class PluginManager:
         """
         try:
             if archive_path.endswith((".tar.gz", ".tgz")):
-                import tarfile
-
+                # 3.12+ 的 data 过滤器会拒绝绝对路径、`..` 与指向包外的符号链接
                 with tarfile.open(archive_path, "r:gz") as tar:
-                    tar.extractall(dest_dir)
+                    tar.extractall(dest_dir, filter="data")
             else:
-                with zipfile.ZipFile(archive_path, "r") as zf:
-                    zf.extractall(dest_dir)
+                _safe_extract_zip(archive_path, dest_dir)
         except Exception as e:
             raise CorePluginInstallException("", f"解压失败: {e}")
 
@@ -1475,6 +1576,8 @@ class PluginManager:
         :return: 数据目录绝对路径
         """
         safe_name = plugin_name.replace("/", "_").replace("\\", "_")
+        if safe_name in ("", ".", ".."):
+            raise CorePluginNotFoundException(plugin_name)
         data_dir = os.path.join(self._plugin_data_dir, safe_name)
 
         # 迁移旧数据：data/{plugin_name}/ → data/plugins/{plugin_name}/
@@ -1500,6 +1603,8 @@ class PluginManager:
         :param plugin_name: 插件名称
         """
         safe_name = plugin_name.replace("/", "_").replace("\\", "_")
+        if safe_name in ("", ".", ".."):
+            raise CorePluginNotFoundException(plugin_name)
         data_dir = os.path.join(self._plugin_data_dir, safe_name)
         if os.path.isdir(data_dir):
             shutil.rmtree(data_dir)
@@ -1530,7 +1635,7 @@ class PluginManager:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _insert_plugin_routes(app, plugin_router: "APIRouter") -> None:  # noqa: F821
+    def _insert_plugin_routes(app, plugin_router: "APIRouter") -> None:
         """将插件 UI 路由注册到 FastAPI，确保优先于 SPA 兜底路由。
 
         FastAPI/Starlette 按路由列表顺序匹配（先匹配者胜）。

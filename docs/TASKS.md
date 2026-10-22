@@ -18,7 +18,13 @@
 
 ### S1 🔍已复核 — 插件 zip 解压 Zip Slip + 目录穿越删除
 
-- [ ] 修复 `_extract_archive` 的裸 `extractall`
+> ✅ 已修复（v1.5.2）：`_safe_member_path` / `_safe_extract_zip` 已下沉到
+> `core/plugin/plugin_manager.py` 作为唯一实现，zip 逐成员校验、tar 走
+> `filter="data"`；插件名（metadata 与 API 入参）统一过白名单，
+> 安装/更新/卸载/数据目录全部经 `realpath + commonpath` 断言。
+> 回归测试见 `test/test_security_fixes.py`、`test/test_account_profile_api.py`。
+
+- [x] 修复 `_extract_archive` 的裸 `extractall`
   - 位置：`src/core/plugin/plugin_manager.py:1347`（tar）/ `:1350`（zip）
   - 现状：路由层 `web/backend/api/routes/plugin.py:84` 已实现正确的
     `_safe_member_path` 防 Zip Slip，但它**只用于读元数据**；
@@ -31,7 +37,7 @@
     路由层与 `_extract_archive` 共用；tar 使用 `filter="data"`；
     顺带消除「同一 zip 解压两次」的浪费
 
-- [ ] 元数据 `name` 未做字符校验，直接参与 `rmtree`
+- [x] 元数据 `name` 未做字符校验，直接参与 `rmtree`
   - 位置：`src/core/plugin/plugin_manager.py:1258-1265`
   - 现状：`dir_name` 取自 zip 内 `metadata.yaml` 的 `name`
     （`_load_metadata` 仅 `.strip()`，无白名单），随后

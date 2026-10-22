@@ -3,21 +3,22 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, Bot as BotIcon,
   Radio, Puzzle, Clock, AlertTriangle, Loader2, Lock, Hourglass, CalendarPlus, ExternalLink, CalendarCog,
-  CirclePlay, CircleStop, Plug, Unplug, ListOrdered, X,
+  CirclePlay, CircleStop, Plug, Unplug, ListOrdered, X, Pencil,
 } from 'lucide-react';
 import {
   fetchPanelOverview, createAccount, deleteAccount, renewAccount, redeemAccount,
-  resetAccountCredentials, expireAccount, renumberAccounts,
+  resetAccountCredentials, expireAccount, renumberAccounts, updateAccount,
   enableAccountBot, disableAccountBot, enableAccountLive, disableAccountLive,
 } from '../api/client';
 import type { AccountSummary, AccountCreateRequest, PanelOverview, RenewRequest } from '../api/types';
 import { Button } from '../components/Button';
 import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
-import { AccountCreatedDialog, CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
+import { AccountCreatedDialog, AccountInfoDialog, CreateAccountDialog, RenewDialog, CredentialsDialog } from '../components/AccountDialogs';
 import { CompensateDialog } from '../components/CompensateDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { SearchInput, FilterChips, FilterToggle, Pagination } from '../components/ListControls';
+import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
 import { livePageUrl } from '../utils/live';
 
@@ -84,6 +85,9 @@ export function AccountsPage() {
   const [deleting, setDeleting] = useState(false);
   const [credTarget, setCredTarget] = useState<AccountSummary | null>(null);
   const [credBusy, setCredBusy] = useState(false);
+  // 编辑账户资料（昵称 / 备注 / 临期提示开关）
+  const [infoTarget, setInfoTarget] = useState<AccountSummary | null>(null);
+  const [infoBusy, setInfoBusy] = useState(false);
   const [compensateOpen, setCompensateOpen] = useState(false);
   // 编号重排：先拿 dry-run 映射给用户确认，再真正执行
   const [renumberPlan, setRenumberPlan] = useState<
@@ -150,6 +154,25 @@ export function AccountsPage() {
       showToast('error', '创建失败', e.message);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleSaveInfo = async (data: {
+    name: string;
+    remark: string;
+    expiry_notice_enabled: boolean;
+  }) => {
+    if (!infoTarget) return;
+    setInfoBusy(true);
+    try {
+      await updateAccount(infoTarget.id, data);
+      showToast('success', '账户资料已更新', '');
+      setInfoTarget(null);
+      load();
+    } catch (e: any) {
+      showToast('error', '保存失败', e.message);
+    } finally {
+      setInfoBusy(false);
     }
   };
 
@@ -282,7 +305,7 @@ export function AccountsPage() {
       // 编号写成 `#12` 而非 `12`：前者同时能命中「#12」与「12」两种输入，
       // 后者只沾得上不带井号的写法
       return [
-        a.name, a.username,
+        a.name, a.username, a.remark,
         a.room_name, a.room_description, a.creator_name, a.creator_intro,
         a.bot_name, a.room_id == null ? '' : String(a.room_id),
         `#${a.id}`,
@@ -502,56 +525,77 @@ export function AccountsPage() {
           {paged.map((acc) => (
             <div key={acc.id}
               className="card hover:shadow-lg transition-shadow relative group/card">
-              {/* 账户编号放右上角：与标题分开，既不挤占标题宽度，也方便和搜索里
-                  输入的「#12」对上。pointer-events-none —— 卡片整卡可点，
-                  这个纯标签不该在角落里挡掉一块点击热区 */}
-              <span className="absolute top-3 right-4 pointer-events-none select-none
-                               font-mono text-xs text-gray-400 dark:text-gray-500">
-                #{acc.id}
-              </span>
               <div className="card-header">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {/* 拉伸链接：标题是真实 <a>，其 ::after 覆盖整张卡片，
-                        从而「整卡可点」且保留键盘可达 / 中键新标签页打开 */}
-                    <h3 className="font-semibold truncate">
-                      <Link
-                        to={`/account/${acc.id}`}
-                        className="rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
-                      >
-                        {acc.name}
-                      </Link>
-                    </h3>
-                    <span className={
-                      'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ' +
-                      (acc.bot_public
-                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-                        : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300')
-                    }>
-                      {acc.bot_public ? '公共 Bot' : '私有 Bot'}
-                    </span>
-                  </div>
-                  {acc.username && (
-                    <p className="text-xs text-gray-400 truncate" title={`登录用户名: ${acc.username}`}>
-                      @{acc.username}
-                    </p>
-                  )}
+                {/* 名字 /「公共 Bot」/「剩余 N 天」挤在同一行 —— 原来 ExpiryBadge 落在
+                    块级 div 之后，作为行内元素必然另起一行。
+                    名字过长走截断（h3 的 truncate）：h3 的 overflow-hidden 只裁它自己的
+                    内容，标题那条拉伸链接的 ::after 不会被裁 —— 绝对定位的后代不受
+                    包含块之内那些祖先的 overflow 影响，而它的包含块是整张卡片。
+                    （所以这一格本来也可以用 MarqueeText，这里只是不需要。） */}
+                <div className="flex items-center gap-2 min-w-0">
+                  {/* 拉伸链接：标题是真实 <a>，其 ::after 覆盖整张卡片，
+                      从而「整卡可点」且保留键盘可达 / 中键新标签页打开 */}
+                  <h3 className="font-semibold truncate min-w-0 flex-1">
+                    <Link
+                      to={`/account/${acc.id}`}
+                      className="rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 after:absolute after:inset-0"
+                    >
+                      {acc.name}
+                    </Link>
+                  </h3>
+                  <span className={
+                    'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ' +
+                    (acc.bot_public
+                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+                      : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300')
+                  }>
+                    {acc.bot_public ? '公共 Bot' : '私有 Bot'}
+                  </span>
+                  <ExpiryBadge expiresAt={acc.expires_at} pausedReason={acc.paused_reason} />
+                  {/* 账户编号排在行尾。
+                      ⚠️ 原来用 absolute top-3 right-4 挂在卡片右上角，而卡片头部
+                      内边距是 1.5rem —— 「#12」这种两位数宽约 25px，右边缘距卡边
+                      仅 16px，于是向左伸出约 41px、**侵入内容区** 17px。以前
+                      ExpiryBadge 在第二行左对齐，碰不到；并到标题行右端后就撞上了。
+                      改成流式：宽度由内容决定，谁也不用躲谁。
+                      pointer-events-none —— 卡片整卡可点，这个纯标签不该挡掉一块热区 */}
+                  <span className="shrink-0 pointer-events-none select-none
+                                   font-mono text-xs text-gray-400 dark:text-gray-500">
+                    #{acc.id}
+                  </span>
                 </div>
-                <ExpiryBadge expiresAt={acc.expires_at} pausedReason={acc.paused_reason} />
+                {/* 登录用户名单独一行：它挤不到上面那两枚徽章去。
+                    过长同样截断（truncate 会从右边缘裁掉）*/}
+                {acc.username && (
+                  <p className="text-xs text-gray-400 truncate mt-0.5"
+                    title={`登录用户名: ${acc.username}`}>
+                    @{acc.username}
+                  </p>
+                )}
+                {acc.remark && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 truncate mt-0.5"
+                    title={`备注：${acc.remark}`}>
+                    备注：{acc.remark}
+                  </p>
+                )}
               </div>
               <div className="card-body space-y-3">
                 {/* 状态行 */}
                 <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
-                    <BotIcon className="w-4 h-4" />
-                    {acc.bot_name || (acc.bot_available ? '已连接' : '未配置')}
+                  <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300 min-w-0">
+                    <BotIcon className="w-4 h-4 shrink-0" />
+                    {/* Bot 名字也是一长就顶掉右列徽章的那一类，和下面的房间名一样滚动显示 */}
+                    <MarqueeText className="min-w-0 flex-1"
+                      text={acc.bot_name || (acc.bot_available ? '已连接' : '未配置')} />
                   </div>
                   <div className="flex justify-end">
                     <StatusBadge status={acc.bot_enabled && acc.bot_available ? 'enabled' : 'disabled'} label="Bot" />
                   </div>
                   <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300 min-w-0">
                     <Radio className="w-4 h-4 shrink-0" />
-                    <span className="min-w-0 break-words sm:truncate">{acc.room_name || (acc.room_id ? `房间 ${acc.room_id}` : '未绑定房间')}</span>
+                    {/* 过长就滚动显示，不再折行/截断（不溢出时它就是一段普通文本） */}
+                    <MarqueeText className="min-w-0 flex-1"
+                      text={acc.room_name || (acc.room_id ? `房间 ${acc.room_id}` : '未绑定房间')} />
                     {/* 外链要 relative z-10：卡片标题用 after:inset-0 铺了整卡点击层，
                         不抬高层级的话这个链接会被那层盖住，点了会进账户页 */}
                     {acc.room_id != null && (
@@ -627,6 +671,8 @@ export function AccountsPage() {
                     <Button variant="ghost" size="sm" icon={<CalendarCog className="w-4 h-4" />}
                       tooltip="时长管理"
                       onClick={() => { setRenewMode('set'); setRenewTarget(acc); }} />
+                    <Button variant="ghost" size="sm" icon={<Pencil className="w-4 h-4" />}
+                      tooltip="编辑昵称与备注" onClick={() => setInfoTarget(acc)} />
                     <Button variant="ghost" size="sm" icon={<Lock className="w-4 h-4" />}
                       tooltip="重置登录凭据" onClick={() => setCredTarget(acc)} />
                     <Button variant="ghost" size="sm" icon={<Trash2 className="w-4 h-4 text-red-500" />}
@@ -667,6 +713,13 @@ export function AccountsPage() {
         onExpire={handleExpire}
         onRedeem={handleRedeem}
         onCancel={() => setRenewTarget(null)}
+      />
+      <AccountInfoDialog
+        open={infoTarget !== null}
+        account={infoTarget}
+        loading={infoBusy}
+        onSave={handleSaveInfo}
+        onCancel={() => setInfoTarget(null)}
       />
       <CredentialsDialog
         open={credTarget !== null}

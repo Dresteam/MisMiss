@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from core import MissevanServer
 from core.exceptions import CoreAccountNotFoundException, CoreLicenseException
 from api.deps import get_account_manager, require_account
-from api.routes.auth import _clear_account_tokens
+from api.routes.auth import _clear_account_tokens, token_info
 from api.schemas import (
     AccountPasswordChangeRequest,
     AccountPreferencesRequest,
@@ -20,10 +20,22 @@ router = APIRouter()
 
 
 @router.get("/info", response_model=AccountSummary)
-async def account_info(account_id: int, s: MissevanServer = Depends(require_account)):
-    """账户详情快照(记录 + 运行时状态)。"""
+async def account_info(
+    account_id: int,
+    s: MissevanServer = Depends(require_account),
+    authorization: str = Header(default=""),
+):
+    """账户详情快照(记录 + 运行时状态)。
+
+    ``remark`` 是管理端备注，账户本人不可见 —— 这里按令牌角色剔除。
+    """
     manager = get_account_manager()
-    return AccountSummary(**manager._account_snapshot(manager.get_record(account_id)))
+    snap = manager._account_snapshot(manager.get_record(account_id))
+    token = authorization.removeprefix("Bearer ")
+    info = token_info(token) if token else None
+    if (info or {}).get("role") != "admin":
+        snap.pop("remark", None)
+    return AccountSummary(**snap)
 
 
 @router.post("/redeem", response_model=AccountSummary)
@@ -74,11 +86,20 @@ async def account_update_preferences(
 ):
     """更新账户级偏好(账户持有者自助)。
 
-    目前只有「安装插件自动启用」一项；偏好按账户独立存储于 panel.json。
+    可选项按提交内容逐项更新：目前是「安装插件自动启用」与「开播临期提示」。
+    偏好按账户独立存储于 panel.json。
     """
     manager = get_account_manager()
     try:
-        rec = manager.set_auto_enable_on_install(account_id, req.auto_enable_on_install)
+        rec = manager.get_record(account_id)
+        if req.auto_enable_on_install is not None:
+            rec = manager.set_auto_enable_on_install(
+                account_id, req.auto_enable_on_install
+            )
+        if req.expiry_notice_enabled is not None:
+            rec = manager.set_expiry_notice_enabled(
+                account_id, req.expiry_notice_enabled
+            )
     except CoreAccountNotFoundException as e:
         raise HTTPException(status_code=404, detail=str(e))
     return AccountSummary(**manager._account_snapshot(rec))

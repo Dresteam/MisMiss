@@ -757,13 +757,14 @@ export async function installAccountPlugin(id: number, name: string): Promise<St
   });
 }
 
-/** 更新账户级偏好（目前只有「安装插件自动启用」）。 */
+/** 更新账户级偏好（安装插件自动启用 / 开播临期提示）。 */
 export async function updateAccountPreferences(
-  id: number, autoEnableOnInstall: boolean,
+  id: number,
+  prefs: { auto_enable_on_install?: boolean; expiry_notice_enabled?: boolean },
 ): Promise<AccountSummary> {
   return request<AccountSummary>(`/accounts/${id}/preferences`, {
     method: 'POST',
-    body: JSON.stringify({ auto_enable_on_install: autoEnableOnInstall }),
+    body: JSON.stringify(prefs),
   });
 }
 

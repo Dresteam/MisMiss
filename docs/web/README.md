@@ -202,7 +202,8 @@ token 为 64 位十六进制字符串，按文件存放在 `data/tokens/`（多 
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/accounts/{id}/info` | 账户信息与运行时状态 |
+| GET | `/api/accounts/{id}/info` | 账户信息与运行时状态（`remark` 仅管理员可见） |
+| POST | `/api/accounts/{id}/preferences` | 更新账户偏好（安装插件自动启用 / 开播临期提示） |
 | POST | `/api/accounts/{id}/redeem` | 自助兑换授权码（过期账户亦可，兑换后自动恢复） |
 | POST | `/api/accounts/{id}/change-password` | 自助改密（需原密码，成功后撤销该账户全部会话） |
 

@@ -22,8 +22,12 @@ from interfaces.command.command import Scope, _COMMAND_META_KEY
 from interfaces.event import Listener, event_handler
 from interfaces.event.livestream import LiveMessageEvent
 
+from core.logging import get_logger
+
 if TYPE_CHECKING:
     from interfaces.plugin.plugin import Plugin
+
+_log = get_logger(__name__)
 
 # ------------------------------------------------------------------ #
 # 已注册指令的运行时描述
@@ -229,9 +233,16 @@ class _CommandDispatchListener(Listener):
         if not (entry.scope & Scope.LIVEMESSAGE):
             return  # 作用域不匹配
 
-        # 解析参数并调用
-        parsed_args = _parse_args(entry, raw_args)
-        entry.method(*parsed_args)
+        # 解析参数并调用。⚠️ 这里必须兜住异常：观众少打一个参数就会触发
+        # TypeError，若让它冒到 EventBus → Live.on_message → WS 接收循环，
+        # 该账户的消息循环会带着异常整体结束，之后再也收不到任何事件。
+        try:
+            parsed_args = _parse_args(entry, raw_args)
+            entry.method(*parsed_args)
+        except (TypeError, ValueError) as e:
+            _log.warning("指令执行失败 [{}]: {}", entry.name, e)
+        except Exception:
+            _log.exception("指令执行未预期异常 [{}]", entry.name)
 
 
 # ------------------------------------------------------------------ #

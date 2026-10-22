@@ -22,6 +22,7 @@ from core.account import AccountManager
 from core.exceptions import (
     CorePluginNotFoundException,
 )
+from core.plugin.plugin_manager import _safe_extract_zip
 from api.deps import get_account_manager
 from api.schemas import (
     StatusResponse,
@@ -57,46 +58,6 @@ def _read_plugin_meta_from_zip(path: str) -> dict:
             if name.endswith('metadata.yaml') or name.endswith('metadata.yml'):
                 return yaml.safe_load(zf.read(name)) or {}
     return {}
-
-
-def _safe_member_path(name: str) -> str | None:
-    """校验 zip 成员名,返回可安全落盘的相对路径;非法成员返回 None。
-
-    拒绝绝对路径、``..`` 路径段与 Windows 盘符,防止 Zip Slip。
-    与 ``update.py:_safe_rel`` 同源——该文件属于在线更新链路,
-    此处保留独立实现以免两处互相牵动。
-    """
-    rel = name.replace("\\", "/")
-    if not rel or rel.startswith("/") or rel.startswith("../"):
-        return None
-    parts = [p for p in rel.split("/") if p not in ("", ".")]
-    if not parts or any(p == ".." for p in parts):
-        return None
-    # Windows 盘符前缀(C:/ 或 C:foo)——在 Windows 上会被当作绝对路径
-    if len(parts[0]) >= 2 and parts[0][1] == ":":
-        return None
-    return "/".join(parts)
-
-
-def _safe_extract_zip(zip_path: str, dest: str) -> None:
-    """解压 zip 到 dest,逐成员校验路径后写出。
-
-    不使用 ``ZipFile.extractall``——它会直接采用归档内的成员名,
-    含 ``../`` 或绝对路径的成员可写出 dest 之外(Zip Slip)。
-    非法成员静默跳过。
-    """
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        for info in zf.infolist():
-            rel = _safe_member_path(info.filename)
-            if rel is None:
-                continue
-            target = os.path.join(dest, *rel.split("/"))
-            if info.is_dir():
-                os.makedirs(target, exist_ok=True)
-                continue
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with zf.open(info) as src, open(target, "wb") as out:
-                shutil.copyfileobj(src, out)
 
 
 def _find_metadata_file(d: str) -> str | None:
@@ -175,7 +136,7 @@ async def _install_stream_locked(file: UploadFile, manager: AccountManager):
         async for chunk in send(f"正在安装插件: {plugin_name} ..."):
             yield chunk
         pm = manager.get_library_pm()
-        metadata = await pm.install_plugin(local_path=tmp_path)
+        await pm.install_plugin(local_path=tmp_path)
         await manager.refresh_library()
         async for chunk in send(f"插件 {plugin_name} 已加入插件库（可在账户中启用）", True):
             yield chunk

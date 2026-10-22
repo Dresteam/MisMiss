@@ -99,7 +99,7 @@ async def create_bot(
         raise _reject_public_cookie_op()
     try:
         perms = _parse_permissions(req.permissions)
-        bot = await s.create_bot(req.cookie, permissions=perms)
+        await s.create_bot(req.cookie, permissions=perms)
         return _bot_to_response(s)
     except CoreCookieException as e:
         raise HTTPException(status_code=400, detail=f"Cookie 无效: {e}")

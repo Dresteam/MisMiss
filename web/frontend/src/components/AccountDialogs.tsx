@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, X } from 'lucide-react';
 import { Button } from './Button';
+import { Switch } from './Switch';
 import { checkUsername } from '../api/client';
 import { showToast } from '../hooks/useToast';
-import type { AccountCreateRequest, RenewRequest } from '../api/types';
+import type { AccountCreateRequest, AccountSummary, RenewRequest } from '../api/types';
 import { parseLiveId } from '../utils/live';
 
 /** 用户名可用性检查的防抖间隔（毫秒） */
@@ -517,3 +518,113 @@ export function CredentialsDialog({
   );
 }
 
+
+// ================================================================== //
+// 编辑账户资料（昵称 / 备注 / 开播临期提示）
+// ================================================================== //
+
+interface AccountInfoDialogProps {
+  open: boolean;
+  account: AccountSummary | null;
+  loading?: boolean;
+  onSave: (data: {
+    name: string;
+    remark: string;
+    expiry_notice_enabled: boolean;
+  }) => void;
+  onCancel: () => void;
+}
+
+/**
+ * 管理端「编辑账户资料」弹窗。
+ *
+ * 只改**展示层**信息：
+ * - 昵称（`name`）——账户在面板与账户端显示的名字；
+ * - 备注（`remark`）——仅面板可见，不参与登录、也不会发给平台；
+ * - 开播临期提示开关。
+ *
+ * 登录用户名（`username`）不在这里改：它决定账户能否登录，走「重置凭据」，
+ * 免得把「改个显示名」误做成「改登录账号」。
+ */
+export function AccountInfoDialog({
+  open, account, loading, onSave, onCancel,
+}: AccountInfoDialogProps) {
+  const [name, setName] = useState('');
+  const [remark, setRemark] = useState('');
+  const [notice, setNotice] = useState(true);
+  const [error, setError] = useState('');
+
+  // 只按 open + 账户 id 初始化：父组件轮询会不断给新对象引用，
+  // 若依赖整个 account，用户正在输入的内容会被刷新顶掉。
+  useEffect(() => {
+    if (!open || !account) return;
+    setName(account.name);
+    setRemark(account.remark || '');
+    setNotice(account.expiry_notice_enabled);
+    setError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, account?.id]);
+
+  if (!open || !account) return null;
+
+  const submit = () => {
+    if (!name.trim()) {
+      setError('账户昵称不能为空');
+      return;
+    }
+    onSave({
+      name: name.trim(),
+      remark: remark.trim(),
+      expiry_notice_enabled: notice,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center">
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fade-in" onClick={onCancel} />
+      <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 animate-slide-in-up">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h3 className="font-semibold text-gray-900 dark:text-white">编辑账户资料</h3>
+          <button onClick={onCancel} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">账户昵称</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off"
+              className="input w-full" placeholder="面板与账户端显示的名称" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">备注</label>
+            <textarea value={remark} onChange={(e) => setRemark(e.target.value)} rows={3}
+              className="input w-full" maxLength={200}
+              placeholder="仅面板可见，如「主播B 的小号 / 已充值 3 个月」" />
+            <p className="text-xs text-gray-400 mt-1">
+              仅管理端可见，不参与登录，也不会发送给平台。{remark.length}/200
+            </p>
+          </div>
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-200">开播临期提示</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                开播时若剩余有效期不足 3 天，自动在本直播间发一条续期提醒。默认开启。
+              </p>
+            </div>
+            <Switch checked={notice} onChange={(next) => setNotice(next)}
+              label="开播临期提示" />
+          </div>
+          <p className="text-xs text-gray-400">
+            登录用户名 <span className="font-mono">@{account.username || '未设置'}</span> 不在此修改；
+            需要更换请用「重置登录凭据」。
+          </p>
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+        </div>
+        <div className="flex justify-end gap-2 px-5 pb-4">
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>取消</Button>
+          <Button variant="primary" size="sm" onClick={submit} loading={loading}>保存</Button>
+        </div>
+      </div>
+    </div>
+  );
+}

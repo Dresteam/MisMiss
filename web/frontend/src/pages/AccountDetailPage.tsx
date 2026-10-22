@@ -20,7 +20,7 @@ import {
   fetchAccountPluginReadme, fetchAccountPluginConfig, updateAccountPluginConfig,
   getAccountBotCookie, uninstallAccountPluginFromAccount, fetchAccountLibrary,
   installAccountPlugin, updateAccountPlugin, updateAllAccountPlugins,
-  updateAccountPreferences, expireAccount,
+  updateAccountPreferences, expireAccount, updateAccount,
 } from '../api/client';
 import type {
   AccountSummary, BotInfo, LivestreamInfo, LibraryPlugin, PluginSummary,
@@ -36,7 +36,7 @@ import { ExpiryBadge } from '../components/ExpiryBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CookieHelper } from '../components/CookieHelper';
 import { SearchInput, FilterChips } from '../components/ListControls';
-import { RenewDialog } from '../components/AccountDialogs';
+import { RenewDialog, AccountInfoDialog } from '../components/AccountDialogs';
 import { PluginDrawer } from '../components/PluginDrawer';
 import { UninstallDialog } from '../components/UninstallDialog';
 import { PluginLogDialog } from '../components/PluginLogDialog';
@@ -56,6 +56,43 @@ const PERM_LABELS: Record<string, string> = {
 // ================================================================== //
 // 概览 Tab
 // ================================================================== //
+
+/**
+ * 「开播临期提示」开关。
+ *
+ * 面板管理员与账户本人都能关：提示发在直播间里，是给观众看的，
+ * 该不该由账户持有者说了算。点一下即保存，失败回滚。
+ */
+export function ExpiryNoticeSwitch({ acc }: { acc: AccountSummary }) {
+  const [on, setOn] = useState(acc.expiry_notice_enabled);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setOn(acc.expiry_notice_enabled); }, [acc.expiry_notice_enabled]);
+
+  const toggle = async (next: boolean) => {
+    setOn(next);
+    setSaving(true);
+    try {
+      await updateAccountPreferences(acc.id, { expiry_notice_enabled: next });
+      showToast('success', next ? '已开启开播临期提示' : '已关闭开播临期提示', '');
+    } catch (e: any) {
+      setOn(!next);
+      showToast('error', '设置失败', e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Switch
+      checked={on}
+      onChange={toggle}
+      loading={saving}
+      label="开播临期提示"
+      title="开播时若剩余有效期不足 3 天，自动在本直播间发一条续期提醒。默认开启"
+    />
+  );
+}
 
 export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; onRenew: (mode: 'days' | 'code' | 'set' | 'permanent' | 'expire') => void; panelMode?: boolean }) {
   return (
@@ -108,6 +145,15 @@ export function OverviewTab({ acc, onRenew, panelMode }: { acc: AccountSummary; 
                 onClick={() => onRenew('set')}>时长管理</Button>
             </div>
           )}
+          <div className="flex items-start justify-between gap-3 border-t border-gray-100 dark:border-gray-700 pt-3">
+            <div className="min-w-0">
+              <p className="text-sm text-gray-700 dark:text-gray-200">开播临期提示</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                开播时若剩余不足 3 天，自动在直播间发一条续期提醒。默认开启
+              </p>
+            </div>
+            <ExpiryNoticeSwitch acc={acc} />
+          </div>
         </div>
       </div>
     </div>
@@ -291,7 +337,12 @@ function DemoBanner({ what }: { what: string }) {
   );
 }
 
-export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boolean }) {
+export function LiveTab({ acc, demo = false, onAccountReload }: {
+  acc: AccountSummary;
+  demo?: boolean;
+  /** 绑定关系变化后刷新账户概要 —— `acc` 不会自己更新，见 `actBinding` */
+  onAccountReload?: () => void;
+}) {
   const [room, setRoom] = useState<LivestreamInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState('');
@@ -334,11 +385,22 @@ export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boo
 
   const btn = (key: string, disabled = false) => processing === key || disabled;
 
+  /**
+   * 绑定类操作：跑完动作后**还要刷新账户概要**。
+   *
+   * `acc` 是账户详情页挂载时取的一次快照，此后不再自动更新。解绑之后它仍带着旧的
+   * `room_id`，而直播间接口此时返回的是 `null` —— 渲染分支
+   * `room === null && acc.room_id != null` 会被读成「已绑定但加载失败」，
+   * 于是刚删掉的直播间又弹出一张「房间已不存在」的错误卡片。
+   */
+  const actBinding = (key: string, fn: () => Promise<unknown>, okMsg: string) =>
+    act(key, async () => { await fn(); await onAccountReload?.(); }, okMsg);
+
   /** 重试加载已绑定但加载不出来的直播间（同 ID 重新提交，服务端已放开该校验）。 */
   const retryBoundRoom = () => {
     const rid = acc.room_id;
     if (rid == null) return;
-    return act('retry', () => addAccountLive(acc.id, rid), '直播间信息已重新加载');
+    return actBinding('retry', () => addAccountLive(acc.id, rid), '直播间信息已重新加载');
   };
 
   /**
@@ -364,7 +426,7 @@ export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boo
           <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
             className="input flex-1" placeholder="输入直播间 ID 或粘贴直播间链接" />
           <Button loading={processing === 'add'} disabled={btn('add')}
-            onClick={() => act('add', () => addAccountLive(acc.id, resolveLiveInput()), '直播间已绑定')}>
+            onClick={() => actBinding('add', () => addAccountLive(acc.id, resolveLiveInput()), '直播间已绑定')}>
             绑定
           </Button>
         </div>
@@ -401,7 +463,7 @@ export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boo
                   <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
                     className="input flex-1" placeholder="输入新的直播间 ID..." inputMode="numeric" autoFocus />
                   <Button loading={processing === 'switch'} disabled={btn('switch')}
-                    onClick={() => act('switch', () => addAccountLive(acc.id, resolveLiveInput()).then(() => {
+                    onClick={() => actBinding('switch', () => addAccountLive(acc.id, resolveLiveInput()).then(() => {
                       setSwitching(false);
                       setLiveIdInput('');
                     }), '直播间已更换')}>
@@ -442,7 +504,7 @@ export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boo
                 <input value={liveIdInput} onChange={(e) => setLiveIdInput(e.target.value)}
                   className="input flex-1" placeholder="输入新的直播间 ID..." inputMode="numeric" autoFocus />
                 <Button loading={processing === 'switch'} disabled={btn('switch')}
-                  onClick={() => act('switch', () => addAccountLive(acc.id, resolveLiveInput()).then(() => {
+                  onClick={() => actBinding('switch', () => addAccountLive(acc.id, resolveLiveInput()).then(() => {
                     setSwitching(false);
                     setLiveIdInput('');
                   }), '直播间已更换')}>
@@ -490,9 +552,9 @@ export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boo
               </div>
               {/* 房间名 */}
               <div className="absolute bottom-3 left-4 right-4 flex items-center gap-2">
-                <p className="text-white font-semibold text-lg drop-shadow truncate">
-                  {room.room_name} ({room.live_id})
-                </p>
+                {/* 房间名过长就滚动显示，不再被 truncate 截掉 */}
+                <MarqueeText className="min-w-0 flex-1 font-semibold text-lg text-white drop-shadow"
+                  text={`${room.room_name} (${room.live_id})`} />
                 <a href={livePageUrl(room.live_id)} target="_blank" rel="noopener noreferrer"
                   title="在猫耳打开直播间"
                   className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg
@@ -592,7 +654,7 @@ export function LiveTab({ acc, demo = false }: { acc: AccountSummary; demo?: boo
               </Button>
               <Button size="sm" variant="ghost" icon={<Trash2 className="w-4 h-4 text-red-500" />}
                 loading={processing === 'remove'} disabled={btn('remove')}
-                onClick={() => act('remove', () => removeAccountLive(acc.id), '已解除绑定')} />
+                onClick={() => actBinding('remove', () => removeAccountLive(acc.id), '已解除绑定')} />
             </div>
 
             {/* 发弹幕 */}
@@ -1787,7 +1849,7 @@ export function LibraryTab({ acc, demo = false }: {
     setSavingPref(true);
     setAutoEnable(next); // 乐观更新，失败回滚
     try {
-      await updateAccountPreferences(acc.id, next);
+      await updateAccountPreferences(acc.id, { auto_enable_on_install: next });
       showToast('success', next ? '安装插件后将自动启用' : '安装插件后将保持停用', '');
     } catch (e: any) {
       pendingAutoEnable.current = null;
@@ -1995,6 +2057,8 @@ export function AccountDetailPage() {
   const [renewOpen, setRenewOpen] = useState(false);
   const [renewMode, setRenewMode] = useState<'days' | 'code' | 'set' | 'permanent' | 'expire'>('days');
   const [renewing, setRenewing] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoBusy, setInfoBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -2049,6 +2113,24 @@ export function AccountDetailPage() {
     } finally { setRenewing(false); }
   };
 
+  const handleSaveInfo = async (data: {
+    name: string;
+    remark: string;
+    expiry_notice_enabled: boolean;
+  }) => {
+    if (!acc) return;
+    setInfoBusy(true);
+    try {
+      setAcc(await updateAccount(acc.id, data));
+      showToast('success', '账户资料已更新', '');
+      setInfoOpen(false);
+    } catch (e: any) {
+      showToast('error', '保存失败', e.message);
+    } finally {
+      setInfoBusy(false);
+    }
+  };
+
   const handleRenew = async (aid: number, data: RenewRequest) => {
     setRenewing(true);
     try {
@@ -2082,15 +2164,19 @@ export function AccountDetailPage() {
     <div className="space-y-6 animate-fade-in max-w-5xl">
       {/* 头部 */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <Link to="/" className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+        {/* 每一层都带 min-w-0：flex 子项默认 min-width:auto，少了它这条链就缩不动，
+            长名字会把徽章挤走或自己折行。加上之后名字能在剩余宽度里滚动 */}
+        <div className="flex items-center gap-3 min-w-0">
+          <Link to="/" className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors shrink-0">
             <ArrowLeft className="w-5 h-5" />
           </Link>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold">{acc.name}</h1>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <h1 className="text-2xl font-bold min-w-0">
+                <MarqueeText text={acc.name} />
+              </h1>
               <span className={
-                'rounded-full px-2 py-0.5 text-xs font-medium ' +
+                'shrink-0 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ' +
                 (acc.bot_public
                   ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
                   : 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300')
@@ -2102,9 +2188,17 @@ export function AccountDetailPage() {
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               直播间 {acc.room_id ?? '未绑定'} · 插件 {acc.enabled_plugin_count}/{acc.plugin_count}
             </p>
+            {acc.remark && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5 truncate"
+                title={acc.remark}>
+                备注：{acc.remark}
+              </p>
+            )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
+          <Button size="sm" variant="secondary" icon={<Pencil className="w-4 h-4" />}
+            onClick={() => setInfoOpen(true)}>编辑资料</Button>
           <Button size="sm" variant="secondary" icon={<KeyRound className="w-4 h-4" />}
             onClick={() => { setRenewMode('code'); setRenewOpen(true); }}>兑换</Button>
           <Button size="sm" variant="secondary" icon={<Hourglass className="w-4 h-4" />}
@@ -2135,7 +2229,9 @@ export function AccountDetailPage() {
       </div>
 
       {tab === 'overview' && <OverviewTab acc={acc} onRenew={(m) => { setRenewMode(m); setRenewOpen(true); }} />}
-      {tab === 'live' && <LiveTab acc={acc} />}
+      {/* 把账户概要认真刷新交给 LiveTab：绑定/更换/解绑都会改 `acc.room_id`，
+          而它本身是挂载时取的快照，不刷新就会拿着旧值参与渲染判断 */}
+      {tab === 'live' && <LiveTab acc={acc} onAccountReload={load} />}
       {tab === 'bot' && <BotTab acc={acc} onAccountChanged={load} />}
       {tab === 'timer' && <TimerTab acc={acc} />}
       {tab === 'plugins' && <PluginsTab acc={acc} pluginPageBase={`/account/${acc.id}/plugin`} onOpenLibrary={() => switchTab('library')} />}
@@ -2151,6 +2247,13 @@ export function AccountDetailPage() {
         onRedeem={handleRedeem}
         onExpire={handleExpire}
         onCancel={() => setRenewOpen(false)}
+      />
+      <AccountInfoDialog
+        open={infoOpen}
+        account={acc}
+        loading={infoBusy}
+        onSave={handleSaveInfo}
+        onCancel={() => setInfoOpen(false)}
       />
     </div>
   );

@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.account import AccountManager
 from core.logging import get_logger
 from core.exceptions import (
-    CoreAccountExpiredException,
     CoreAccountNotFoundException,
     CoreCookieException,
     CoreLicenseException,
@@ -74,7 +73,6 @@ async def panel_overview(manager: AccountManager = _DEP):
 async def panel_status(manager: AccountManager = _DEP):
     """面板级服务器状态。"""
     ov = manager.overview()
-    running = sum(1 for a in ov["accounts"] if a["bot_enabled"] and a["bot_available"])
     return ServerStatusResponse(
         running=True,
         bot_name=f"{ov['total']} 个账户",

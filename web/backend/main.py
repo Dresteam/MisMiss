@@ -265,10 +265,19 @@ if _FRONTEND_DIST.exists():
         # 跳过 API 路径
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not Found")
-        file = _FRONTEND_DIST / full_path
+        # ⚠️ 必须限定在 dist 内：full_path 直接来自 URL，未归一化的 `..` 段能拼出
+        # `../../../data/panel.json` 这类路径。非 /api/ 请求又被认证中间件跳过，
+        # 于是匿名就能读到面板凭据、令牌与 config.yml。
+        dist_root = _FRONTEND_DIST.resolve()
+        try:
+            file = (_FRONTEND_DIST / full_path).resolve()
+        except OSError:
+            raise HTTPException(status_code=404, detail="Not Found")
+        if not file.is_relative_to(dist_root):
+            raise HTTPException(status_code=404, detail="Not Found")
         if file.is_file():
             return FileResponse(file)
-        index = _FRONTEND_DIST / "index.html"
+        index = dist_root / "index.html"
         if index.is_file():
             return FileResponse(index)
         raise HTTPException(status_code=404, detail="Not Found")

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -14,6 +15,8 @@ from typing import Any
 
 from interfaces.server import Server as ServerInterface
 from interfaces.bot import BotPermission
+from interfaces.event import Listener, event_handler
+from interfaces.event.livestream import LiveCloseEvent, LiveOpenEvent
 from interfaces.plugin.plugin_metadata import PluginMetadata
 from core.bot.mis_bot import MissevanBot
 from core.events.bus import EventBus
@@ -37,6 +40,34 @@ _log = get_logger(__name__)
 # Bot 恢复失败后的冷却秒数。见 MissevanServer.__init__ 里 _bot_restore_failed_at 的说明。
 # 取 5 分钟：长到足以让平台的限流窗口滑过去，短到用户修好 Cookie 后不必久等。
 _BOT_RESTORE_COOLDOWN = 300.0
+
+# 开播临期提示：剩余有效期低于该天数时，在开播事件里发一条提醒。
+EXPIRY_NOTICE_THRESHOLD_DAYS = 3
+EXPIRY_NOTICE_TEXT = "本账号剩余有效期不足 {days} 天，请及时续期，以免影响直播~"
+EXPIRY_NOTICE_TEXT_TODAY = "本账号今天到期，请及时续期，以免影响直播~"
+
+
+class _AccountLifecycleListener(Listener):
+    """账户级内置监听器（不是插件，不受插件权限体系约束）。
+
+    目前只做一件事：开播瞬间检查账户是否临期，并在需要时发一条提示。
+    用它而不是插件，是因为「账户还剩几天」是面板层的信息，插件拿不到
+    ``AccountRecord``；而且这个能力默认开启、不应该依赖用户装插件。
+    """
+
+    def __init__(self, server: "MissevanServer") -> None:
+        self._server = server
+
+    @event_handler
+    def on_live_open(self, event: LiveOpenEvent) -> None:
+        self._server._notify_expiring_on_live(event.livestream)
+
+    @event_handler
+    def on_live_close(self, event: LiveCloseEvent) -> None:
+        # 下播后清掉「本场已提示」标记，下次开播可以再提示一次
+        live_id = getattr(event.livestream, "live_id", 0)
+        self._server._expiry_notice_sent.discard(int(live_id or 0))
+
 
 
 class MissevanServer(ServerInterface):
@@ -91,6 +122,9 @@ class MissevanServer(ServerInterface):
         self._livestreams: dict[int, MissevanLivestream] = {}
         self._enabled_livestreams: set[int] = set()
         self._event_bus: EventBus = EventBus()
+        # 内置账户级监听器：开播临期提示（见 _AccountLifecycleListener）
+        self._event_bus.register_new_event(_AccountLifecycleListener(self))
+        self._expiry_notice_sent: set[int] = set()
         self._plugin_manager: PluginManager = PluginManager("", EventBus(), "")
         self._app = None  # FastAPI app 引用，由 lifespan 在 start() 前注入
         self._state_mtime: float = 0.0  # state 文件最后加载时间戳
@@ -807,6 +841,58 @@ class MissevanServer(ServerInterface):
         if live is None:
             return True
         return bool(getattr(live, "is_streaming", False))
+
+    # ---------------- 开播临期提示 ----------------
+    #
+    # 由 _AccountLifecycleListener 在 LiveOpenEvent 时调用。默认开启，
+    # 账户级偏好 expiry_notice_enabled 可关闭（管理员与账户本人均可改）。
+
+    def _notify_expiring_on_live(self, livestream: Any) -> None:
+        """直播间开播：剩余有效期不足 3 天时发一条临期提示。
+
+        只发一次：同一场直播里 WS 重连可能重复触发 ``room:open``，
+        用 live_id 记录本场已发过，下播时清除。
+        """
+        rec = self.account_record
+        if rec is None or not getattr(rec, "expiry_notice_enabled", True):
+            return
+        # 永久账户没有「剩余天数」，已过期账户也不该还在开播
+        if getattr(rec, "is_permanent", False) or getattr(rec, "expired", False):
+            return
+
+        days = getattr(rec, "days_left", None)
+        if days is None or days >= EXPIRY_NOTICE_THRESHOLD_DAYS:
+            return
+
+        live_id = int(getattr(livestream, "live_id", 0) or 0)
+        if live_id in self._expiry_notice_sent:
+            return
+
+        text = (
+            EXPIRY_NOTICE_TEXT.format(days=days)
+            if days > 0
+            else EXPIRY_NOTICE_TEXT_TODAY
+        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # 无事件循环（同步测试场景）——定时器同理，静默跳过
+        self._expiry_notice_sent.add(live_id)
+        loop.create_task(self._send_expiry_notice(livestream, text, days))
+
+    async def _send_expiry_notice(
+        self, livestream: Any, text: str, days: int
+    ) -> None:
+        """发送临期提示；失败不重试（下次开播还会再判断）。"""
+        try:
+            await livestream.send_message(text)
+            _log.info(
+                "账户 {} 开播临期提示已发送（剩余 {} 天）",
+                getattr(self.account_record, "name", "?"),
+                days,
+            )
+        except Exception as e:
+            _log.warning("开播临期提示发送失败: {}", e)
 
     @property
     def normal_timer_message_count(self) -> int:

@@ -16,9 +16,23 @@ from interfaces.event.cancellable import Cancellable
 from interfaces.event.event_manager import EventManager
 from interfaces.plugin.plugin import Plugin, current_plugin
 
+from core.logging import get_logger
+
 if TYPE_CHECKING:
     from interfaces.event.event import Event
     from interfaces.event.listener import Listener
+
+_log = get_logger(__name__)
+
+
+def _log_async_exception(task: "asyncio.Task[object]") -> None:
+    """取走异步 handler 的异常并记录，避免 ``Task exception was never retrieved``。"""
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        _log.error("异步事件处理器异常: {}", exc)
 
 
 class EventBus(EventManager):
@@ -150,7 +164,16 @@ class EventBus(EventManager):
                 result = handler(event)
                 # 若 handler 是异步函数，调度到事件循环
                 if asyncio.iscoroutine(result):
-                    asyncio.get_running_loop().create_task(result)
+                    task = asyncio.get_running_loop().create_task(result)
+                    task.add_done_callback(_log_async_exception)
+            except Exception:
+                # 单个 handler 抛异常不应中断同事件的其他监听器 —— 尤其是
+                # 直播间事件的调用链最底层是 WS 接收循环，漏出去会整条停摆。
+                _log.exception(
+                    "事件处理器执行失败: {} ({})",
+                    type(_listener).__name__,
+                    getattr(handler, "__name__", "?"),
+                )
             finally:
                 if token is not None:
                     current_plugin.reset(token)
