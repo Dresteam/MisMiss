@@ -169,38 +169,23 @@ export function useLogStream(
           && (accts.length === 0 || accts.includes(e.account ?? '')),
       );
 
-      // 2. 拉取最新 PAGE_SIZE 条筛选结果并合并：
-      //    保证加选筛选 / 取消筛选后，最近日志立即正确出现
+      // 2. 只拉**最新一页**筛选结果并合并：加选 / 取消筛选后最近日志立即正确出现，
+      //    更早的部分交给「加载更多」按需翻页 —— 与未筛选时的行为完全一致。
+      //
+      // ⚠️ 这里原先是个 while 循环，把匹配到的日志**一次全拉回来**。代价随数据量
+      //    线性上涨：匹配 N 条就是 N/PAGE_SIZE 趟串行往返，每趟后端都要在环形
+      //    缓冲里过滤一遍、前端还要把已积累的数组整体重排一次。筛选条件变化时
+      //    本就会重连 WS，再叠上这一串请求，容易让某个请求撑过反向代理的超时，
+      //    进而把后端标记为不可用 —— 表现是切筛选后报 503、刷新一下又正常。
       const latest = await fetchHistory(0, query);
       const existingLatest = new Set(local.map((e) => e.seq_id));
       const freshLatest = latest.entries.filter((e) => !existingLatest.has(e.seq_id));
-      let current = [...local, ...freshLatest].sort((a, b) => a.seq_id - b.seq_id);
+      const current = [...local, ...freshLatest].sort((a, b) => a.seq_id - b.seq_id);
 
-      // 3. 向更早历史补拉筛选项，直到全部加载（每请求 PAGE_SIZE 条），
-      //    保证「已加载 = 共 N 条」，数量一致。
-      //    注意：游标必须从「最新窗口的边界」开始连续翻页——本地已加载
-      //    条目可能被前一次筛选挖出空洞，缺失条目可能位于已加载范围中间，
-      //    不能从已合并列表的最旧条目开始跳页。
-      let cursor = latest.entries.length ? latest.entries[0].seq_id : 0;
-      let more = latest.has_more;
-      let filteredTotal = latest.total;
-      while (more) {
-        const data = await fetchHistory(cursor, query);
-        if (!data.entries.length) { more = false; filteredTotal = data.total; break; }
-        // 游标严格递减（本批最旧 seq），必然终止
-        cursor = data.entries[0].seq_id;
-        const existing = new Set(current.map((e) => e.seq_id));
-        const fresh = data.entries.filter((e) => !existing.has(e.seq_id));
-        if (fresh.length) {
-          current = [...fresh, ...current].sort((a, b) => a.seq_id - b.seq_id);
-        }
-        more = data.has_more;
-        filteredTotal = data.total;
-      }
       entriesRef.current = current;
       setEntries(current);
-      setHasMore(more);
-      setTotal(filteredTotal);
+      setHasMore(latest.has_more);
+      setTotal(latest.total);
     } catch { /* ignore */ }
     finally {
       frozenRef.current = false;

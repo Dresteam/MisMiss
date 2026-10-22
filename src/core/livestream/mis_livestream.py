@@ -317,7 +317,12 @@ class MissevanLivestream(Livestream):
                 medal_level=0,
             )
 
-        # 创建者
+        # 创建者。
+        #
+        # ⚠️ ``creator_is_online`` 取**接口自己的 online 字段**，不拿开播状态顶替。
+        # 两者不是一回事（主播可以在线而没开播），硬绑在一起会让「在线」这一栏
+        # 永远显示不出真实值。WS 收到开播/下播时会**强制刷新一次**，由这次刷新
+        # 按接口结果定在线状态 —— 见 _create_internal_listener。
         self._creator = LiveCreator(
             creator_livestream=self,
             creator_id=creator_data.get("user_id", 0),
@@ -378,11 +383,17 @@ class MissevanLivestream(Livestream):
         from .handler import Live
         return Live(self)
 
-    def _refresh_soon(self) -> None:
-        """在事件循环里排一次房间信息刷新（无循环时静默跳过）。"""
+    def _refresh_soon(self, *, force: bool = False) -> None:
+        """在事件循环里排一次房间信息刷新（无循环时静默跳过）。
+
+        :param force: 无视 :data:`_REFRESH_MIN_INTERVAL` 那道 5 秒冷却。
+            **开播/下播触发的刷新必须 force** —— 那一刻状态刚变，而这时段里
+            往往还挤着别的刷新（面板轮询、join 时的连调三次），不 force 就会被
+            冷却静默丢掉，界面停在旧值上。这正是「WS 收到了、状态却没更新」的成因。
+        """
         import asyncio
         try:
-            asyncio.get_running_loop().create_task(self._refresh())
+            asyncio.get_running_loop().create_task(self._refresh(force=force))
         except RuntimeError:
             pass  # 无事件循环（如启动阶段），放弃本次异步刷新
 
@@ -404,16 +415,17 @@ class MissevanLivestream(Livestream):
                 # refresh 是另一个任务、还要发一次 API 请求，天然慢一拍；
                 # 万一请求失败就永远停在旧值，只有手动刷新才对得上。
                 livestream_ref._is_streaming = True
-                if livestream_ref._creator and hasattr(livestream_ref._creator, "set_online"):
-                    livestream_ref._creator.set_online(True)
-                # 其余展示字段（人数、封面等）仍由接口补齐
-                livestream_ref._refresh_soon()
+                # **不顺手把 creator 也设成在线**：开播与在线不是一回事，
+                # 硬绑一起等于替接口下结论。该由下面这次刷新按接口结果去定。
+                #
+                # force 是关键：不 force 就会被 _REFRESH_MIN_INTERVAL 那道 5 秒
+                # 冷却丢掉（开播/下播这一刻常与面板轮询、join 的连调撞在一起），
+                # 那正是「WS 收到了、主播在线状态却没变」的成因。
+                livestream_ref._refresh_soon(force=True)
 
             @event_handler
             def on_close(self, event: LiveCloseEvent) -> None:
                 livestream_ref._is_streaming = False
-                if livestream_ref._creator and hasattr(livestream_ref._creator, "set_online"):
-                    livestream_ref._creator.set_online(False)
-                livestream_ref._refresh_soon()
+                livestream_ref._refresh_soon(force=True)
 
         return _InternalListener()

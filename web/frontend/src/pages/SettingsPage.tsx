@@ -425,13 +425,17 @@ export function SettingsPage() {
           端口设置
         </div>
         <div className="p-6">
-          <div className="flex items-end gap-4">
-            <div className="w-40">
+          {/* 输入框窄屏收一档，给按钮让出宽度；按钮再 shrink-0 + nowrap 兜死 ——
+              Button 是 inline-flex 且没有 nowrap，中文逐字可断，被挤时它的
+              min-content 只有一个字宽，于是「保存并重启」在按钮内部折成多行 */}
+          <div className="flex items-end gap-3 md:gap-4">
+            <div className="w-28 md:w-40">
               <label className="block text-xs text-gray-500 mb-1">API 端口</label>
               <input type="number" value={apiPort} onChange={(e) => setApiPort(Number(e.target.value) || 18080)}
                 className="input text-sm" />
             </div>
-            <Button variant="primary" size="sm" icon={<Save />} onClick={handleSavePorts} loading={portSaving}>
+            <Button variant="primary" size="sm" icon={<Save />} onClick={handleSavePorts} loading={portSaving}
+              className="shrink-0 whitespace-nowrap">
               保存并重启
             </Button>
           </div>

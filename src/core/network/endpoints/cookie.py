@@ -25,23 +25,29 @@ class DefaultCookieAPI(API):
         """
         import httpx
 
-        from ..throttle import gate
+        from ..throttle import Lane, gate
 
         # 这个端点绕开了 HTTPClient（要读响应头而不是 body），但**同样要过闸** ——
         # 每次 WebSocket 连接与重连都会调它一次，是重连风暴里实打实的一份流量。
-        await gate.acquire()
-        headers = self._build_headers()
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(Urls.DEFAULT_COOKIE, headers=headers)
-                if resp.status_code != 200:
-                    gate.note_failure()
-                    return None
-                gate.note_success()
-                return resp.headers.get("set-cookie")
-        except Exception as e:
-            gate.note_failure(e)
-            return None
+        # 用 slot 而不是 acquire：重连风暴恰恰是并发最猛的场景，
+        # 光拉开出发间隔挡不住几十条连接同时在途。
+        # 走交互车道：拿不到 Cookie 整条链路就断了，属于关键路径，不该被跳过
+        # （平台限流时只降速）。它确实是重连风暴里的一份流量，但那是靠并发上限治的
+        async with gate.slot(Lane.INTERACTIVE):
+            headers = self._build_headers()
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(Urls.DEFAULT_COOKIE, headers=headers)
+                    if resp.status_code != 200:
+                        gate.note_failure(
+                            None, f"GET {Urls.DEFAULT_COOKIE}（HTTP {resp.status_code}）"
+                        )
+                        return None
+                    gate.note_success()
+                    return resp.headers.get("set-cookie")
+            except Exception as e:
+                gate.note_failure(e, f"GET {Urls.DEFAULT_COOKIE}")
+                return None
 
     @staticmethod
     def _build_headers() -> dict[str, str]:

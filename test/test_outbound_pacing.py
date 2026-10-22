@@ -30,7 +30,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web", "backend
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.exceptions import CoreApiException  # noqa: E402
-from core.network.throttle import OutboundGate, gate  # noqa: E402
+from core.network.throttle import GateSet, Lane, OutboundGate, gate  # noqa: E402
+from core.exceptions import CoreThrottledException  # noqa: E402
 
 _passed = 0
 
@@ -326,13 +327,178 @@ def test_update_state_merge() -> None:
           not (pathlib.Path(_TMP) / "update_state.tmp").exists())
 
 
+async def test_gate_concurrency_cap() -> None:
+    """在途并发上限：同时未完成的请求数不得超过 max_concurrency。
+
+    这是防封 IP 的那道闸 —— 光拉开出发间隔挡不住「几十条连接同时在途」，
+    而平台判定「请求过快」看的就是瞬时并发。
+    """
+    g = OutboundGate()
+    g.configure(0.0, max_concurrency=3)
+    peak = 0
+    inflight = 0
+
+    async def one() -> None:
+        nonlocal peak, inflight
+        async with g.slot():
+            # 到 sleep 之间没有 await，单线程下计数不会被打断
+            inflight += 1
+            peak = max(peak, inflight)
+            await asyncio.sleep(0.02)  # 模拟请求耗时
+            inflight -= 1
+
+    await asyncio.gather(*(one() for _ in range(20)))
+    check("在途并发不超过上限", peak <= 3, f"实测峰值 {peak}")
+    check("上限确实用满了（不是退化成串行）", peak == 3, f"实测峰值 {peak}")
+
+
+async def test_escalation_debounce() -> None:
+    """一批并发失败只算一次升档。
+
+    线上日志里出现过 2.4 秒内四条「连续失败 8 次」，档位从 30 秒被直接推到
+    900 秒上限 —— 那只是同一批请求几乎同时失败，不该连升四级。
+    """
+    g = OutboundGate()
+    g.configure(0.0)
+    for _ in range(32):  # 一批并发失败几乎同时到达
+        g.note_failure(CoreApiException("某种未知错误"))
+    check("一批失败只升一档", g.backoff_remaining <= 31.0,
+          f"退避 {g.backoff_remaining:.0f}s（应约 30，而不是 120+）")
+
+
+async def test_lane_isolation() -> None:
+    """后台车道的失败不该连累交互车道 —— 这是分车道的全部意义。
+
+    线上形态：后台轮询攒满 8 次失败 → 全局退避 → 面向观众的欢迎语被压后几十秒
+    到 15 分钟。两条车道各自记账、各自熔断，这种事就不该再发生。
+    """
+    g = GateSet()
+    g.configure(0.0)
+    for _ in range(8):
+        g.note_failure(CoreApiException("某种未知错误"), "GET room", Lane.BACKGROUND)
+
+    check("后台车道已熔断", g.lane(Lane.BACKGROUND).backoff_remaining > 0,
+          f"{g.lane(Lane.BACKGROUND).backoff_remaining:.0f}s")
+    check("交互车道不受影响", g.lane(Lane.INTERACTIVE).backoff_remaining == 0)
+
+    t0 = time.monotonic()
+    async with g.slot(Lane.INTERACTIVE):
+        pass
+    check("交互请求没被后台拖住", time.monotonic() - t0 < 0.2)
+
+
+async def test_platform_limit_sheds_background_only() -> None:
+    """平台明确报限流：后台直接跳过，交互只降速、**不硬停**。"""
+    g = GateSet()
+    g.configure(0.0)
+    g.note_failure(CoreApiException("HTTP 429", status_code=429), "POST msg", Lane.INTERACTIVE)
+
+    check("限流窗口已打开", g.platform_limited_remaining > 0)
+    check("交互车道没有被硬退避冻住", g.lane(Lane.INTERACTIVE).backoff_remaining == 0,
+          "消息通道该降速而非停摆")
+
+    skipped = False
+    try:
+        async with g.slot(Lane.BACKGROUND):
+            pass
+    except CoreThrottledException:
+        skipped = True
+    check("后台请求被跳过（不是排队等）", skipped, "应抛 CoreThrottledException")
+    check("它同时是 CoreApiException，现有处理器能原样接住",
+          issubclass(CoreThrottledException, CoreApiException))
+
+    t0 = time.monotonic()
+    async with g.slot(Lane.INTERACTIVE):
+        pass
+    check("交互请求仍然放行", time.monotonic() - t0 < 0.2)
+
+
+async def test_http_400_business_error_does_not_trip_gate() -> None:
+    """**HTTP 400** + 业务码同样不算失败 —— 线上真实踩到的形态。
+
+    平台把业务拒绝放在非 200 上返回：给未开播的房间发消息得到的是
+    ``HTTP 400 {"code":500030011,"info":"主播休息时暂时无法使用哦~"}``。
+
+    上一版只处理了「200 + 非零业务码」，非 200 一律记失败 —— 于是主播休息期间
+    **每发一条消息攒一次失败**，8 次熔断整条交互车道：整夜退避、观众看得见的
+    欢迎语被压后几十秒到十几分钟。日志里长这样：
+
+        [交互] 连续失败 8 次，暂停该车道请求 480 秒
+        | 触发: POST .../chatroom/message/send
+        | 错误: HTTP 400: {"code":500030011,"info":"主播休息时暂时无法使用哦~"}
+    """
+    import core.network.client as C
+
+    class _Resp:
+        status_code = 400
+        text = '{"code":500030011,"info":"主播休息时暂时无法使用哦~"}'
+
+        def json(self) -> dict:
+            return {"code": 500030011, "info": "主播休息时暂时无法使用哦~"}
+
+    class _Client:
+        async def post(self, url, headers=None, content=None):  # noqa: ANN001, ANN201
+            return _Resp()
+
+    original = C._get_shared_client
+    C._get_shared_client = lambda: _Client()  # type: ignore[assignment]
+    gate.reset()
+    gate.configure(0.0)
+    try:
+        for _ in range(50):
+            try:
+                await C.HTTPClient("").post("https://example.invalid/send")
+            except Exception:  # noqa: BLE001
+                pass  # 业务拒绝仍要抛给调用方，只是不该记成失败
+    finally:
+        C._get_shared_client = original  # type: ignore[assignment]
+
+    check("HTTP 400 + 业务码不计入失败", gate.backoff_remaining == 0,
+          f"退避剩余 {gate.backoff_remaining:.0f}s")
+
+    # 对照组：连规范应答都拿不到（边缘节点拒绝 / 网关错误）**必须**计入失败，
+    # 否则熔断就永远不触发了
+    class _BadResp:
+        status_code = 502
+        text = "<html>502 Bad Gateway</html>"
+
+        def json(self):  # noqa: ANN201
+            raise ValueError("响应不是 JSON")
+
+    class _BadClient:
+        async def post(self, url, headers=None, content=None):  # noqa: ANN001, ANN201
+            return _BadResp()
+
+    gate.reset()
+    gate.configure(0.0)
+    C._get_shared_client = lambda: _BadClient()  # type: ignore[assignment]
+    try:
+        for _ in range(8):
+            try:
+                await C.HTTPClient("").post("https://example.invalid/send")
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        C._get_shared_client = original  # type: ignore[assignment]
+
+    # 注意：这里**不能**在断言前 reset —— 那会把要检查的退避一起清掉
+    check("502（拿不到规范应答）仍然计入失败", gate.backoff_remaining > 0,
+          "否则熔断永远不触发")
+    gate.reset()
+
+
 # ------------------------------------------------------------------ #
 
 async def main() -> None:
     await test_gate_rate_limit()
+    await test_gate_concurrency_cap()
+    await test_escalation_debounce()
+    await test_lane_isolation()
+    await test_platform_limit_sheds_background_only()
     await test_global_backoff()
     await test_consecutive_failure_backoff()
     await test_business_error_does_not_trip_gate()
+    await test_http_400_business_error_does_not_trip_gate()
     await test_safe_call_skips_benign_and_throttles()
     await test_bot_restore_cooldown()
     await test_refresh_cooldown_and_meta_ttl()

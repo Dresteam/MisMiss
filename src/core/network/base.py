@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .client import HTTPClient
+from .throttle import Lane
 
 
 class API(ABC):
@@ -20,9 +21,16 @@ class API(ABC):
     :param cookie: Cookie 字符串
     """
 
+    #: 这条 API 的流量类别，决定它走哪条闸门车道（见 :class:`Lane`）。
+    #:
+    #: 默认取 ``INTERACTIVE`` 是**刻意保守**：万一新增端点忘了归类，它会按
+    #: 关键路径处理（平台限流时只降速、不被跳过），而不是被静默丢弃。
+    #: 纯轮询 / 刷新类端点请显式声明 ``lane = Lane.BACKGROUND``。
+    lane: Lane = Lane.INTERACTIVE
+
     def __init__(self, cookie: str = "") -> None:
         self._cookie = cookie
-        self._http = HTTPClient(cookie)
+        self._http = HTTPClient(cookie, lane=self.lane)
 
     # ------------------------------------------------------------------ #
     # 子类必须实现

@@ -920,12 +920,41 @@ async def update_check():
     parsed.sort(key=lambda rv: rv[1] or (0, 0, 0, 0, 0, 0), reverse=True)
     sorted_releases = [r for r, _ in parsed]
 
-    latest = sorted_releases[0]
+    # ⚠️ **预发布版不参与「有更新」的判定**（``is_final == 1`` 才算正式版）。
+    # alpha / beta / rc 是我们自己发出来试的，正式实例不该被告知「可以升到
+    # v1.5.3-alpha.1」。列表里仍然照常返回（带 ``prerelease`` 标记，前端可自行
+    # 展示），只是不拿它当「最新版本」。
+    stable = [(r, v) for r, v in parsed if v is not None and v[3] == 1]
+
+    releases_payload = [
+        {
+            "tag": r.get("tag_name", "").lstrip("v"),
+            "name": r.get("name", ""),
+            "published_at": r.get("published_at", ""),
+            "body": r.get("body", ""),
+            "prerelease": bool(r.get("prerelease", False)),
+            "assets": [
+                {"name": a.get("name", ""), "url": a.get("browser_download_url", "")}
+                for a in r.get("assets", [])
+            ],
+        }
+        for r in sorted_releases[:100]
+    ]
+
+    if not stable:
+        # 一个正式版都没发过（例如刚起步只有预发布）→ 不当成「有更新」
+        return {
+            "latest": None, "latest_name": "", "up_to_date": True,
+            "body": "", "releases": releases_payload,
+        }
+
+    latest, latest_ver = stable[0]
     latest_tag = latest.get("tag_name", "").lstrip("v")
     current_ver = _parse_version(_CURRENT_VERSION)
-    latest_ver = parsed[0][1]
-    if current_ver is not None and latest_ver is not None:
-        # 最新发布版本不高于当前版本 → 无需更新
+    if current_ver is not None:
+        # 最新正式版不高于当前版本 → 无需更新
+        # （当前跑的是预发布版时，预发布排在同号正式版之前，所以不会反过来
+        #   提示「降级」回同号正式版）
         up_to_date = latest_ver <= current_ver
     else:
         up_to_date = latest_tag == _CURRENT_VERSION
@@ -934,20 +963,7 @@ async def update_check():
         "latest_name": latest.get("name", latest_tag),
         "up_to_date": up_to_date,
         "body": latest.get("body", ""),
-        "releases": [
-            {
-                "tag": r.get("tag_name", "").lstrip("v"),
-                "name": r.get("name", ""),
-                "published_at": r.get("published_at", ""),
-                "body": r.get("body", ""),
-                "prerelease": bool(r.get("prerelease", False)),
-                "assets": [
-                    {"name": a.get("name", ""), "url": a.get("browser_download_url", "")}
-                    for a in r.get("assets", [])
-                ],
-            }
-            for r in sorted_releases[:100]
-        ],
+        "releases": releases_payload,
     }
 
 

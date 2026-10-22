@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..base import API
+from ..throttle import Lane
 from ..urls import Urls
 
 
@@ -22,6 +23,9 @@ class BotStatusAPI(API):
         api = BotStatusAPI(cookie)
         status = await api.api()
     """
+
+    #: 纯轮询 / 刷新：陈旧无所谓，平台一紧张就该整批让路
+    lane = Lane.BACKGROUND
 
     async def api(self) -> dict[str, Any]:
         """获取机器人状态信息。

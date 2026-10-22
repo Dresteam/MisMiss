@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Download, RefreshCw, RotateCcw, Loader2, Globe, Shield, Container,
-  ChevronLeft, ChevronRight, ScrollText, Megaphone,
-  CheckCircle2, XCircle, AlertTriangle,
+  ScrollText, Megaphone, ArrowRightLeft,
+  CheckCircle2, XCircle, AlertTriangle, X,
 } from 'lucide-react';
 import { showToast } from '../hooks/useToast';
 import { Button } from '../components/Button';
+import { Pagination } from '../components/ListControls';
+import { MarqueeText } from '../components/MarqueeText';
 import { Select } from '../components/Select';
 import { Switch } from '../components/Switch';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -64,7 +66,7 @@ const MIRROR_PRESETS = [
   { name: 'hub.gitmirror.com', url: 'https://hub.gitmirror.com/' },
 ];
 
-/** 版本列表每页条数 */
+/** 版本列表每页条数的默认值（可在页脚里改，见 ``pageSize``） */
 const PAGE_SIZE = 6;
 
 /** 将 ISO 时间格式化为 ``2026/8/13 01:03:15`` 样式 */
@@ -73,6 +75,17 @@ function formatDateTime(iso: string): string {
   const [date, time] = iso.replace('T', ' ').slice(0, 19).split(' ');
   const [, month, day] = date.split('-');
   return `${date.slice(0, 4)}/${Number(month)}/${Number(day)} ${time}`;
+}
+
+/** 窄屏版本 ``8/13 01:03`` —— 去掉年份与秒。
+ *
+ * 完整的 18 字符串在 375px 屏上要占掉半行，会把操作列挤到折行（见下方版本列表）。
+ * 复用 `formatDateTime` 的输出再裁，免得同一套解析写两遍。 */
+function formatShortDateTime(iso: string): string {
+  const full = formatDateTime(iso);
+  if (full === '-') return full;
+  const [date, time] = full.split(' ');
+  return `${date.slice(5)} ${time.slice(0, 5)}`;
 }
 
 /** 程序更新页面 */
@@ -93,6 +106,7 @@ export function UpdatePage() {
   const [showChangelog, setShowChangelog] = useState(false);
   const [showPre, setShowPre] = useState(false);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [changelogTarget, setChangelogTarget] = useState<ReleaseInfo | null>(null);
 
   // 设置
@@ -186,14 +200,19 @@ export function UpdatePage() {
     return () => { stopped = true; clearInterval(timer); };
   }, [polling, checkUpdate]);
 
-  // 进入页面时若后端仍有更新在跑（如刷新过页面），接上轮询
+  // 进入页面时若后端仍有更新在跑（如刷新过页面），接上轮询。
+  //
+  // ⚠️ **只接 running**：终态（done / failed / interrupted）是**上一次**更新的
+  // 结果，当时已经报过了。无条件 setProgress 会让那个结果每次打开本页都重新
+  // 弹出来 —— 而它又没有关闭入口，于是永远挂在页面上。
   useEffect(() => {
     let stopped = false;
     api('/status')
       .then((st: UpdateStatus) => {
-        if (stopped) return;
+        if (stopped || st.state !== 'running') return;
         setProgress(st);
-        if (st.state === 'running') { setPolling(true); setApplying(true); }
+        setPolling(true);
+        setApplying(true);
       })
       .catch(() => { /* 拿不到就不显示进度 */ });
     return () => { stopped = true; };
@@ -279,11 +298,9 @@ export function UpdatePage() {
   // 全部都是预发布时强制显示，避免空列表
   const showPreEffective = showPre || stableReleases.length === 0;
   const visible = showPreEffective ? releases : stableReleases;
-  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(visible.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pageReleases = visible.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-  const rangeStart = visible.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
-  const rangeEnd = Math.min(safePage * PAGE_SIZE, visible.length);
+  const pageReleases = visible.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   if (loading) {
     return <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>;
@@ -330,7 +347,7 @@ export function UpdatePage() {
           {progress.state === 'done' && <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />}
           {progress.state === 'failed' && <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
           {progress.state === 'interrupted' && <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="font-medium">
               {progress.kind === 'rollback' ? '回滚' : '更新'}
               {progress.state === 'running' && ` · ${progress.step_label || '进行中'}`}
@@ -348,6 +365,16 @@ export function UpdatePage() {
               </div>
             )}
           </div>
+          {/* 只有终态给关：「进行中」关掉会被下一轮轮询（2 秒）立刻重新点亮，
+              看着像坏了；而且那时的进度本身还带着信息。
+              终态关掉后不会再回来 —— 进页面时只接 running 状态。 */}
+          {progress.state !== 'running' && (
+            <button onClick={() => setProgress(null)} aria-label="关闭提示"
+              className="shrink-0 -mr-1 p-1 rounded-lg hover:bg-black/5
+                         dark:hover:bg-white/10 transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       )}
 
@@ -425,32 +452,91 @@ export function UpdatePage() {
         {pageReleases.length === 0 ? (
           <p className="text-center text-gray-400 py-10 text-sm">暂无版本</p>
         ) : (
-          <table className="w-full text-sm">
+          /* table-fixed 是「标签能横向滚动」的前提：自动布局下浏览器会按
+             min-content 排布，`whitespace-nowrap` 的标签会把这列撑到全宽、
+             整张表溢出屏幕，轮不到标签自己滚。定宽后内容超出就在格子里滚。
+             右侧两列的宽度按各自最宽的内容给（窄屏是缩写日期 + 纯图标按钮）。 */
+          <table className="w-full table-fixed text-sm">
             <thead>
               <tr className="text-left text-xs text-gray-400 border-b border-gray-100 dark:border-gray-700/50">
-                <th className="px-5 py-2.5 font-medium">标签</th>
-                <th className="px-5 py-2.5 font-medium">发布时间</th>
-                <th className="px-5 py-2.5 font-medium text-right">操作</th>
+                <th className="px-2 py-2.5 font-medium md:px-5">标签</th>
+                <th className="w-[5.5rem] px-2 py-2.5 font-medium md:w-48 md:px-5">发布时间</th>
+                <th className="w-[6.5rem] px-2 py-2.5 font-medium text-right md:w-48 md:px-5">操作</th>
               </tr>
             </thead>
             <tbody>
               {pageReleases.map((r) => (
                 <tr key={r.tag}
                   className="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors">
-                  <td className="px-5 py-3">
-                    <span className="font-mono font-medium text-gray-800 dark:text-gray-200">v{r.tag}</span>
-                    {r.prerelease && (
-                      <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 font-semibold">
-                        预发布
-                      </span>
-                    )}
+                  <td className="px-2 py-3 md:px-5">
+                    {/* 这层只干两件事：贴住标签、给角标当定位基准。
+                        `w-max` 让宽度等于标签本身（短标签不再顶满整列，角标才不会
+                        飘到离标签很远的地方）；`max-w-full` 在标签超长时收回列宽，
+                        于是里面的 MarqueeText 照旧测得出溢出、照旧滚动。
+                        它不能写成 flex-1/自适应宽 —— 那样宽度就等于整列，角标会贴在
+                        列尾而不是标签上（本行高度也只有一行，怎么放都别扭）。 */}
+                    <div className="relative w-max max-w-full">
+                      {/* 标签溢出就自动滚动，不折行、不撑宽本行 */}
+                      <MarqueeText text={`v${r.tag}`}
+                        className="font-mono font-medium text-gray-800 dark:text-gray-200" />
+                      {/* 角标：绝对定位，**不占任何布局宽度** —— 标签列总共 135px，
+                          而 `v1.5.2-beta.1` 自己就要 109px，文字徽标怎么也放不下。
+                          `left-full` 贴在标签右缘、`top-1/2 -translate-y-1/2` 与文字
+                          垂直居中；`-ml-px` 吃掉 1px 缝隙，免得看着断开。
+                          超出的部分落在两列内边距里（标签列右 8px + 日期列左 8px），
+                          不会碰到日期文字 */}
+                      {r.prerelease && (
+                        <span className="absolute left-full top-1/2 -translate-y-1/2 -ml-px
+                                         whitespace-nowrap rounded-full
+                                         bg-purple-100 dark:bg-purple-900/30
+                                         text-purple-600 dark:text-purple-400
+                                         text-[9px] leading-none px-1 py-0.5 font-semibold">
+                          预发布
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td className="px-5 py-3 text-gray-500 dark:text-gray-400">{formatDateTime(r.published_at)}</td>
-                  <td className="px-5 py-3 text-right">
+                  <td className="px-2 py-3 whitespace-nowrap text-gray-500 dark:text-gray-400 md:px-5">
+                    {/* 两份长度都在 DOM 里，由 CSS 决定显示哪份 —— 与日志页的级别按钮同一套
+                        做法，比 matchMedia 简单且无首帧闪烁 */}
+                    <span className="md:hidden">{formatShortDateTime(r.published_at)}</span>
+                    <span className="hidden md:inline">{formatDateTime(r.published_at)}</span>
+                  </td>
+                  <td className="px-2 py-3 text-right md:px-5">
                     <div className="flex items-center justify-end gap-1">
-                      <Button variant="outline" size="sm" onClick={() => setChangelogTarget(r)}>查看日志</Button>
-                      <Button variant="outline" size="sm" disabled={info?.is_docker && !info?.docker_ready}
-                        onClick={() => setConfirmUpdate(r)}>切换</Button>
+                      {/* 窄屏只留图标：两个文字按钮要 136px，在 375px 屏上放不下，
+                          只能折行。换成图标后整列只要 80px，让出的宽度归标签。
+                          用的是 Button 抬头注释里那套 `hidden md:inline` 写法 ——
+                          图标走 `md:hidden` 而不是 `icon` prop，好让**宽屏与改动前
+                          完全一致**（走 icon prop 会给宽屏也多加一个图标）。
+                          图标按钮按全站惯例配 `tooltip` + `aria-label`（同 `LogsPage`
+                          的日志工具条、《账户总览》的卡片操作）。
+                          ⚠️ `HoverTip` 只认 `group-hover`，触屏上不会出现 —— 手机上
+                          这两个按钮依旧没有可见文字，提示是给桌面看的。 */}
+                      <Button variant="outline" size="sm"
+                        tooltip="查看日志" tooltipClassName="md:hidden"
+                        aria-label="查看日志"
+                        onClick={() => setChangelogTarget(r)}>
+                        <ScrollText className="md:hidden w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden md:inline">查看日志</span>
+                      </Button>
+                      {/* `tooltip` 与 `title` 各管一段：Button 在 disabled 时不渲染
+                          HoverTip（见其 `!isDisabled`），所以「为什么不能点」仍走原生
+                          `title`，启用时置 undefined 免得两个提示叠在一起 —— 顶部那个
+                          「回滚」按钮本来就是这么写的 */}
+                      <Button variant="outline" size="sm"
+                        tooltip="切换到此版本" tooltipClassName="md:hidden"
+                        aria-label="切换到此版本"
+                        title={info?.is_docker && !info?.docker_ready
+                          ? '未挂载 docker.sock，请通过部署包更新'
+                          : undefined}
+                        disabled={info?.is_docker && !info?.docker_ready}
+                        onClick={() => setConfirmUpdate(r)}>
+                        {/* 换掉原来的 `Download`：那图标读起来就是「下载」，与旁边
+                            真正的下载动作分不开。`ArrowRightLeft` 才对应「切换」 */}
+                        <ArrowRightLeft className="md:hidden w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden md:inline">切换</span>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -459,20 +545,16 @@ export function UpdatePage() {
           </table>
         )}
         {visible.length > 0 && (
-          <div className="flex items-center justify-between px-5 py-3 border-t border-gray-100 dark:border-gray-700/50">
-            <span className="text-xs text-gray-400">
-              每页 {PAGE_SIZE} 条 · {rangeStart}-{rangeEnd} / 共 {visible.length} 条
-            </span>
-            <div className="flex gap-1">
-              <button disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}
-                className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button disabled={safePage >= totalPages} onClick={() => setPage(safePage + 1)}
-                className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
+          <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700/50">
+            {/* 复用账户总览那套分页：`<< < 1 2 3 … > >>`，窄屏自动去掉首/末页。
+                版本列表不再报「每页 6 条 · 1-6 / 共 13 条」——那条说明一半是恒定的、
+                另一半（末页页码）本来就看得到；改成能直接调每页条数更实用。
+                改条数要回到第 1 页：否则原页码可能越界，虽会被 `safePage` 夹住，
+                但用户看到的是「刚跳到第 4 页，一改条数又弹回第 1 页」，不如直接回顶 */}
+            <Pagination page={safePage} pageCount={totalPages} total={visible.length}
+              onChange={setPage}
+              pageSize={pageSize}
+              onPageSizeChange={(n) => { setPageSize(n); setPage(1); }} />
           </div>
         )}
       </div>

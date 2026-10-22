@@ -32,6 +32,20 @@ class CoreApiException(MissevanException):
         super().__init__(message)
 
 
+class CoreThrottledException(CoreApiException):
+    """请求被出站闸门**主动跳过**（不是失败）。
+
+    只在平台被判定为限流、后台车道整批让路时抛出。语义上更接近
+    「这次没做，等会儿再说」而不是「做失败了」—— 所以：
+
+    - 调用方**不需要**重试或报警，后台轮询下一轮自然会再来；
+    - 刻意继承 :class:`CoreApiException`，这样已有的
+      ``except CoreApiException`` 处理器不用改一行就能接住它。
+
+    见 :class:`core.network.throttle.Lane`。
+    """
+
+
 class CoreWebSocketException(MissevanException):
     """WebSocket 连接异常。
 

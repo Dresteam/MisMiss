@@ -26,7 +26,14 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
  */
 const FLIP_BELOW_TOP = 64;
 
-export function HoverTip({ text }: { text: string }) {
+export function HoverTip({ text, className = '' }: {
+  text: string;
+  /**
+   * 附加类名。目前唯一的用途是 `md:hidden`：宿主的图标按钮在窄屏只剩图标、
+   * 宽屏自带文字，提示只在窄屏才有意义（见 ``UpdatePage`` 的版本列表）。
+   */
+  className?: string;
+}) {
   const ref = useRef<HTMLSpanElement>(null);
   const [shift, setShift] = useState(0);
   const [below, setBelow] = useState(false);
@@ -93,7 +100,7 @@ export function HoverTip({ text }: { text: string }) {
                  w-max max-w-[calc(100vw-1rem)] text-center
                  px-2 py-1 rounded-md text-[11px] font-medium
                  bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 shadow-lg
-                 opacity-0 group-hover:opacity-100 transition-opacity duration-100`}
+                 opacity-0 group-hover:opacity-100 transition-opacity duration-100 ${className}`}
     >
       {text}
     </span>

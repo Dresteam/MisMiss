@@ -53,8 +53,10 @@ export function StatusBadge({ status, label, pulse, size = 'md' }: Props) {
   const s = styles[status];
   const sizeCls = size === 'sm' ? 'text-[10px] px-1.5 py-0' : 'text-xs px-2.5 py-0.5';
 
+  // whitespace-nowrap：窄容器（手机端的双列卡片）里标签文字原本会自己折行，
+  // 「未开播」「已连接」两枚并排时就成了两行。徽章本来就该是一行。
   return (
-    <span className={clsx('inline-flex items-center gap-1.5 rounded-full font-medium', sizeCls, s.bg, s.text)}>
+    <span className={clsx('inline-flex items-center gap-1.5 rounded-full font-medium whitespace-nowrap', sizeCls, s.bg, s.text)}>
       <span
         className={clsx(
           'inline-block rounded-full',

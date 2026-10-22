@@ -12,6 +12,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   icon?: React.ReactNode;
   /** 自定义悬浮提示文字，显示在按钮上方，主题自适应 */
   tooltip?: string;
+  /**
+   * `tooltip` 的附加类名。用于让提示只在部分断点出现 —— 典型场景是「窄屏只留图标、
+   * 宽屏自带文字」的按钮：宽屏上文字已经可见，再弹一遍提示是噪音，传 `md:hidden` 收掉。
+   */
+  tooltipClassName?: string;
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
@@ -65,6 +70,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       className = '',
       disabled,
       tooltip,
+      tooltipClassName,
       ...props
     },
     ref,
@@ -97,7 +103,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
             一个空 flex item —— `gap-1.5` 照样在它与图标之间生效，图标被挤得偏离中心。
             （Button 自身带 relative group，HoverTip 依赖这一点。） */}
         {children}
-        {tooltip && !isDisabled && <HoverTip text={tooltip} />}
+        {tooltip && !isDisabled && <HoverTip text={tooltip} className={tooltipClassName} />}
       </button>
     );
   },

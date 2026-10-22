@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..base import API
+from ..throttle import Lane
 from ..urls import Urls
 
 
@@ -20,6 +21,9 @@ class MetaAPI(API):
         data = await api.api(12345)
         admins = data.get("info", {}).get("members", {}).get("admin", [])
     """
+
+    #: 纯轮询 / 刷新：陈旧无所谓，平台一紧张就该整批让路
+    lane = Lane.BACKGROUND
 
     async def api(self, room_id: int) -> dict[str, Any]:
         """获取指定聊天室的元数据。

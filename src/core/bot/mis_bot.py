@@ -23,6 +23,7 @@ from ..exceptions import (
     CoreCookieException,
     CoreDisabledException,
     CorePermissionException,
+    CoreThrottledException,
 )
 from ..models.gift import BotGift
 from ..network.endpoints.backpack import BackpackSendAPI
@@ -279,6 +280,9 @@ class MissevanBot(Bot):
 
         节流只在返回 True 时推进时间戳，所以被节流掉的失败不会饿死后续检查。
         """
+        if isinstance(err, CoreThrottledException):
+            # 被闸门**跳过**：这次请求压根没发出去，跟 Cookie 一点关系都没有
+            return False
         if self._is_benign_error(err):
             return False
         now = time.monotonic()
@@ -1205,7 +1209,12 @@ class MissevanBot(Bot):
             _log.error("Cookie 已过期，停止定时消息循环")
             return False
         except CoreDisabledException:
-            _log.warning("Bot 已停用，跳过定时消息 id={}", msg_id)
+            # 降为 debug：定时器**每个 tick 都会走到这里**，Bot 停用期间就一直在刷，
+            # 而「Bot 停用」本身是用户主动设置的正常状态，不是异常。
+            # 同类事件的既有口径也是 debug —— 见 account/manager.py 里那几条
+            # 「Bot 不可用 / 直播间未启用 / 未开播，跳过全局消息」。
+            # 真要排查「为什么没发出去」，把 config.yml 的 logging.level 调到 DEBUG。
+            _log.debug("Bot 已停用，跳过定时消息 id={}", msg_id)
         except Exception:
             _log.exception("定时消息未预期异常 id={}", msg_id)
         return True

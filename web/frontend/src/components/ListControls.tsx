@@ -5,7 +5,19 @@
  * 之前的 26~28px 高版本按不准。
  */
 
-import { Search, X, ChevronLeft, ChevronRight, SlidersHorizontal, ChevronDown } from 'lucide-react';
+import { useState } from 'react';
+import {
+  Search, X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+  SlidersHorizontal, ChevronDown,
+} from 'lucide-react';
+import { Select } from './Select';
+
+/** 「每页 N 条」的预设值。此前提之外还能选「自定义」手填 */
+const PAGE_SIZE_CHOICES = [6, 7, 8, 9, 10];
+/** 「自定义」那一项在选项里的哨兵值 —— 页码范围是数字，撞不上 */
+const PAGE_SIZE_CUSTOM = '__custom__';
+/** 自定义条数的上限：拦一下手滑输成 999 把整页撑爆 */
+const PAGE_SIZE_MAX = 200;
 
 // ------------------------------------------------------------------ //
 // 窄屏筛选开关
@@ -56,10 +68,15 @@ export function FilterToggle({ open, count, onToggle, className = '' }: {
 // 搜索框
 // ------------------------------------------------------------------ //
 
-export function SearchInput({ value, onChange, placeholder }: {
+export function SearchInput({ value, onChange, placeholder, autoFocus = false }: {
   value: string;
   onChange: (next: string) => void;
   placeholder?: string;
+  /**
+   * 挂载即聚焦。**别在触屏上开** —— 软键盘会盖住刚展开的浮层。
+   * 调用方自己按指针类型判断，见 `AccountFilter`。
+   */
+  autoFocus?: boolean;
 }) {
   return (
     <div className="relative flex-1 min-w-0">
@@ -70,6 +87,7 @@ export function SearchInput({ value, onChange, placeholder }: {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        autoFocus={autoFocus}
         className="input w-full min-h-8 pl-8 pr-9 text-sm"
       />
       {value && (
@@ -154,13 +172,27 @@ export function FilterChips<T extends string>({ options, value, onChange, block 
  *
  * 只渲染当前页附近的页码（首尾各留一个），账户上千时页码条也不会撑爆。
  */
-export function Pagination({ page, pageCount, total, onChange }: {
+export function Pagination({ page, pageCount, total, onChange, pageSize, onPageSizeChange }: {
   page: number;
   pageCount: number;
-  /** 总条数，用于文案 */
+  /** 总条数，用于默认文案 */
   total: number;
   onChange: (next: number) => void;
+  /**
+   * 每页条数与它的 setter。两个都传才会在左侧渲染「每页 N 条」选择器，
+   * 取代默认的「共 N 条」文案。调用方负责在换条数时把页码归 1。
+   */
+  pageSize?: number;
+  onPageSizeChange?: (next: number) => void;
 }) {
+  // 点了省略号、就地变成输入框的那一格（存 `nums` 里的下标）。省略号最多出现
+  // 两个 —— 当前页左右各一个 —— 所以要分开记，一个布尔量不够
+  const [jumpAt, setJumpAt] = useState<number | null>(null);
+  const [jumpText, setJumpText] = useState('');
+  // 选了「自定义」后，下拉框就地换成手填输入框
+  const [sizeCustomOpen, setSizeCustomOpen] = useState(false);
+  const [sizeCustomText, setSizeCustomText] = useState('');
+
   if (pageCount <= 1) return null;
 
   const nums: (number | '…')[] = [];
@@ -169,20 +201,130 @@ export function Pagination({ page, pageCount, total, onChange }: {
     else if (nums[nums.length - 1] !== '…') nums.push('…');
   }
 
+  /** 收起输入框。不改页码 */
+  const closeJump = () => {
+    setJumpAt(null);
+    setJumpText('');
+  };
+
+  const submitJump = () => {
+    const n = parseInt(jumpText, 10);
+    closeJump();
+    // 空着或没输入数字 = 取消；超出范围夹到首/末页，别静默丢弃让人以为没反应
+    if (Number.isNaN(n)) return;
+    onChange(Math.min(pageCount, Math.max(1, n)));
+  };
+
+  const submitCustomSize = () => {
+    const n = parseInt(sizeCustomText, 10);
+    setSizeCustomOpen(false);
+    if (Number.isNaN(n) || n < 1) return;   // 空着或 0 = 取消
+    onPageSizeChange?.(Math.min(PAGE_SIZE_MAX, n));
+  };
+
+  const sizeOptions = [
+    ...PAGE_SIZE_CHOICES.map((n) => ({ value: String(n), label: String(n) })),
+    // 自定义值不在预设里，补一项让它显示得出来；不补的话 Select 找不到匹配项，
+    // 会退回占位文案，看着像没选中
+    ...(pageSize !== undefined && !PAGE_SIZE_CHOICES.includes(pageSize)
+      ? [{ value: String(pageSize), label: String(pageSize) }]
+      : []),
+    { value: PAGE_SIZE_CUSTOM, label: '自定义' },
+  ];
+
   const btn = 'inline-flex items-center justify-center min-w-8 h-8 px-2 rounded-lg text-xs ' +
     'border transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+  const navBtn = `${btn} border-gray-200 dark:border-gray-700
+    text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700`;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <span className="text-xs text-gray-500 dark:text-gray-400">共 {total} 条</span>
+      {pageSize !== undefined && onPageSizeChange ? (
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-500 dark:text-gray-400">每页</span>
+          {sizeCustomOpen ? (
+            <input
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              value={sizeCustomText}
+              placeholder="条数"
+              aria-label="每页条数"
+              onChange={(e) => setSizeCustomText(e.target.value.replace(/\D/g, '').slice(0, 3))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitCustomSize();
+                else if (e.key === 'Escape') setSizeCustomOpen(false);
+              }}
+              onBlur={() => setSizeCustomOpen(false)}
+              className="w-[5.5rem] min-h-8 px-2 text-center text-xs rounded-lg
+                         border border-primary-500 bg-white dark:bg-gray-800
+                         text-gray-900 dark:text-white placeholder:text-gray-400
+                         focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+            />
+          ) : (
+            // w-[5.5rem] 是为「自定义」三个字留的，单个数字时看着宽一点无妨
+            <Select size="sm" className="w-[5.5rem]" ariaLabel="每页条数"
+              value={String(pageSize)}
+              options={sizeOptions}
+              onChange={(v) => {
+                if (v === PAGE_SIZE_CUSTOM) { setSizeCustomText(''); setSizeCustomOpen(true); }
+                else onPageSizeChange?.(Number(v));
+              }} />
+          )}
+          <span className="text-xs text-gray-500 dark:text-gray-400">条</span>
+        </div>
+      ) : (
+        <span className="text-xs text-gray-500 dark:text-gray-400">共 {total} 条</span>
+      )}
       <div className="flex items-center gap-1">
-        <button type="button" className={`${btn} border-gray-200 dark:border-gray-700
-          text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700`}
+        {/* 首/末页四个导航键全断点都显示：窄屏实测放得下，不必收口
+            （容器是 flex-wrap，真放不下时也只是换行，不会裁掉） */}
+        <button type="button" className={navBtn}
+          disabled={page <= 1} onClick={() => onChange(1)} aria-label="第一页">
+          <ChevronsLeft className="w-3.5 h-3.5" />
+        </button>
+        <button type="button" className={navBtn}
           disabled={page <= 1} onClick={() => onChange(page - 1)} aria-label="上一页">
           <ChevronLeft className="w-3.5 h-3.5" />
         </button>
         {nums.map((n, i) => n === '…' ? (
-          <span key={`gap${i}`} className="px-1 text-xs text-gray-400">…</span>
+          // 省略号是个「跳页」入口：点开就地变输入框，省得为了去第 12 页
+          // 一页页按过去。外观保持原来的轻量（无边框），靠 hover 提示可点
+          jumpAt === i ? (
+            <input
+              key={`gap${i}`}
+              autoFocus
+              type="text"
+              inputMode="numeric"
+              value={jumpText}
+              placeholder="页码"
+              aria-label="跳转到指定页码"
+              onChange={(e) => setJumpText(e.target.value.replace(/\D/g, '').slice(0, 4))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitJump();
+                else if (e.key === 'Escape') closeJump();
+              }}
+              // Enter 提交时输入框随即卸载，这里主要兜「点到别处」的情况
+              onBlur={closeJump}
+              className="w-12 min-h-8 px-1 text-center text-xs rounded-lg
+                         border border-primary-500 bg-white dark:bg-gray-800
+                         text-gray-900 dark:text-white placeholder:text-gray-400
+                         focus:outline-none focus:ring-2 focus:ring-primary-500/40"
+            />
+          ) : (
+            <button
+              key={`gap${i}`}
+              type="button"
+              onClick={() => { setJumpAt(i); setJumpText(''); }}
+              title="跳转到指定页码"
+              aria-label="跳转到指定页码"
+              className="inline-flex items-center justify-center min-w-8 h-8 px-1 rounded-lg
+                         text-xs text-gray-400 transition-colors
+                         hover:bg-gray-100 hover:text-gray-600
+                         dark:hover:bg-gray-700 dark:hover:text-gray-300">
+              …
+            </button>
+          )
         ) : (
           <button key={n} type="button" onClick={() => onChange(n)}
             aria-current={n === page ? 'page' : undefined}
@@ -192,10 +334,13 @@ export function Pagination({ page, pageCount, total, onChange }: {
             {n}
           </button>
         ))}
-        <button type="button" className={`${btn} border-gray-200 dark:border-gray-700
-          text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700`}
+        <button type="button" className={navBtn}
           disabled={page >= pageCount} onClick={() => onChange(page + 1)} aria-label="下一页">
           <ChevronRight className="w-3.5 h-3.5" />
+        </button>
+        <button type="button" className={navBtn}
+          disabled={page >= pageCount} onClick={() => onChange(pageCount)} aria-label="最后一页">
+          <ChevronsRight className="w-3.5 h-3.5" />
         </button>
       </div>
     </div>

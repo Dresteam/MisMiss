@@ -16,8 +16,10 @@ export function ExpiryBadge({ expiresAt, pausedReason, size = 'sm' }: Props) {
     const t = setInterval(() => setTick((x) => x + 1), 60000);
     return () => clearInterval(t);
   }, [expiresAt]);
+  // whitespace-nowrap：「剩余 30 天」里有空格，窄容器（手机端的双列卡片）里
+  // 会被从空格处折成两行。徽章本来就该是一行。
   const cls = clsx(
-    'inline-flex items-center gap-1 rounded-full font-medium',
+    'inline-flex items-center gap-1 rounded-full font-medium whitespace-nowrap',
     size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm',
   );
 
