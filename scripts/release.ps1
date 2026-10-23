@@ -24,6 +24,15 @@ $ProjectRoot  = Resolve-Path "$ScriptDir\.."
 $DistDir      = "$ProjectRoot\dist"
 $ReleaseDir   = "$ProjectRoot\release"
 
+# Prefer project venv: fastapi/uvicorn and other deps live in .venv.
+# Packaging with system python would miss them and the exe would fail to import.
+$RootPath     = [string]$ProjectRoot
+$VenvScripts  = Join-Path $RootPath ".venv\Scripts"
+$VenvPython   = Join-Path $VenvScripts "python.exe"
+if (Test-Path $VenvPython) {
+    $env:Path = "$VenvScripts;$env:Path"
+}
+
 # ------------------------------------------------------------------ #
 # Version detection
 # ------------------------------------------------------------------ #
@@ -222,6 +231,8 @@ if ($SkipPyInstaller) {
         --add-data "$ProjectRoot\src;src" `
         --add-data "$ProjectRoot\web\backend;web\backend" `
         --add-data "$ProjectRoot\docs\changelog;docs/changelog" `
+        --paths "$ProjectRoot\src" `
+        --paths "$ProjectRoot\web\backend" `
         --hidden-import "core" `
         --hidden-import "core.server" `
         --hidden-import "core.bot.mis_bot" `
