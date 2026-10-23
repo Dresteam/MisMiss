@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # MisMiss -- Release Build Script (Windows)
 # ============================================================
 # Builds all distribution formats for a GitHub release.
@@ -231,6 +231,7 @@ if ($SkipPyInstaller) {
         --add-data "$ProjectRoot\src;src" `
         --add-data "$ProjectRoot\web\backend;web\backend" `
         --add-data "$ProjectRoot\docs\changelog;docs/changelog" `
+        --add-data "$ProjectRoot\pyproject.toml;." `
         --paths "$ProjectRoot\src" `
         --paths "$ProjectRoot\web\backend" `
         --hidden-import "core" `
