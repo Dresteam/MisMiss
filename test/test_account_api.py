@@ -38,7 +38,8 @@ def main():
 
         # ---- 创建账户(public,无网络) ----
         r = client.post("/api/panel/accounts", headers=h,
-                        json={"name": "API账户", "bot_mode": "public", "username": "apia"})
+                        json={"name": "API账户", "bot_mode": "public", "username": "apia",
+                              "duration_days": -1})
         assert r.status_code == 200, f"FAIL: {r.text}"
         aid = r.json()["id"]
         print("PASS 2: 创建账户")
@@ -83,7 +84,8 @@ def main():
         print("PASS 7: 授权码兑换解除过期")
 
         # ---- 续期 ----
-        # aid 创建时未给 duration_days,即永久账户——叠加续期应保持永久并给出提示
+        # 本测试创建时显式传 duration_days=-1，即永久账户——
+        # 叠加续期应保持永久并给出提示（默认值已改为 3 天，不能再依赖省略字段）
         r = client.post(f"/api/panel/accounts/{aid}/renew", headers=h, json={"days": 7})
         assert r.status_code == 200, f"FAIL: {r.text}"
         assert r.json()["expires_at"] is None and r.json()["days_left"] is None, \

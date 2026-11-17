@@ -21,8 +21,8 @@ start.bat build        # 构建前端后以 prod 模式启动
 ```
 
 面板默认账号 **MisMiss / MisMiss**（`data/auth.json`），首次登录强制改密。
-start.bat 内部调 `python`，在本机解析到 Windows Store 占位程序会静默失败——
-必要时用 `.venv/Scripts/python.exe -m web.backend.main --port 18080`。
+start.bat 会优先使用项目 `.venv/Scripts/python.exe`（不再是裸 `python`），缺失时才回退
+系统解释器；必要时也可直接 `.venv/Scripts/python.exe -m web.backend.main --port 18080`。
 
 ### 测试
 
@@ -309,8 +309,8 @@ token 授权，后者虽在放行名单里，但**自行校验管理员令牌**�
 `renumber_accounts()` 用于清掉历史遗留的空号，压紧为 1..N：
 
 - 两阶段改目录名 —— `25→5` 会撞上仍然存在的 `5`，必须先全部挪到临时名再落位
-- 必须先 `unmount_ui_routes()` 再 `shutdown()`：插件 UI 路由前缀里嵌着账户 id，
-  而 `PluginManager.shutdown_all()` **只调 `terminate`、不摘路由**，指望不上
+- 必须先 `unmount_ui_routes()` 再 `shutdown()`：插件 UI 路由前缀里嵌着账户 id；
+  `shutdown_all()` 现在会注销实例并摘路由，但重排流程仍显式先摘一次，避免依赖内部实现
 - 重启走 `start_all()`，顺带享受启动错峰
 - 令牌里的 `account_id` 由 web 层负责改写（`auth.remap_token_account_ids`、
   `cookie_login.remap_helper_token_account_ids`）——不改的话账户角色用户
@@ -472,7 +472,8 @@ Docker 路径：校验部署包（须含 `docker-compose.yml` + 真实 `docker s
 ### 日志
 
 loguru：`logs/bot_{date}.log`（10MB 轮转 / 保留 7 天）+ `error_{date}.log` + stderr，
-`core.logging` 在 import 时自动初始化。
+`core.logging` 在 import 时自动初始化；**每次进程启动会清空当天**的
+`bot_{date}.log` / `error_{date}.log`，历史日期文件按 retention 保留。
 
 ⚠️ `error_{date}.log` 的 retention 传的是 **`retention * 2`**（`core/logging.py:289`），
 默认下就是字符串 `"7 days7 days"`——loguru 按两个匹配解析，实际约 **14 天**。
@@ -483,6 +484,11 @@ WS 握手只允许 admin，鉴权在 `ws.py` 内单独完成——WebSocket 不�
 **日志等级约定**：默认 INFO，由 `config.yml` 的 `logging.level` 驱动。无价值 / 高频重复
 的日志一律 `debug`——判据是「这条日志能否回答一次线上排查」。批量扇出操作（如刷新插件库
 会打到每个账户）只在循环外打**一条汇总**，不要逐账户打。
+
+⚠️ **不要因为「反正是 debug」就写流水账**：每条消息、定时器每个 tick、每次正常的
+「已停用/未启用/已加载，跳过」都不该落日志。debug 日志同样会进文件、占轮转配额，
+排查时反而把真正的错误淹没。能靠状态判断的静默分支直接静默；要保留诊断价值就只打
+一次汇总或状态变化点。
 
 ## 约定
 

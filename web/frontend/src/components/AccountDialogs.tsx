@@ -28,7 +28,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
   const [roomId, setRoomId] = useState('');
   const [botMode, setBotMode] = useState<'private' | 'public'>('public');
   const [cookie, setCookie] = useState('');
-  const [durationDays, setDurationDays] = useState('-1');
+  const [durationDays, setDurationDays] = useState('3');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -46,7 +46,7 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
     setRoomId('');
     setBotMode('public');
     setCookie('');
-    setDurationDays('-1');
+    setDurationDays('3');
     setUsername(defaultUsername ?? '');
     setPassword('user123');
     setError('');
@@ -156,8 +156,8 @@ export function CreateAccountDialog({ open, loading, onConfirm, onCancel, defaul
             </label>
             <input value={durationDays} onChange={(e) => setDurationDays(e.target.value)}
               className="input w-full" inputMode="numeric" autoComplete="off"
-              placeholder="30 表示 30 天;-1 表示永久" />
-            <p className="text-xs text-gray-400 mt-1">填 30 表示有效 30 天,填 -1 表示永久</p>
+              placeholder="3 表示 3 天;-1 表示永久" />
+            <p className="text-xs text-gray-400 mt-1">默认 3 天；填 -1 表示永久</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -347,7 +347,7 @@ export function RenewDialog({
   open, accountId, accountName, mode, availableModes, loading,
   onRenew, onRedeem, onExpire, onCancel,
 }: RenewDialogProps) {
-  const [days, setDays] = useState('30');
+  const [days, setDays] = useState('31');
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   // 对话框内可切换模式：一次打开就能把时长相关的事都办了，不必回卡片上换按钮
@@ -355,7 +355,7 @@ export function RenewDialog({
   const modes = availableModes ?? MODE_ORDER;
 
   useEffect(() => {
-    if (open) { setActiveMode(mode); setError(''); }
+    if (open) { setActiveMode(mode); setDays('31'); setError(''); }
   }, [open, mode]);
 
   if (!open) return null;
@@ -433,7 +433,7 @@ export function RenewDialog({
                 {m === 'days' ? '续期天数' : '剩余天数'}
               </label>
               <input value={days} onChange={(e) => setDays(e.target.value)}
-                className="input w-full" inputMode="numeric" placeholder="30" />
+                className="input w-full" inputMode="numeric" placeholder="31" />
               <p className="text-xs text-gray-400 mt-1">
                 {m === 'days'
                   ? '在当前到期时间基础上叠加 N 天(永久账户保持不变)'

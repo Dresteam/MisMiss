@@ -15,6 +15,7 @@ import { PluginDrawer } from '../components/PluginDrawer';
 import { PluginLogDialog } from '../components/PluginLogDialog';
 import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
+import { usePersistedState } from '../hooks/usePersistedState';
 
 /** 图标按钮(带悬浮提示,v1.0.1 样式) */
 function IconBtn({ icon, label, onClick, loading, disabled }: {
@@ -46,8 +47,11 @@ function IconBtn({ icon, label, onClick, loading, disabled }: {
 export function PluginLibraryPage() {
   const [plugins, setPlugins] = useState<LibraryPlugin[]>([]);
   // ---- 列表筛选（纯前端；插件库规模用不上分页） ----
-  const [kw, setKw] = useState('');
-  const [libFilter, setLibFilter] = useState<'all' | 'default' | 'used'>('all');
+  // 持久化：从账户插件页返回插件库时，搜索词和筛选胶囊保持原样。
+  const [kw, setKw] = usePersistedState('pluginLibrary.keyword', '');
+  const [libFilter, setLibFilter] = usePersistedState<'all' | 'default' | 'used'>(
+    'pluginLibrary.filter', 'all',
+  );
 
   const filtered = useMemo(() => {
     const k = kw.trim().toLowerCase();

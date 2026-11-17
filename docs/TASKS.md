@@ -278,19 +278,16 @@
 
 ### C5 — 插件激活无锁，可创建两个实例
 
-- [ ] 激活/停用/重载路径串行化
-  - 位置：`src/core/plugin/plugin_manager.py:1021-1040`（`resume_plugin`），
-    同类还有 `enable_plugin` / `disable_plugin` / `uninstall_plugin`
-  - 现状：全部直接读写 `self._plugins`，**无锁**；靠
-    `plugin_instance is None` 推断「未激活」
-  - 失败场景：两个浏览器标签页同时点「启用」→ 两个协程都看到
+- [x] 激活/停用/重载路径串行化
+  - 位置：`src/core/plugin/plugin_manager.py`（`enable_plugin` / `disable_plugin` / `reload_plugin`）
+  - 现状：已为每个插件加 `_lock_for(name)`，`enable`/`disable`/`reload` 及后台激活共用同一把锁；
+    `shutdown_all` 同时从 EventBus / CommandRouter / UI 路由注销实例，避免 `start()` 重入后旧实例继续收事件
+  - 失败场景（修复前）：两个浏览器标签页同时点「启用」→ 两个协程都看到
     `plugin_instance is None`，都走 `_activate_plugin`：第二次命中
     `sys.modules` 缓存拿到**同一模块对象**，但各自 `Plugin(**kwargs)`
     创建**两个独立实例**并都 `register_new_event` → 每条弹幕处理两次；
     `metadata.plugin_instance` 被后写者覆盖，前一个实例永久泄漏
     （`terminate` 永不执行）
-  - 方向：per-plugin `asyncio.Lock`；把「激活中」作为显式状态而非靠
-    `None` 推断
 
 ### C6 — `reload_plugin` 失败导致插件从列表中消失
 

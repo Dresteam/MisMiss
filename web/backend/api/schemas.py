@@ -220,8 +220,8 @@ class AccountCreateRequest(BaseModel):
     cookie: str = Field(default="", description="private 模式的 Cookie")
     permissions: list[str] = Field(default=["SEND_LIVESTREAM_MESSAGE"])
     duration_days: int = Field(
-        default=-1,
-        description="有效时长(天):N 为 N 天;-1 为永久",
+        default=3,
+        description="有效时长(天):N 为 N 天;-1 为永久;默认 3 天",
     )
     username: str = Field(..., min_length=1, max_length=64, description="账户登录用户名(必填,全局唯一,用于账户分辨)")
     password: str = Field(default="", min_length=4, max_length=64, description="账户登录密码(至少 4 位)")

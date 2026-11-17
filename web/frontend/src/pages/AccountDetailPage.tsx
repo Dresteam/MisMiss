@@ -42,6 +42,7 @@ import { UninstallDialog } from '../components/UninstallDialog';
 import { PluginLogDialog } from '../components/PluginLogDialog';
 import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
+import { usePersistedState } from '../hooks/usePersistedState';
 import { livePageUrl, parseLiveId } from '../utils/live';
 
 const PERM_NAMES = ['SEND_LIVESTREAM_MESSAGE', 'SEND_PRIVATE_MESSAGE', 'SEND_BACKPACK_GIFT', 'SEND_GIFT', 'EXPOSE_COOKIE'];
@@ -981,7 +982,9 @@ export function TimerTab({ acc }: { acc: AccountSummary }) {
   const [editorSaving, setEditorSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TimerMessageItem | null>(null);
   // 消息来源筛选（展示用，不影响轮转顺序与指针）
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'normal' | 'plugin'>('all');
+  const [sourceFilter, setSourceFilter] = usePersistedState<'all' | 'normal' | 'plugin'>(
+    'timer.sourceFilter', 'all',
+  );
   // 本地 1s 倒计时:每秒重渲染,减去自上次拉取以来的流逝秒数
   const [, setTick] = useState(0);
   const loadedAtRef = useRef(Date.now());
@@ -1312,8 +1315,8 @@ export function PluginsTab({ acc, pluginPageBase, onOpenLibrary, demo = false }:
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
   const [libraryVersions, setLibraryVersions] = useState<Record<string, string>>({});
   const demoInstalledNow = useDemoInstalled();
-  const [filter, setFilter] = useState<PluginFilter>('all');
-  const [kwRaw, setKwRaw] = useState('');
+  const [filter, setFilter] = usePersistedState<PluginFilter>('plugins.installed.filter', 'all');
+  const [kwRaw, setKwRaw] = usePersistedState('plugins.installed.keyword', '');
 
   // ⚠️ 必须放在下方 `if (loading && ...) return` **之前** ——
   // 放进早退之后会让首次渲染少跑一个 hook，React 直接报
@@ -1781,8 +1784,10 @@ export function LibraryTab({ acc, demo = false }: {
   // 账户级偏好：安装后是否自动启用（默认关闭）
   const [autoEnable, setAutoEnable] = useState(acc.auto_enable_on_install);
   const [savingPref, setSavingPref] = useState(false);
-  const [libKw, setLibKw] = useState('');
-  const [libFilter, setLibFilter] = useState<'all' | 'installed' | 'notinstalled'>('all');
+  const [libKw, setLibKw] = usePersistedState('plugins.library.keyword', '');
+  const [libFilter, setLibFilter] = usePersistedState<'all' | 'installed' | 'notinstalled'>(
+    'plugins.library.filter', 'all',
+  );
 
   const libFiltered = useMemo(() => {
     const kw = libKw.trim().toLowerCase();

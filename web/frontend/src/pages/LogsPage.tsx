@@ -11,6 +11,7 @@ import { FilterToggle } from '../components/ListControls';
 import { fetchAccounts } from '../api/client';
 import type { AccountSummary } from '../api/types';
 import { showToast } from '../hooks/useToast';
+import { usePersistedState } from '../hooks/usePersistedState';
 
 const ansi = new Convert({
   fg: '#e2e8f0', bg: '#030712',
@@ -48,24 +49,26 @@ const levelShort: Record<string, string> = {
 };
 
 export function LogsPage() {
-  const [filterLevels, setFilterLevels] = useState<Set<string>>(new Set());
+  // 级别筛选用数组持久化（Set 不能 JSON 序列化）；其余筛选同样写 sessionStorage，
+  // 从日志页跳走再回来时保持原条件。
+  const [filterLevels, setFilterLevels] = usePersistedState<string[]>('logs.levels', []);
   // 账户筛选可多选：空数组 = 不过滤；含 '' 表示只看面板级；其余为账户名
-  const [filterAccounts, setFilterAccounts] = useState<string[]>([]);
+  const [filterAccounts, setFilterAccounts] = usePersistedState<string[]>('logs.accounts', []);
   const [accountOptions, setAccountOptions] = useState<AccountSummary[]>([]);
   // 窄屏下筛选区默认折叠（md 起常驻展开，由 CSS 控制）—— 断点与账户总览一致
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const activeFilterCount = filterLevels.size + filterAccounts.length;
+  const activeFilterCount = filterLevels.length + filterAccounts.length;
 
   // 级别与账户筛选均下推到后端（源头过滤），变化时 hook 自动重连重拉
   const { entries, connected, authRequired, loading, total, hasMore, loadMore, refresh } =
-    useLogStream([...filterLevels], filterAccounts);
+    useLogStream(filterLevels, filterAccounts);
 
   // 账户列表用于筛选下拉；取自面板账户而非已加载日志，
   // 否则筛选后列表会随日志内容塌缩、无法切回其他账户
   useEffect(() => {
     fetchAccounts().then(setAccountOptions).catch(() => { /* 拉不到就只留「全部/面板级」 */ });
   }, []);
-  const [keyword, setKeyword] = useState('');
+  const [keyword, setKeyword] = usePersistedState('logs.keyword', '');
   const [atBottom, setAtBottom] = useState(true);
   const [expanded, setExpanded] = useState<Set<number>>(new Set()); // 展开的日志行
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -83,11 +86,9 @@ export function LogsPage() {
 
   // Filter
   const toggleLevel = (lv: string) => {
-    setFilterLevels((prev) => {
-      const next = new Set(prev);
-      next.has(lv) ? next.delete(lv) : next.add(lv);
-      return next;
-    });
+    setFilterLevels((prev) => (
+      prev.includes(lv) ? prev.filter((x) => x !== lv) : [...prev, lv]
+    ));
   };
 
   // 级别过滤已由后端完成，这里仅做关键词本地过滤
@@ -251,7 +252,7 @@ export function LogsPage() {
         <div className="flex flex-wrap items-center gap-1
                         max-w-full shrink p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
           {levels.map((lv) => {
-            const active = filterLevels.has(lv);
+            const active = filterLevels.includes(lv);
             return (
               <button key={lv} onClick={() => toggleLevel(lv)}
                 className={`px-2 py-1 text-xs font-medium rounded-md transition-colors shrink-0
@@ -272,8 +273,8 @@ export function LogsPage() {
               </button>
             );
           })}
-          {filterLevels.size > 0 && (
-            <button onClick={() => setFilterLevels(new Set())}
+          {filterLevels.length > 0 && (
+            <button onClick={() => setFilterLevels([])}
               className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-red-500
                          transition-colors shrink-0">清除</button>
           )}

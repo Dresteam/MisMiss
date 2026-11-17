@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus, Trash2, Bot as BotIcon,
@@ -20,6 +20,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { SearchInput, FilterChips, FilterToggle, Pagination } from '../components/ListControls';
 import { MarqueeText } from '../components/MarqueeText';
 import { showToast } from '../hooks/useToast';
+import { usePersistedState } from '../hooks/usePersistedState';
 import { livePageUrl } from '../utils/live';
 
 /** 账户列表每页条数 —— 3 列 × 4 行 */
@@ -99,16 +100,26 @@ export function AccountsPage() {
   const [runtimeBusy, setRuntimeBusy] = useState(false);
 
   // ---- 列表筛选与分页（全在浏览器里做，后端不动） ----
-  const [keyword, setKeyword] = useState('');
+  // 筛选条件与页码都写进 sessionStorage：点进账户详情再返回、或从侧栏切走再回来时，
+  // 不会退回「全部」或第 1 页。筛选变化仍统一回第 1 页（见下方 effect）。
+  const [keyword, setKeyword] = usePersistedState('accounts.keyword', '');
   // 四组筛选一律「全部 + 三个互斥状态」= 4 项，正好排满 4 列网格、不留空格
-  const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'expiring' | 'expired'>('all');
-  const [modeFilter, setModeFilter] = useState<'all' | 'public' | 'private' | 'broken'>('all');
-  const [liveFilter, setLiveFilter] = useState<'all' | 'live' | 'offline' | 'unbound'>('all');
+  const [statusFilter, setStatusFilter] = usePersistedState<'all' | 'normal' | 'expiring' | 'expired'>(
+    'accounts.status', 'all',
+  );
+  const [modeFilter, setModeFilter] = usePersistedState<'all' | 'public' | 'private' | 'broken'>(
+    'accounts.mode', 'all',
+  );
+  const [liveFilter, setLiveFilter] = usePersistedState<'all' | 'live' | 'offline' | 'unbound'>(
+    'accounts.live', 'all',
+  );
   // Bot 状态：「已启用」用卡片徽标的判定（enabled && available），这样筛选结果与
   // 徽标永远一致；「未就绪」= 已启用但不可用（平台风控期间账户起不来的样子），
   // 与用户主动「已停用」是两回事，混在一起会误导排查。
-  const [botFilter, setBotFilter] = useState<'all' | 'ready' | 'off' | 'notready'>('all');
-  const [page, setPage] = useState(1);
+  const [botFilter, setBotFilter] = usePersistedState<'all' | 'ready' | 'off' | 'notready'>(
+    'accounts.bot', 'all',
+  );
+  const [page, setPage] = usePersistedState('accounts.page', 1);
   // 移动端默认折叠筛选胶囊：四组共 13 个，展开会占满整屏；桌面端不受影响
   const [filtersOpen, setFiltersOpen] = useState(false);
   /** 当前生效的筛选项数量（不含关键字搜索）—— 移动端折叠时用它提示"有筛选在生效" */
@@ -314,12 +325,33 @@ export function AccountsPage() {
   }, [accounts, keyword, statusFilter, modeFilter, liveFilter, botFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / ACCOUNTS_PER_PAGE));
-  // 筛选后页码可能越界（比如在第 5 页时把条件收窄到只剩 1 页），夹回有效范围
-  const safePage = Math.min(page, pageCount);
+  // 渲染时先夹到有效范围，避免持久化的旧页码在数据加载前切出空列表；
+  // 真正把状态改回第 1 页由下方 effect 完成。
+  const safePage = Math.min(Math.max(page, 1), pageCount);
   const paged = filtered.slice((safePage - 1) * ACCOUNTS_PER_PAGE, safePage * ACCOUNTS_PER_PAGE);
 
-  // 改筛选条件就回到第一页，否则会停在一个空的页码上
-  useEffect(() => { setPage(1); }, [keyword, statusFilter, modeFilter, liveFilter, botFilter]);
+  // 记住上一次的筛选组合：首次挂载时不能把持久化的页码冲回 1，
+  // 只有筛选**发生变化**才重置到第 1 页。
+  const lastFilters = useRef({ keyword, statusFilter, modeFilter, liveFilter, botFilter });
+  useEffect(() => {
+    const prev = lastFilters.current;
+    const changed = (
+      prev.keyword !== keyword
+      || prev.statusFilter !== statusFilter
+      || prev.modeFilter !== modeFilter
+      || prev.liveFilter !== liveFilter
+      || prev.botFilter !== botFilter
+    );
+    lastFilters.current = { keyword, statusFilter, modeFilter, liveFilter, botFilter };
+    if (changed) setPage(1);
+  }, [keyword, statusFilter, modeFilter, liveFilter, botFilter, setPage]);
+
+  // 恢复的页码超出当前筛选后的页数（或小于 1）→ 自动回第 1 页。
+  // 等 loading 结束再判断：账户数据还没到时 pageCount 恒为 1，会把有效页码误杀。
+  useEffect(() => {
+    if (loading) return;
+    if (page < 1 || page > pageCount) setPage(1);
+  }, [loading, page, pageCount, setPage]);
 
   /**
    * 默认用户名 `user_{账户总数 + 1}`。

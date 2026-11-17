@@ -176,8 +176,8 @@ class MissevanServer(ServerInterface):
                 _log.debug("自动纳入已启用直播间: live_id={}", lid)
                 self._enabled_livestreams.add(lid)
         if auto_resume:
-            # 自动连接（使用 enable_livestream 确保完整流程）
-            for lid in list(self._enabled_livestreams):
+            # 开播中的直播间优先恢复：多房间账户下别让已下播的房间先占连接/请求
+            for lid in self._ordered_enabled_livestream_ids():
                 if lid in self._livestreams:
                     try:
                         await self.enable_livestream(lid)
@@ -192,6 +192,9 @@ class MissevanServer(ServerInterface):
 
         # 加载插件（首次加载的插件默认禁用）
         enabled_plugins: list[str] = state.get("enabled_plugins", [])
+        # start() 可能被 reload/重排复用：先把旧 PluginManager 的监听器摘干净，
+        # 否则同一个 EventBus 上会挂着两套实例，指令会被处理两次。
+        await self._plugin_manager.shutdown_all()
         command_router = CommandRouter(self._event_bus)
         self._plugin_manager = PluginManager(
             plugin_dir=self._plugin_library_dir,
@@ -231,6 +234,19 @@ class MissevanServer(ServerInterface):
             len(self._plugin_manager.list_plugins()),
         )
 
+    def _ordered_enabled_livestream_ids(self) -> list[int]:
+        """已启用直播间按「开播中优先」排序，同状态按 ID 保证稳定。
+
+        ``_restore_livestream`` 在启动时已经拉过一次房间信息，``is_streaming``
+        是可用的；这里只是调整连接顺序，不再额外打平台接口。
+        """
+        def rank(live_id: int) -> tuple[int, int]:
+            live = self._livestreams.get(live_id)
+            streaming = bool(live is not None and live.is_streaming)
+            return (0 if streaming else 1, live_id)
+
+        return sorted(self._enabled_livestreams, key=rank)
+
     async def shutdown(self) -> None:
         """关闭服务器——先持久化状态再停用所有组件。"""
         _log.debug("服务器关闭中 ...")
@@ -243,7 +259,20 @@ class MissevanServer(ServerInterface):
                 pass
             livestream.enabled = False
         self._bot.enabled = False
+        await self._close_bot(self._bot)
         _log.info("服务器已关闭")
+
+    async def _close_bot(self, bot) -> None:
+        """停掉一个 Bot 实例的后台任务（兼容测试里的轻量替身）。"""
+        close = getattr(bot, "close", None)
+        if close is None:
+            return
+        try:
+            result = close()
+            if asyncio.iscoroutine(result):
+                await result
+        except Exception as e:
+            _log.warning("关闭旧 Bot 失败: {}", e)
 
     async def reload(self) -> None:
         """重载服务器（shutdown + start）。"""
@@ -273,6 +302,7 @@ class MissevanServer(ServerInterface):
     ) -> MissevanBot:
         _log.info("创建 Bot ...")
         was_enabled = self._bot.enabled
+        old_bot = self._bot
         bot = MissevanBot(
             cookie,
             permissions=permissions,
@@ -280,6 +310,11 @@ class MissevanServer(ServerInterface):
         )
         await bot.refresh()
         bot.enabled = was_enabled
+
+        # 旧实例必须先停掉：定时消息循环与消息消费者会继续用旧 Cookie 发消息，
+        # 只替换 self._bot 的话，切到私有后公共 Cookie 仍会按时播报。
+        timer_state = old_bot.export_timer_state()
+        await self._close_bot(old_bot)
 
         # 1. 先停用所有已启用插件（终止旧实例）
         # 逐个插件打日志会刷屏（每个插件还会由 disable_plugin 再打一条），
@@ -298,8 +333,7 @@ class MissevanServer(ServerInterface):
             except Exception as e:
                 _log.warning("停用插件失败 [{}]: {}", name, e)
 
-        # 2. 切换到新 Bot（保留定时消息，避免更新 Cookie 后丢失）
-        bot.restore_timer_state(self._bot.export_timer_state())
+        # 2. 切换到新 Bot
         self._bot = bot
         self._bind_bot_live_checker()
         self._bot_available = True
@@ -311,7 +345,10 @@ class MissevanServer(ServerInterface):
         for live in self._livestreams.values():
             live._bot = bot
 
-        # 4. 重新启用插件（使用新 bot 实例初始化）
+        # 4. 恢复定时消息（此时 live_checker / 直播间引用已就绪，循环才能正确过滤）
+        bot.restore_timer_state(timer_state)
+
+        # 5. 重新启用插件（使用新 bot 实例初始化）
         for name in enabled_names:
             try:
                 await pm.enable_plugin(name)
@@ -421,6 +458,7 @@ class MissevanServer(ServerInterface):
         elif self._bot.id != 0:
             # 其他 worker 已删除 Bot → 同步为空 Bot 状态
             _log.info("Bot 已被其他 worker 删除，同步清空")
+            old_bot = self._bot
             self._bot = MissevanBot(
                 "",
                 timer_interval=self._config.get_float("bot.timer_interval", 60.0),
@@ -429,6 +467,14 @@ class MissevanServer(ServerInterface):
             self._bot_available = False
             self._bot_cookie = ""
             self._bot_permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
+            try:
+                close = getattr(old_bot, "close", None)
+                if close is not None:
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        asyncio.get_running_loop().create_task(result)
+            except RuntimeError:
+                pass
 
         # 直播间：移除其他 worker 已删除的直播间
         saved_ids = set(state.get("livestreams", []))
@@ -1043,6 +1089,8 @@ class MissevanServer(ServerInterface):
             permissions = BotPermission(perms_val)
         except ValueError:
             permissions = BotPermission.SEND_LIVESTREAM_MESSAGE
+        # 恢复前先停掉旧实例，避免旧定时器/消费者继续跑
+        await self._close_bot(self._bot)
         try:
             self._bot = MissevanBot(
                 cookie,

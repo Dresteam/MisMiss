@@ -361,7 +361,13 @@ WebSocket 实时推送用同一套参数；其中**空串表示只看面板级�
 | GET | `/api/update/changelog/{version}` | 指定版本更新日志 |
 | POST | `/api/update/settings` | 保存更新配置（仓库/镜像/代理/更新提示消息） |
 | POST | `/api/update/apply` | 执行更新（Docker 走镜像重建，原生走覆盖解压） |
+| GET | `/api/update/status` | 轮询更新进度与 `cancellable` |
+| POST | `/api/update/cancel` | 停止下载中的更新（准备/下载阶段可用，写入阶段返回 409） |
 | POST | `/api/update/rollback` | 回滚到备份版本 |
+
+下载阶段 `/api/update/status` 额外返回 `downloaded` / `total` / `percent`，
+面板据此显示下载进度条；服务端未给 `Content-Length` 时 `total=0`、`percent=null`，
+前端退化为不显示百分比的动态进度条。
 
 **更新提示消息**：`update.notify_enabled` 打开后，程序更新时会用各账户的机器人
 在其**已启用且正在开播**的直播间各发一条自定义消息（未绑定 / 未启用 / 未开播 /

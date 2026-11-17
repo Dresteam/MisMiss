@@ -23,8 +23,26 @@ export function ExpiryBadge({ expiresAt, pausedReason, size = 'sm' }: Props) {
     size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm',
   );
 
+  // 过期天数按「已经过去的整天」算；刚被手动设为过期的账户显示 0 天，
+  // 不再统一写成「已过期停用」，管理员能一眼看出过期了多久。
+  const expiredLabel = (() => {
+    if (!expiresAt) return '已过期';
+    const expires = new Date(expiresAt).getTime();
+    if (!Number.isFinite(expires)) return '已过期';
+    const days = Math.max(0, Math.floor((Date.now() - expires) / 86400000));
+    return `已过期${days}天`;
+  })();
+  const expireTitle = expiresAt
+    ? `到期时间：${new Date(expiresAt).toLocaleString()}`
+    : undefined;
+
   if (pausedReason === 'expiry') {
-    return <span className={clsx(cls, 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400')}>已过期停用</span>;
+    return (
+      <span title={expireTitle}
+        className={clsx(cls, 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400')}>
+        {expiredLabel}
+      </span>
+    );
   }
 
   if (!expiresAt) {
@@ -33,11 +51,24 @@ export function ExpiryBadge({ expiresAt, pausedReason, size = 'sm' }: Props) {
 
   const now = Date.now();
   const expires = new Date(expiresAt).getTime();
+  if (!Number.isFinite(expires)) {
+    return (
+      <span title={expireTitle}
+        className={clsx(cls, 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400')}>
+        {expiredLabel}
+      </span>
+    );
+  }
   const remainMs = expires - now;
   const days = Math.ceil(remainMs / 86400000);
 
   if (days <= 0) {
-    return <span className={clsx(cls, 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400')}>已过期</span>;
+    return (
+      <span title={expireTitle}
+        className={clsx(cls, 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400')}>
+        {expiredLabel}
+      </span>
+    );
   }
   if (days <= 7) {
     return <span className={clsx(cls, 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400')}>{days} 天后到期</span>;

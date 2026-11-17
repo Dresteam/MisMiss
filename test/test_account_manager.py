@@ -28,6 +28,7 @@ async def main():
     # ---- 1. 创建账户(无 cookie/房间,不触网) ----
     rec1 = await manager.create_account("账户A", bot_mode="public", username="acctA")
     assert rec1.id == 1 and rec1.bot_mode == "public"
+    assert rec1.days_left == 3, f"默认有效时长应为 3 天，实际 {rec1.days_left}"
     rec2 = await manager.create_account(
         "账户B", bot_mode="private", duration_days=30, username="acctB",
     )

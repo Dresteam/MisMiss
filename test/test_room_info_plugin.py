@@ -47,6 +47,7 @@ ROOM_INFO = {
             "statistics": {
                 "accumulation": 1644,
                 "attention_count": 18401,
+                "online": 321,
                 "score": 456,
             },
             "medal": {"name": "z野玫瑰"},
@@ -136,6 +137,7 @@ async def main() -> None:
     snap = make_snapshot(plugin)
     check("房间可用", snap["room_ok"] is True)
     check("累计人数", snap["accumulation"] == 1644, str(snap))
+    check("在线人数", snap["online"] == 321, str(snap))
     check("关注数", snap["attention"] == 18401, str(snap))
     check("热度", snap["score"] == 456, str(snap))
     check("超粉", snap["superfan"] == 4, str(snap))
@@ -151,6 +153,7 @@ async def main() -> None:
         "🎤分区：情感-闲聊",
         "⏰直播时长：02:02:49",
         "👪累计人数：1644",
+        "👥在线人数：321",
         "💗关注数：18401",
         "☀️热度：456",
         "👩超粉：4",

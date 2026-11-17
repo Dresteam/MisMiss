@@ -54,6 +54,10 @@ from api.routes import update as upd  # noqa: E402
 from core.account import BROADCAST_MAX_LEN, clip_broadcast  # noqa: E402
 from core.config import ServerConfig  # noqa: E402
 
+# update_state.json 是相对 CWD 的固定路径，不跟 MISMISS_DATA_DIR 走；
+# 不隔离的话本测试会把 backups 等假状态写进开发机真实 data/。
+upd._UPDATE_STATE_FILE = Path(_DATA) / "update_state.json"
+
 res: list[tuple[str, bool, str]] = []
 
 

@@ -174,6 +174,10 @@ class PluginManager:
         self._plugin_data_dir = plugin_data_dir
 
         self._plugins: dict[str, PluginMetadata] = {}
+        # 每个插件一把激活锁：并发 enable / disable / reload 时，
+        # 若不串行化，两次 enable 都可能看到 plugin_instance=None 而各建一个实例，
+        # 两个实例同时挂到 EventBus → 一条弹幕被处理两次。
+        self._plugin_locks: dict[str, asyncio.Lock] = {}
         self._config_mgr = PluginConfigManager(config_dir)
         self._permission_mgr = PluginPermissionManager(permission_dir)
         self._app = None  # FastAPI app 引用
@@ -182,6 +186,14 @@ class PluginManager:
     def set_server(self, server) -> None:
         """注入 MissevanServer 引用，供插件查询直播间列表等。"""
         self._server = server
+
+    def _lock_for(self, plugin_name: str) -> asyncio.Lock:
+        """取某插件的激活锁（懒创建，避免在无事件循环时构造）。"""
+        lock = self._plugin_locks.get(plugin_name)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._plugin_locks[plugin_name] = lock
+        return lock
 
     def _purge_plugin_timers(self, plugin_name: str) -> None:
         """清理某个插件注册的全部定时消息。
@@ -713,9 +725,8 @@ class PluginManager:
         metadata = self._load_metadata(plugin_path)
         metadata.root_dir_name = dir_name
 
-        # 防止重复加载（重复扫描是常态而非异常，故为 DEBUG）
+        # 防止重复加载（重复扫描是常态而非异常）
         if metadata.name in self._plugins:
-            _log.debug("插件已加载，跳过: {}", metadata.name)
             return self._plugins[metadata.name]
 
         # 2. 检查是否存在 _conf_schema.json / _ui_schema.json（仅记录路径）
@@ -742,7 +753,6 @@ class PluginManager:
         # 5. 存入内部字典（仅元数据，不加载代码）
         self._plugins[metadata.name] = metadata
         self._notify_state_changed()
-        _log.debug("插件已发现（禁用状态）: {}", metadata)
         return metadata
 
     @staticmethod
@@ -868,6 +878,10 @@ class PluginManager:
         :return: 新的插件元数据
         :raises CorePluginNotFoundException: 插件不存在
         """
+        async with self._lock_for(plugin_name):
+            return await self._reload_plugin_locked(plugin_name)
+
+    async def _reload_plugin_locked(self, plugin_name: str) -> PluginMetadata:
         metadata = self._get_plugin(plugin_name)
         dir_name = metadata.root_dir_name
         if dir_name is None:
@@ -1030,6 +1044,10 @@ class PluginManager:
         :raises CorePluginNotFoundException: 插件不存在
         :raises CorePluginLoadException: 插件初始化失败
         """
+        async with self._lock_for(plugin_name):
+            await self._enable_plugin_locked(plugin_name)
+
+    async def _enable_plugin_locked(self, plugin_name: str) -> None:
         metadata = self._get_plugin(plugin_name)
         if metadata.plugin_instance is not None and metadata.enabled:
             return
@@ -1068,6 +1086,10 @@ class PluginManager:
         :param plugin_name: 插件名称
         :raises CorePluginNotFoundException: 插件不存在
         """
+        async with self._lock_for(plugin_name):
+            await self._disable_plugin_locked(plugin_name)
+
+    async def _disable_plugin_locked(self, plugin_name: str) -> None:
         metadata = self._get_plugin(plugin_name)
         if not metadata.enabled:
             return
@@ -1213,12 +1235,13 @@ class PluginManager:
 
     async def _background_activate(self, metadata: PluginMetadata) -> None:
         """后台完整激活：加载模块 + 初始化 + 注册事件。不阻塞调用方。"""
-        try:
-            if metadata.plugin_instance is None:
-                self._ensure_plugin_loaded(metadata)
-            await self._finish_activation(metadata)
-        except Exception as e:
-            _log.error("插件 [{}] 后台激活失败: {}", metadata.name, e)
+        async with self._lock_for(metadata.name):
+            try:
+                if metadata.plugin_instance is None:
+                    self._ensure_plugin_loaded(metadata)
+                await self._finish_activation(metadata)
+            except Exception as e:
+                _log.error("插件 [{}] 后台激活失败: {}", metadata.name, e)
 
     async def _finish_activation(self, metadata: PluginMetadata) -> None:
         """完成插件的异步激活部分（调用 initialize + 注册到事件总线）。
@@ -1615,18 +1638,32 @@ class PluginManager:
     # ------------------------------------------------------------------ #
 
     async def shutdown_all(self) -> None:
-        """关闭所有插件。
+        """关闭所有插件，并把实例从事件总线/命令路由/UI 路由上摘干净。
 
-        依次调用每个已启用插件的 :meth:`Plugin.terminate` 方法。
+        ⚠️ 只调用 ``terminate`` 是不够的：``Server.start()`` 重入时会用同一个
+        EventBus 创建新的 PluginManager，旧实例若仍挂在总线上，同一条弹幕会被
+        两套插件各处理一次（表现为机器人回复两次）。这里按实例身份显式注销。
         """
-        for metadata in self._plugins.values():
-            if metadata.enabled and metadata.plugin_instance is not None:
-                try:
-                    await metadata.plugin_instance.terminate()
-                except Exception as e:
-                    _log.warning(
-                        "插件 {} 终止异常: {}", metadata.name, e
-                    )
+        for metadata in list(self._plugins.values()):
+            instance = metadata.plugin_instance
+            if instance is None:
+                continue
+            try:
+                self._event_bus.unregister_event(instance)
+                if self._command_router is not None:
+                    self._command_router.unregister_plugin(instance)
+                self._remove_plugin_routes(metadata)
+                self._purge_plugin_timers(metadata.name)
+            except Exception as e:
+                _log.warning("插件 {} 注销失败: {}", metadata.name, e)
+            try:
+                await instance.terminate()
+            except Exception as e:
+                _log.warning(
+                    "插件 {} 终止异常: {}", metadata.name, e
+                )
+            metadata.plugin_instance = None
+            metadata.enabled = False
 
         _log.debug("所有插件已关闭")
 

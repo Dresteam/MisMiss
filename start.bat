@@ -1,6 +1,33 @@
 @echo off
-title MisMiss Web Console
+title MisMiss Launcher
 cd /d "%~dp0"
+
+:: ------------------------------------------------------------------ %
+:: Python interpreter - prefer the project venv
+::   Using the system `python` can silently hit a Windows Store stub or a
+::   clean interpreter without FastAPI. The venv is the supported runtime.
+:: ------------------------------------------------------------------ %
+set "PYTHON=python"
+if exist "%~dp0.venv\Scripts\python.exe" set "PYTHON=%~dp0.venv\Scripts\python.exe"
+
+:: ------------------------------------------------------------------ %
+:: Python / dependencies preflight
+:: ------------------------------------------------------------------ %
+"%PYTHON%" --version >nul 2>&1
+if errorlevel 1 (
+    echo [*] Python not found, trying winget...
+    winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+    echo [OK] Please re-run start.bat
+    pause & exit /b 0
+)
+"%PYTHON%" -c "import fastapi, uvicorn" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Python dependencies are missing for:
+    echo         %PYTHON%
+    echo [*] Install them with:
+    echo         "%PYTHON%" -m pip install -r requirements.txt
+    pause & exit /b 1
+)
 
 :: ------------------------------------------------------------------ %
 :: Ports (env var overrides)
@@ -38,7 +65,7 @@ if "%MODE%"=="build" (
     cd web\frontend
     call npm install
     call npm run build
-    if %errorlevel% neq 0 ( echo [ERROR] Build failed & pause & exit /b 1 )
+    if errorlevel 1 ( echo [ERROR] Build failed & pause & exit /b 1 )
     cd ..\..
     echo [OK] Frontend built
     set MODE=prod
@@ -53,7 +80,7 @@ if "%MODE%"=="prod" (
     echo [*] API docs: http://localhost:%MISMISS_API_PORT%/docs
     echo.
     set MISMISS_PROD=1
-    python -m web.backend.main --port %MISMISS_API_PORT%
+    "%PYTHON%" -m web.backend.main --port %MISMISS_API_PORT%
     pause
     exit /b
 )
@@ -63,13 +90,6 @@ if "%MODE%"=="prod" (
 :: ------------------------------------------------------------------ %
 echo [1/3] Checking runtimes...
 
-python --version >nul 2>&1 || (
-    echo [*] Python not found, trying winget...
-    winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
-    echo [OK] Please re-run start.bat
-    pause & exit /b 0
-)
-
 node --version >nul 2>&1 || (
     echo [*] Node.js not found, trying winget...
     winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
@@ -78,12 +98,12 @@ node --version >nul 2>&1 || (
 )
 
 echo [2/3] Starting API (port %MISMISS_API_PORT%)...
-start "MisMiss API" cmd /c "python -m web.backend.main --port %MISMISS_API_PORT%"
+start "MisMiss API" /d "%~dp0" cmd /c ""%PYTHON%" -m web.backend.main --port %MISMISS_API_PORT%"
 
 timeout /t 2 /nobreak >nul
 
 echo [3/3] Starting Web UI (port %MISMISS_WEB_PORT%)...
-start "MisMiss Web" cmd /c "cd /d %~dp0web\frontend && npx vite --host 0.0.0.0 --port %MISMISS_WEB_PORT%"
+start "MisMiss Web" /d "%~dp0web\frontend" cmd /c "npx vite --host 0.0.0.0 --port %MISMISS_WEB_PORT%"
 
 echo.
 echo ========================================
@@ -119,5 +139,5 @@ if "%_KILLED%"=="1" (
 ) else (
     echo [OK] Port %_PORT% is free
 )
-endlocal & goto :eof
+endlocal & exit /b 0
 

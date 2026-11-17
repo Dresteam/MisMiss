@@ -26,8 +26,10 @@ interface ReleaseInfo {
 /** GET /api/update/status —— 更新进度（后端后台执行，前端轮询） */
 interface UpdateStatus {
   busy: boolean;
-  /** idle=没有记录 / running=进行中 / done / failed / interrupted */
-  state: 'idle' | 'running' | 'done' | 'failed' | 'interrupted';
+  /** 当前步骤是否允许停止（只有准备/下载阶段） */
+  cancellable?: boolean;
+  /** idle=没有记录 / running=进行中 / done / failed / cancelled / interrupted */
+  state: 'idle' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
   kind?: 'apply' | 'rollback';
   step?: string;
   step_label?: string;
@@ -35,6 +37,12 @@ interface UpdateStatus {
   version?: string;
   started_at?: number;
   finished_at?: number | null;
+  /** 已下载字节数（仅 download 步骤） */
+  downloaded?: number;
+  /** 部署包总字节数；服务端未给 Content-Length 时为 0 */
+  total?: number;
+  /** 0-100；total 未知时为 null */
+  percent?: number | null;
 }
 
 interface UpdateInfo {
@@ -88,6 +96,20 @@ function formatShortDateTime(iso: string): string {
   return `${date.slice(5)} ${time.slice(0, 5)}`;
 }
 
+/** 字节数 → 人类可读（下载进度用）。 */
+function formatBytes(n?: number | null): string {
+  if (n == null || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = n;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  const digits = idx === 0 || value >= 100 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[idx]}`;
+}
+
 /** 程序更新页面 */
 export function UpdatePage() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
@@ -101,6 +123,7 @@ export function UpdatePage() {
   // 必须在 POST 成功之后才置位 —— 否则轮询会先读到上一轮的终态并误报。
   const [polling, setPolling] = useState(false);
   const [progress, setProgress] = useState<UpdateStatus | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [confirmUpdate, setConfirmUpdate] = useState<ReleaseInfo | null>(null);
   const [confirmRollback, setConfirmRollback] = useState(false);
   const [showChangelog, setShowChangelog] = useState(false);
@@ -186,6 +209,8 @@ export function UpdatePage() {
         if (st.state === 'done') {
           showToast('success', st.message || '更新已完成');
           checkUpdate();
+        } else if (st.state === 'cancelled') {
+          showToast('info', '更新已停止', st.message || '已手动停止本次更新');
         } else if (st.state === 'interrupted') {
           showToast('error', '更新中断', st.message || '更新未完成即中断');
         } else {
@@ -290,6 +315,20 @@ export function UpdatePage() {
     }
   };
 
+  /** 停止下载：只在准备/下载阶段由后端放行，进入备份后会返回 409。 */
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      await api('/cancel', 'POST');
+      showToast('info', '已请求停止更新', '正在关闭下载连接…');
+      // 终态由轮询确认，这里不直接把 progress 置为 cancelled，避免抢在后端清理前收尾
+    } catch (e: any) {
+      showToast('error', '停止失败', e.message);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   // ------------------------------------------------------------------ #
   // 版本列表：预发布过滤 + 分页
   // ------------------------------------------------------------------ #
@@ -341,10 +380,13 @@ export function UpdatePage() {
             ? 'bg-sky-100 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-400'
             : progress.state === 'done'
               ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-400'
-              : 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-800 dark:text-red-400'
+              : progress.state === 'cancelled'
+                ? 'bg-amber-100 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-400'
+                : 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-800 dark:text-red-400'
         }`}>
           {progress.state === 'running' && <Loader2 className="w-4 h-4 mt-0.5 shrink-0 animate-spin" />}
           {progress.state === 'done' && <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />}
+          {progress.state === 'cancelled' && <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />}
           {progress.state === 'failed' && <XCircle className="w-4 h-4 mt-0.5 shrink-0" />}
           {progress.state === 'interrupted' && <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />}
           <div className="min-w-0 flex-1">
@@ -353,18 +395,49 @@ export function UpdatePage() {
               {progress.state === 'running' && ` · ${progress.step_label || '进行中'}`}
               {progress.state === 'done' && ' 已完成'}
               {progress.state === 'failed' && ' 失败'}
+              {progress.state === 'cancelled' && ' 已停止'}
               {progress.state === 'interrupted' && ' 被中断'}
               {progress.version && `（v${progress.version}）`}
             </div>
             {progress.message && (
               <div className="mt-0.5 break-words opacity-90">{progress.message}</div>
             )}
+            {progress.state === 'running' && progress.step === 'download' && (
+              <div className="mt-2">
+                <div className="flex items-center justify-between gap-2 text-xs opacity-90">
+                  <span>下载进度</span>
+                  <span className="tabular-nums">
+                    {progress.percent != null ? `${progress.percent}%` : '下载中'}
+                    {typeof progress.downloaded === 'number'
+                      && ` · ${formatBytes(progress.downloaded)}`}
+                    {progress.total ? ` / ${formatBytes(progress.total)}` : ''}
+                  </span>
+                </div>
+                <div className="mt-1 h-2 overflow-hidden rounded-full bg-sky-200/70 dark:bg-sky-950/60">
+                  {progress.percent != null ? (
+                    <div
+                      className="h-full rounded-full bg-sky-500 transition-[width] duration-300"
+                      style={{ width: `${Math.min(100, Math.max(0, progress.percent))}%` }}
+                    />
+                  ) : (
+                    <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
+                  )}
+                </div>
+              </div>
+            )}
             {progress.state === 'running' && (
               <div className="mt-0.5 opacity-75 text-xs">
                 更新在服务端后台执行，可以离开本页；重新进入会自动接上进度。
+                {progress.cancellable && ' 下载阶段可点「停止更新」中止。'}
               </div>
             )}
           </div>
+          {progress.state === 'running' && progress.cancellable && (
+            <Button size="sm" variant="secondary" icon={<XCircle className="w-4 h-4" />}
+              loading={cancelling} onClick={handleCancel}>
+              停止更新
+            </Button>
+          )}
           {/* 只有终态给关：「进行中」关掉会被下一轮轮询（2 秒）立刻重新点亮，
               看着像坏了；而且那时的进度本身还带着信息。
               终态关掉后不会再回来 —— 进页面时只接 running 状态。 */}

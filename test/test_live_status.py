@@ -35,18 +35,24 @@ def check(label: str, cond: bool, detail: str = "") -> None:
     print(f"PASS {_passed}: {label}")
 
 
-def _room_payload(*, open_: int, creator_online: bool | None, name: str) -> dict:
+def _room_payload(
+    *, open_: int, creator_online: bool | None, name: str, online: int | None = None
+) -> dict:
     """一份最小可用的房间信息响应。
 
     ``creator_online=None`` 表示接口**没给** online 字段。
+    ``online`` 为 ``None`` 表示接口没给直播间在线人数。
     """
     creator: dict = {"user_id": 1, "username": "主播"}
     if creator_online is not None:
         creator["online"] = creator_online
+    room: dict = {"name": name, "status": {"open": open_}}
+    if online is not None:
+        room["statistics"] = {"online": online}
     return {
         "code": 0,
         "info": {
-            "room": {"name": name, "status": {"open": open_}},
+            "room": room,
             "creator": creator,
         },
     }
@@ -106,6 +112,25 @@ async def main() -> None:
           bool(calls) and calls[0].get("force") is True, f"拿到 {calls}")
     check("WS 开播：没有硬把主播设成在线", live.creator.is_online is False,
           "在线与否交给那次刷新按接口结果定")
+
+    # ---- 6. 在线人数：WS 已连接后刷新不能用接口的 0 覆盖 ----
+    live._is_connected = True
+    live._online_count = 321
+    payloads.append(_room_payload(open_=1, creator_online=True, name="第五", online=0))
+    await live._refresh(force=True)
+    check("已连接时刷新不覆盖 WS 在线人数", live.online_count == 321, str(live.online_count))
+
+    # 本地还是 0（WS 尚未推过）时允许接口值兜底
+    live._online_count = 0
+    payloads.append(_room_payload(open_=1, creator_online=True, name="第六", online=88))
+    await live._refresh(force=True)
+    check("本地无值时用接口在线人数兜底", live.online_count == 88, str(live.online_count))
+
+    # 未连接时以接口值为准
+    live._is_connected = False
+    payloads.append(_room_payload(open_=1, creator_online=True, name="第七", online=7))
+    await live._refresh(force=True)
+    check("未连接时采用接口在线人数", live.online_count == 7, str(live.online_count))
 
     print(f"\n{_passed}/{_passed} 通过")
 

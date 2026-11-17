@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextvars
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -225,6 +226,26 @@ def _config_defaults() -> tuple[str, str]:
     return log_dir, level
 
 
+def _truncate_current_logs(log_dir: Path) -> None:
+    """启动时清空当天的运行日志，保留历史日期的文件。
+
+    loguru 的 rotation 只在文件达到阈值/跨天时切分，长期运行的进程重启后
+    当天文件会继续追加；一天内反复重启就会滚成很大的一个文件。每次进程
+    初始化时截断当天文件，让「本次启动」的日志从干净状态开始。
+
+    只处理当天文件：历史日志仍按 retention 保留，便于回溯昨天/更早的问题。
+    文件被其他进程占用时静默跳过（多 worker 场景由单 worker 约束兜底）。
+    """
+    day = datetime.now().strftime("%Y-%m-%d")
+    for name in (f"bot_{day}.log", f"error_{day}.log"):
+        path = log_dir / name
+        try:
+            if path.exists():
+                path.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+
+
 def init(
     log_dir: str | Path | None = None,
     level: str | None = None,
@@ -257,6 +278,7 @@ def init(
     global _LOG_DIR
     _LOG_DIR = Path(log_dir)
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _truncate_current_logs(_LOG_DIR)
 
     # 抑制第三方库的 DEBUG 噪音（httpcore/httpx 连接层 open/close 等
     # 无价值信息），WARNING 及以上仍正常输出

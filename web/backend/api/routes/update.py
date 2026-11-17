@@ -18,7 +18,10 @@ import shutil
 import subprocess
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -55,8 +58,13 @@ _APPLY_KEY = "apply"
 _APPLY_RUNNING = "running"
 _APPLY_DONE = "done"
 _APPLY_FAILED = "failed"
+_APPLY_CANCELLED = "cancelled"
 # 进程重启后发现的残留 running —— 执行它的进程已经不在了
 _APPLY_INTERRUPTED = "interrupted"
+
+# 可以安全中断的步骤：下载还没写任何程序文件/镜像。
+# verify 之后会发通知、备份、解压，贸然中断会留下半套状态。
+_CANCELABLE_STEPS = frozenset({"prepare", "download"})
 
 # 更新流程的步骤标识（前端按此显示进度文案）
 _STEP_LABELS = {
@@ -69,7 +77,12 @@ _STEP_LABELS = {
     "load": "导入镜像",
     "recreate": "重建容器",
     "done": "完成",
+    "cancelled": "已停止",
 }
+
+
+class _UpdateCancelled(Exception):
+    """用户主动停止更新（下载循环的协作式取消信号）。"""
 
 # 是否运行在 Docker 容器内（Docker 会在容器根目录创建 /.dockerenv）
 _IS_DOCKER = Path("/.dockerenv").exists()
@@ -295,8 +308,13 @@ def _set_apply_progress(
     step: str,
     message: str = "",
     version: str = "",
+    **extra,
 ) -> None:
-    """写入更新进度（读-改-写，不动其它键）。"""
+    """写入更新进度（读-改-写，不动其它键）。
+
+    ``extra`` 用于附加瞬时字段（如下载的 ``downloaded`` / ``total`` / ``percent``）；
+    每次调用都会重建 record，所以离开该步骤后这些字段自然消失。
+    """
     prev = _load_update_state().get(_APPLY_KEY)
     prev = prev if isinstance(prev, dict) else {}
     # 上一轮也是 running 说明是同一次更新的步骤推进，沿用开始时间；
@@ -312,6 +330,7 @@ def _set_apply_progress(
         "started_at": started or time.time(),
         "finished_at": None if state == _APPLY_RUNNING else time.time(),
     }
+    record.update(extra)
     _patch_update_state(**{_APPLY_KEY: record})
 
 
@@ -568,26 +587,92 @@ def _docker_select_asset(assets: list[dict], version: str) -> tuple[str, str]:
     )
 
 
-def _download_asset(asset_url: str, dest: Path, cfg: dict) -> None:
-    """下载更新包（配置了镜像时下载地址也走前缀代理）。"""
+async def _download_asset(
+    asset_url: str,
+    dest: Path,
+    cfg: dict,
+    cancel_event: asyncio.Event | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> None:
+    """下载更新包（配置了镜像时下载地址也走前缀代理）。
+
+    用异步流式下载而不是 ``urllib`` + 线程：``task.cancel()`` 只能取消协程，
+    取消不了阻塞在 socket 上的线程 —— 那样「停止」之后后台线程还会继续下载。
+    这里按块检查 ``cancel_event``，取消时立即关闭连接并删掉半截文件。
+
+    ``on_progress(downloaded, total)`` 每 0.5 秒（以及结束时）回调一次，
+    ``total`` 取自响应头，未知时为 0。
+    """
     prefix = _mirror_base(cfg)
     if prefix:
         asset_url = f"{prefix}/{asset_url}"
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    timeout = httpx.Timeout(60.0, connect=30.0)
     try:
-        req = urllib.request.Request(asset_url, headers={"User-Agent": "MisMiss-Updater/1.0"})
-        opener = urllib.request.build_opener()
-        if cfg["proxy"]:
-            proxy_handler = urllib.request.ProxyHandler({"http": cfg["proxy"], "https": cfg["proxy"]})
-            opener = urllib.request.build_opener(proxy_handler)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with opener.open(req, timeout=300) as resp, open(dest, "wb") as f:
-            # 分块落盘，不要 resp.read() —— 部署包 200MB+，整个读进内存会把
-            # 512MB 上限的容器顶到边缘（应用基线已占 270MB 左右）
-            shutil.copyfileobj(resp, f, length=256 * 1024)
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            proxy=cfg.get("proxy") or None,
+        ) as client:
+            async with client.stream(
+                "GET", asset_url,
+                headers={
+                    "User-Agent": "MisMiss-Updater/1.0",
+                    # 让 Content-Length 与实际字节一致，进度百分比才准
+                    "Accept-Encoding": "identity",
+                },
+            ) as resp:
+                if resp.status_code != 200:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"更新包下载失败: HTTP {resp.status_code}",
+                    )
+                total = int(resp.headers.get("content-length") or 0)
+                downloaded = 0
+                last_emit = 0.0
+                if on_progress is not None:
+                    on_progress(0, total)
+                with open(dest, "wb") as f:
+                    async for chunk in resp.aiter_bytes(256 * 1024):
+                        if cancel_event is not None and cancel_event.is_set():
+                            raise _UpdateCancelled()
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if on_progress is not None:
+                            now = time.monotonic()
+                            if now - last_emit >= 0.5 or (total and downloaded >= total):
+                                on_progress(downloaded, total)
+                                last_emit = now
+                if on_progress is not None:
+                    on_progress(downloaded, total)
     except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except (asyncio.CancelledError, _UpdateCancelled):
+        dest.unlink(missing_ok=True)
         raise
     except Exception as e:
+        dest.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"更新包下载失败: {e}")
+
+
+def _download_progress_cb(kind: str, version: str, asset_name: str):
+    """构造下载进度回调：把字节数/百分比写进 update_state.json。"""
+    def _cb(downloaded: int, total: int) -> None:
+        percent = min(100, int(downloaded * 100 / total)) if total > 0 else None
+        _set_apply_progress(
+            kind,
+            _APPLY_RUNNING,
+            "download",
+            f"正在下载 {asset_name}",
+            version,
+            downloaded=downloaded,
+            total=total,
+            percent=percent,
+        )
+
+    return _cb
 
 
 def _verify_docker_package(pkg_path: Path) -> None:
@@ -756,7 +841,10 @@ async def _docker_apply(
     if await asyncio.to_thread(_UPDATE_TMP_DIR.exists):
         await asyncio.to_thread(shutil.rmtree, _UPDATE_TMP_DIR)
     pkg_path = _UPDATE_TMP_DIR / asset_name
-    await asyncio.to_thread(_download_asset, asset_url, pkg_path, cfg)
+    await _download_asset(
+        asset_url, pkg_path, cfg, _cancel_event,
+        _download_progress_cb("apply", target_version, asset_name),
+    )
 
     # 校验格式（含内层镜像归档检查，避免 load 时才报 unrecognized image format）
     _set_apply_progress("apply", _APPLY_RUNNING, "verify", "正在校验部署包", target_version)
@@ -822,11 +910,20 @@ async def _docker_rollback() -> None:
 # 当前正在跑的更新/回滚任务。持引用既用于「是否忙」的快失败探测，
 # 也避免 create_task 的返回值被 GC 掉导致任务中途消失。
 _update_task: asyncio.Task | None = None
+# 下载循环的协作式停止信号。每轮任务新建，任务结束时清空。
+_cancel_event: asyncio.Event | None = None
 
 
 def update_busy() -> bool:
     """是否有更新/回滚正在执行。"""
     return _update_task is not None and not _update_task.done()
+
+
+def update_cancellable() -> bool:
+    """当前步骤是否允许停止（只有下载/准备阶段）。"""
+    if not update_busy():
+        return False
+    return str(_read_apply_progress().get("step", "")) in _CANCELABLE_STEPS
 
 
 async def _run_update_task(kind: str, target_version: str, job) -> None:
@@ -837,6 +934,14 @@ async def _run_update_task(kind: str, target_version: str, job) -> None:
     """
     try:
         await job()
+    except (asyncio.CancelledError, _UpdateCancelled):
+        # 下载中途被 /cancel 停止：删掉半截文件，别让下一次更新读到坏包
+        if _IS_DOCKER:
+            shutil.rmtree(_UPDATE_TMP_DIR, ignore_errors=True)
+        _set_apply_progress(
+            kind, _APPLY_CANCELLED, "cancelled", "已手动停止更新", target_version,
+        )
+        _log.info("更新已手动停止（{}）", kind)
     except HTTPException as e:
         detail = str(e.detail)
         _set_apply_progress(kind, _APPLY_FAILED, "done", detail, target_version)
@@ -857,8 +962,22 @@ async def _run_update_task(kind: str, target_version: str, job) -> None:
         _log.info("更新流程已完成并派发重建（v{}）", target_version)
     finally:
         # 非 Docker 路径会解压覆盖 src/ 触发 reload，正常情况走不到这里
-        global _update_task
+        global _update_task, _cancel_event
         _update_task = None
+        _cancel_event = None
+
+
+def _clear_update_task(task: asyncio.Task) -> None:
+    """任务结束时清掉引用（含「还没开始就被取消」的情况）。
+
+    ``_run_update_task`` 的 finally 也会清，但任务在首次调度前被 cancel 时协程体
+    根本不会执行，finally 也不会跑；没有这个回调，``_update_task`` 会一直指向
+    一个已结束的任务。
+    """
+    global _update_task, _cancel_event
+    if _update_task is task:
+        _update_task = None
+        _cancel_event = None
 
 
 def _start_update_task(kind: str, target_version: str, job) -> None:
@@ -866,16 +985,18 @@ def _start_update_task(kind: str, target_version: str, job) -> None:
 
     检查与赋值之间**没有 await**，单线程事件循环下不会被插队。
     """
-    global _update_task
+    global _update_task, _cancel_event
     if update_busy():
         raise HTTPException(
             status_code=409,
             detail="已有更新正在进行中，请等它结束（可在本页查看进度）",
         )
+    _cancel_event = asyncio.Event()
     _set_apply_progress(kind, _APPLY_RUNNING, "prepare", "正在准备更新", target_version)
     _update_task = asyncio.create_task(
         _run_update_task(kind, target_version, job)
     )
+    _update_task.add_done_callback(_clear_update_task)
 
 
 # ================================================================== #
@@ -1015,7 +1136,46 @@ async def update_settings(body: dict, manager: AccountManager = Depends(get_acco
 @router.get("/status")
 async def update_status():
     """本次（或最近一次）更新的进度，供前端轮询。"""
-    return {"busy": update_busy(), **_read_apply_progress()}
+    return {
+        "busy": update_busy(),
+        "cancellable": update_cancellable(),
+        **_read_apply_progress(),
+    }
+
+
+@router.post("/cancel", response_model=StatusResponse, status_code=202)
+async def update_cancel():
+    """停止正在进行的更新。
+
+    只允许在「准备 / 下载」阶段停止：此时还没有备份、解压或导入镜像，
+    删掉半截下载文件即可回到干净状态。进入备份之后中断会留下半套部署，
+    因此直接 409 拒绝。
+    """
+    if not update_busy() or _update_task is None:
+        raise HTTPException(status_code=409, detail="当前没有正在进行的更新")
+    step = str(_read_apply_progress().get("step", ""))
+    if step not in _CANCELABLE_STEPS:
+        raise HTTPException(
+            status_code=409,
+            detail="已进入写入/导入阶段，不能再停止；请等待本次更新完成",
+        )
+    if _cancel_event is not None:
+        _cancel_event.set()
+    # 先落终态：极端情况下任务还没被调度就收到取消，协程里的 except 不会执行，
+    # 只靠任务自身收尾会永远停在 running。任务真跑起来后也会再写一次同样的终态。
+    prev = _read_apply_progress()
+    _set_apply_progress(
+        str(prev.get("kind") or "apply"),
+        _APPLY_CANCELLED,
+        "cancelled",
+        "已手动停止更新",
+        str(prev.get("version") or ""),
+    )
+    # 下载阻塞在 connect/read 时，仅靠 event 要等下一个数据块；直接取消协程，
+    # httpx 会立刻关闭连接，不会把半截包留在后台继续下。
+    _update_task.cancel()
+    _log.info("收到停止更新请求（step={}）", step)
+    return StatusResponse(success=True, message="已请求停止更新")
 
 
 @router.post("/apply", response_model=StatusResponse, status_code=202)
@@ -1119,8 +1279,11 @@ async def _apply_source(
     _set_apply_progress("apply", _APPLY_RUNNING, "download",
                         f"正在下载 {asset_name}", target_version)
     try:
-        await asyncio.to_thread(_download_asset, asset_url, tmp_pkg, cfg)
-    except HTTPException:
+        await _download_asset(
+            asset_url, tmp_pkg, cfg, _cancel_event,
+            _download_progress_cb("apply", target_version, asset_name),
+        )
+    except (HTTPException, _UpdateCancelled):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新包下载失败: {e}")

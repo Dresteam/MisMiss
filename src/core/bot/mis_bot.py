@@ -130,6 +130,8 @@ class MissevanBot(Bot):
         self.__permissions: BotPermission = permissions
         # 启用状态
         self._enabled: bool = True
+        # close() 之后禁止再启动定时/消费任务（被替换下来的旧 Bot 不能再发消息）
+        self._closed: bool = False
 
         # 上次因 API 失败而主动校验 Cookie 的时间（monotonic）；见 _should_refresh
         self._last_cookie_check: float = 0.0
@@ -155,7 +157,29 @@ class MissevanBot(Bot):
 
     @enabled.setter
     def enabled(self, value: bool) -> None:
+        value = bool(value)
+        if value == self._enabled:
+            return
         self._enabled = value
+        if not value:
+            # 停用后不再跑定时/消费循环：否则每个 tick 都会「已停用，跳过…」，
+            # 既产生无意义日志，也让人误以为定时消息仍在注册。
+            self._stop_background_tasks()
+
+    def _stop_background_tasks(self) -> None:
+        """停用 Bot 时取消定时器与消息消费者（保留定时消息，启用后可恢复）。"""
+        tasks = [
+            task for task in (self._timer_task, self._consumer_task)
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        self._timer_task = None
+        self._consumer_task = None
+        self._next_tick_at = 0.0
+        # 停用后不再发送停用前积压的消息；定时消息队列保留，启用时重新拉起
+        self._message_queue.clear()
+        self._queue_idle.set()
 
     def _check_enabled(self) -> None:
         """检查是否已启用，停用时抛出异常。
@@ -348,6 +372,33 @@ class MissevanBot(Bot):
             if consumer_idle:
                 self._consumer_task = asyncio.create_task(self._consume_queue())
 
+    async def close(self) -> None:
+        """停止 Bot 的后台任务并作废该实例。
+
+        更新 Cookie / 切换公共与私有模式时会创建新 Bot 并替换 ``server._bot``。
+        旧实例的定时器与消息消费者如果不取消，会带着旧 Cookie 继续发消息 ——
+        表现就是「切到私有后公共 Cookie 还在发定时消息」。这里统一收尾：
+
+        - 取消定时消息循环与消息队列消费者；
+        - 清空待发队列并放行 ``wait_message_queue_idle``；
+        - 标记 ``_closed``，之后 ``_ensure_timer_running`` 不会再把它拉起来。
+        """
+        self._enabled = False
+        self._closed = True
+        tasks = [
+            task for task in (self._timer_task, self._consumer_task)
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._timer_task = None
+        self._consumer_task = None
+        async with self._queue_lock:
+            self._message_queue.clear()
+        self._queue_idle.set()
+
     async def wait_message_queue_idle(self, timeout: float = 15.0) -> bool:
         """等待队列中**已入队**的消息全部真正发送完毕。
 
@@ -385,6 +436,9 @@ class MissevanBot(Bot):
         每条退出路径都必须置位 ``_queue_idle``，否则
         :meth:`wait_message_queue_idle` 会一直等到超时。
         """
+        if self._closed:
+            self._queue_idle.set()
+            return
         try:
             # 取一条消息
             async with self._queue_lock:
@@ -392,15 +446,6 @@ class MissevanBot(Bot):
                     self._queue_idle.set()
                     return
                 item = self._message_queue.pop(0)
-                # 逐条消息的流水账：内容与聊天窗口里已有的信息重复，
-                # 且房间活跃时每条都打会淹没日志——按约定降到 debug
-                _log.debug(
-                    "发送消息 直播间={} 内容={} 优先级={} 剩余={}",
-                    item.live_id,
-                    item.message,
-                    item.priority,
-                    len(self._message_queue),
-                )
 
             # 发送（失败不阻塞后续消息，包内自动检查 Cookie）
             try:
@@ -1109,6 +1154,8 @@ class MissevanBot(Bot):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # 无事件循环，暂不启动
+        if self._closed:
+            return
 
         if self._timer_task is None or self._timer_task.done():
             self._timer_task = loop.create_task(self._run_timer())
@@ -1209,12 +1256,9 @@ class MissevanBot(Bot):
             _log.error("Cookie 已过期，停止定时消息循环")
             return False
         except CoreDisabledException:
-            # 降为 debug：定时器**每个 tick 都会走到这里**，Bot 停用期间就一直在刷，
-            # 而「Bot 停用」本身是用户主动设置的正常状态，不是异常。
-            # 同类事件的既有口径也是 debug —— 见 account/manager.py 里那几条
-            # 「Bot 不可用 / 直播间未启用 / 未开播，跳过全局消息」。
-            # 真要排查「为什么没发出去」，把 config.yml 的 logging.level 调到 DEBUG。
-            _log.debug("Bot 已停用，跳过定时消息 id={}", msg_id)
+            # 正常停用期间不应再走到这里（enabled setter 已取消定时循环）；
+            # 保留兜底但不打日志，避免多次 tick 刷屏。
+            pass
         except Exception:
             _log.exception("定时消息未预期异常 id={}", msg_id)
         return True

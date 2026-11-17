@@ -6,6 +6,7 @@ WebSocket 事件监听和消息/礼物操作。
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Optional
 
@@ -66,6 +67,9 @@ class MissevanLivestream(Livestream):
 
         # WebSocket
         self._websocket: Live | None = None
+        # join 串行化：并发 enable/join 会各自看到「未连接」而连出两条 WS，
+        # 同一条弹幕经两个连接各派发一次，插件就会回复两次。
+        self._join_lock = asyncio.Lock()
         # 启用状态
         self._enabled: bool = True
         # 管理员列表缓存（在 _refresh() 中通过 Meta API 获取，按 TTL 复用）
@@ -224,14 +228,15 @@ class MissevanLivestream(Livestream):
         :raises CoreDisabledException: 直播间已停用
         """
         self._check_enabled()
-        await self._refresh()
+        async with self._join_lock:
+            await self._refresh()
 
-        if self._websocket is None:
-            self._websocket = self._create_websocket()
+            if self._websocket is None:
+                self._websocket = self._create_websocket()
 
-        if not self._is_connected:
-            await self._websocket.connect()
-            self._is_connected = True
+            if not self._is_connected:
+                await self._websocket.connect()
+                self._is_connected = True
 
     async def quit(self) -> None:
         """退出直播间。
@@ -337,8 +342,14 @@ class MissevanLivestream(Livestream):
         statistics = room.get("statistics", {})
         self._score = statistics.get("score", -1)
         online = statistics.get("online")
-        if online is not None:
-            self._online_count = int(online)
+        # 已连接 WS 时在线人数以 WS 的 room:statistics 为准：刷新接口返回的
+        # online 可能是 0/滞后值，直接覆盖会出现「手动刷新瞬间变 0，等下一次
+        # WS 推送才恢复」。只有未连接、或本地还没有任何值时，才用接口值兜底。
+        if online is not None and (not self._is_connected or self._online_count <= 0):
+            try:
+                self._online_count = int(online)
+            except (TypeError, ValueError):
+                pass
 
         # 管理员列表（Meta API）—— 走 TTL 缓存，不是每次刷新都打。
         # 原先的注释写着「仅调用一次」，但实际每次 _refresh() 都会调，而

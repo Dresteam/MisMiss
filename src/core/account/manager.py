@@ -35,6 +35,7 @@ from core.exceptions import (
     CorePluginInstallException,
 )
 from core.logging import get_logger, reset_account, set_account
+from core.network.endpoints.room import RoomInfoAPI
 from core.plugin.plugin_manager import _validate_plugin_name
 from core.server import MissevanServer
 from core.version import CURRENT_VERSION
@@ -427,7 +428,12 @@ class AccountManager:
             reset_account(token)
 
     async def start_all(self) -> None:
-        """启动全部账户运行时(lifespan 调用)。"""
+        """启动全部账户运行时(lifespan 调用)。
+
+        启动前先探测各账户房间是否开播，按「开播中优先」排序，避免已下播的
+        账户占用启动窗口，开播中的直播间迟迟连不上。探测失败按未开播处理，
+        不会阻断启动。
+        """
         # 先扫描共享插件库(账户安装列表依赖它)
         try:
             await self.get_library_pm().load_all()
@@ -440,6 +446,19 @@ class AccountManager:
         # 请求依旧整整齐齐，反而更容易被识别为机器行为。
         stagger = max(0.0, self._config.get_float("ratelimit.startup_stagger", 1.5))
         records = sorted(self._records.values(), key=lambda r: r.id)
+        live_rooms = await self._probe_streaming_rooms(records)
+        records.sort(
+            key=lambda r: (
+                0 if self._room_id_of(r) in live_rooms else 1,
+                1 if r.expired else 0,
+                r.id,
+            )
+        )
+        if live_rooms:
+            _log.info(
+                "启动顺序：{} 个开播中的直播间优先恢复: {}",
+                len(live_rooms), sorted(live_rooms),
+            )
         for idx, rec in enumerate(records):
             if idx and stagger:
                 await asyncio.sleep(random.uniform(stagger * 0.5, stagger * 1.5))
@@ -447,6 +466,55 @@ class AccountManager:
                 await self._start_account(rec)
             except Exception as e:
                 _log.error("账户 {} 启动失败: {}", rec.id, e)
+
+    async def _probe_streaming_rooms(self, records: list[AccountRecord]) -> set[int]:
+        """启动前快速探测哪些房间正在开播（只探未过期且已绑定的账户）。
+
+        单个房间失败不影响其它房间；整体最多等 5 秒，超时按「未开播」处理，
+        避免平台接口卡住时把整个启动流程拖死。
+        """
+        room_ids: set[int] = set()
+        for rec in records:
+            if rec.expired:
+                continue
+            room_id = self._room_id_of(rec)
+            if room_id is not None:
+                room_ids.add(room_id)
+        if not room_ids:
+            return set()
+
+        api = RoomInfoAPI()
+        live: set[int] = set()
+
+        async def probe(room_id: int) -> None:
+            try:
+                response = await api.api(room_id)
+                room = ((response or {}).get("info") or {}).get("room") or {}
+                status = room.get("status") or {}
+                if status.get("open") in (1, True, "1", "true"):
+                    live.add(room_id)
+            except Exception as e:
+                _log.debug("启动前探测直播间状态失败 live_id={}: {}", room_id, e)
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(probe(room_id) for room_id in room_ids)),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            _log.warning("启动前探测直播间状态超时，按未开播处理")
+        return live
+
+    @staticmethod
+    def _room_id_of(rec: AccountRecord) -> int | None:
+        """账户绑定的房间 ID；未绑定/格式非法返回 None。"""
+        if rec.room_id is None:
+            return None
+        try:
+            room_id = int(rec.room_id)
+        except (TypeError, ValueError):
+            return None
+        return room_id if room_id > 0 else None
 
     async def shutdown_all(self) -> None:
         for aid, server in list(self._servers.items()):
@@ -716,13 +784,13 @@ class AccountManager:
         bot_mode: str = "private",
         cookie: str = "",
         permissions: Any = None,
-        duration_days: int = -1,
+        duration_days: int = 3,
         username: str = "",
         password: str = "",
     ) -> AccountRecord:
         """创建账户并启动其运行时。
 
-        - ``duration_days``: 有效时长(天),-1 为永久
+        - ``duration_days``: 有效时长(天)，默认 3 天；-1 为永久
         - private 模式提供 cookie 时立即验证并创建 Bot(无效则拒绝创建)
         - public 模式使用面板公共 cookie(若有);无公共 cookie 时 Bot 留空待配置
         - username 留空自动生成 ``account{id}``;password 为空自动生成随机密码
@@ -1466,16 +1534,13 @@ class AccountManager:
                 # 多 worker 下 Bot / 直播间可能还没在本 worker 恢复
                 await server._ensure_bot_restored()
                 if not server.bot_available:
-                    _log.debug("账户 {} 的 Bot 不可用，跳过全局消息", rec.name)
                     result["skipped"] += 1
                     continue
                 room = server.livestreams.get(int(rec.room_id))
                 if room is None or not room.enabled:
-                    _log.debug("账户 {} 的直播间未启用，跳过全局消息", rec.name)
                     result["skipped"] += 1
                     continue
                 if not room.is_streaming:
-                    _log.debug("账户 {} 的直播间未开播，跳过全局消息", rec.name)
                     result["skipped"] += 1
                     continue
                 # 两次实际发送之间拉开随机间隔。send_message 只是**入队**，
