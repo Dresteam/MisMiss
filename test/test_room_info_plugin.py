@@ -89,6 +89,7 @@ def make_snapshot(plugin) -> dict:
 class FakeLive:
     def __init__(self) -> None:
         self.live_id = 123
+        self.online_count = 0
         self.sent: list[str] = []
 
     async def send_message(self, message: str) -> None:
@@ -205,6 +206,13 @@ async def main() -> None:
     live = FakeLive()
     await plugin.on_message(make_event("直播间", "房管", True, live))
     check("房管可用", len(live.sent) == 1 and "直播间数据" in live.sent[0])
+
+    plugin._config = MissConfig({"cooldown_seconds": 0})
+    live = FakeLive()
+    live.online_count = 456
+    await plugin.on_message(make_event("直播间", "房管", True, live))
+    check("WS 在线人数优先于 REST 的 0", len(live.sent) == 1 and "👥在线人数：456" in live.sent[0],
+          str(live.sent))
 
     live = FakeLive()
     await plugin.on_message(make_event("直播间", "路人", False, live))

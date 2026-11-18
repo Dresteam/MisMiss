@@ -446,6 +446,15 @@ class MissevanBot(Bot):
                     self._queue_idle.set()
                     return
                 item = self._message_queue.pop(0)
+                # 逐条消息的流水账：这是排查「消息到底发没发出去」的关键线索，
+                # 按要求保留为 DEBUG，不因日志治理删除。
+                _log.debug(
+                    "发送消息 直播间={} 内容={} 优先级={} 剩余={}",
+                    item.live_id,
+                    item.message,
+                    item.priority,
+                    len(self._message_queue),
+                )
 
             # 发送（失败不阻塞后续消息，包内自动检查 Cookie）
             try:
