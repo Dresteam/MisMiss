@@ -112,6 +112,7 @@ class RingBuffer:
         levels: set[str] | None = None,
         plugin_only: bool = False,
         accounts: list[str] | None = None,
+        exclude_levels: set[str] | None = None,
     ) -> tuple[list[dict], bool, int]:
         """获取 since_seq **之前** 的日志（用于向上翻页加载更早历史）。
 
@@ -129,6 +130,8 @@ class RingBuffer:
             all_entries = list(self._buffer)
             if levels:
                 all_entries = [e for e in all_entries if e.level in levels]
+            if exclude_levels:
+                all_entries = [e for e in all_entries if e.level not in exclude_levels]
             if plugin_only:
                 all_entries = [e for e in all_entries if _is_plugin_source(e.path)]
             if accounts is not None:
@@ -157,6 +160,7 @@ class RingBuffer:
         levels: set[str] | None = None,
         plugin_only: bool = False,
         accounts: list[str] | None = None,
+        exclude_levels: set[str] | None = None,
     ) -> list[dict]:
         """获取 seq_id **大于** ``since_seq`` 的日志（断线补发用）。
 
@@ -168,6 +172,8 @@ class RingBuffer:
             entries = [e for e in self._buffer if e.seq_id > since_seq]
             if levels:
                 entries = [e for e in entries if e.level in levels]
+            if exclude_levels:
+                entries = [e for e in entries if e.level not in exclude_levels]
             if plugin_only:
                 entries = [e for e in entries if _is_plugin_source(e.path)]
             if accounts is not None:
@@ -239,6 +245,7 @@ def get_buffer() -> RingBuffer:
 
 _clients: dict[int, WebSocket] = {}
 _client_levels: dict[int, set[str] | None] = {}  # 客户端源头级别过滤（None=全部）
+_client_exclude_levels: dict[int, set[str] | None] = {}  # 客户端排除的级别（右键反选）
 _client_accounts: dict[int, list[str] | None] = {}  # 客户端账户过滤（None=全部，可多选，""=仅面板级）
 _client_id_seq = 0
 
@@ -253,6 +260,9 @@ async def _broadcast_entries(entries: list[dict]) -> None:
                 entries if levels is None
                 else [e for e in entries if e["level"] in levels]
             )
+            excluded = _client_exclude_levels.get(cid)
+            if excluded and payload:
+                payload = [e for e in payload if e["level"] not in excluded]
             accounts = _client_accounts.get(cid)
             if accounts is not None and payload:
                 payload = [e for e in payload if e.get("account", "") in accounts]
@@ -264,6 +274,7 @@ async def _broadcast_entries(entries: list[dict]) -> None:
     for cid in dead:
         _clients.pop(cid, None)
         _client_levels.pop(cid, None)
+        _client_exclude_levels.pop(cid, None)
         _client_accounts.pop(cid, None)
 
 
@@ -393,6 +404,10 @@ async def logs_history(
     since: int = Query(default=0, description="起始 seq_id（不包含）"),
     limit: int = Query(default=50, le=500),
     levels: str | None = Query(default=None, description="逗号分隔的级别过滤，如 DEBUG,ERROR"),
+    exclude_levels: str | None = Query(
+        default=None,
+        description="逗号分隔的排除级别（右键反选），如 DEBUG,INFO",
+    ),
     scope: str | None = Query(default=None, description="scope=plugin 时仅返回插件相关日志"),
     account: list[str] | None = Query(
         default=None,
@@ -406,9 +421,12 @@ async def logs_history(
     level_set = None
     if levels:
         level_set = {lv.strip().upper() for lv in levels.split(",") if lv.strip()}
+    exclude_set = None
+    if exclude_levels:
+        exclude_set = {lv.strip().upper() for lv in exclude_levels.split(",") if lv.strip()}
     entries, has_more, total = _buffer.get_since(
         since, limit, levels=level_set, plugin_only=(scope == "plugin"),
-        accounts=account,
+        accounts=account, exclude_levels=exclude_set,
     )
     return {
         "entries": entries,
@@ -465,6 +483,7 @@ async def websocket_endpoint(ws: WebSocket):
     # 解析客户端携带的 last_seq 与过滤条件
     last_seq = 0
     level_set: set[str] | None = None
+    exclude_set: set[str] | None = None
     # None = 不过滤；可重复传递以多选；列表中的空串 = 只看面板级日志（非账户上下文）
     account_filter: list[str] | None = None
     if ws.query_params:
@@ -475,10 +494,16 @@ async def websocket_endpoint(ws: WebSocket):
         levels_str = ws.query_params.get("levels", "")
         if levels_str:
             level_set = {lv.strip().upper() for lv in levels_str.split(",") if lv.strip()}
+        exclude_str = ws.query_params.get("exclude_levels", "")
+        if exclude_str:
+            exclude_set = {
+                lv.strip().upper() for lv in exclude_str.split(",") if lv.strip()
+            }
         raw_accounts = ws.query_params.getlist("account")
         if raw_accounts:
             account_filter = raw_accounts
     _client_levels[cid] = level_set
+    _client_exclude_levels[cid] = exclude_set
     _client_accounts[cid] = account_filter
 
     # 启动批量推送任务（若尚未运行）
@@ -488,6 +513,7 @@ async def websocket_endpoint(ws: WebSocket):
     if last_seq > 0:
         gap = _buffer.get_after(
             last_seq, limit=500, levels=level_set, accounts=account_filter,
+            exclude_levels=exclude_set,
         )
         if gap:
             try:
@@ -528,4 +554,5 @@ async def websocket_endpoint(ws: WebSocket):
     finally:
         _clients.pop(cid, None)
         _client_levels.pop(cid, None)
+        _client_exclude_levels.pop(cid, None)
         _client_accounts.pop(cid, None)

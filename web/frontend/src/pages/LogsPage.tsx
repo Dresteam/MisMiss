@@ -49,19 +49,20 @@ const levelShort: Record<string, string> = {
 };
 
 export function LogsPage() {
-  // 级别筛选用数组持久化（Set 不能 JSON 序列化）；其余筛选同样写 sessionStorage，
-  // 从日志页跳走再回来时保持原条件。
+  // 级别筛选用数组持久化（Set 不能 JSON 序列化）；其余筛选同样写本地存储。
   const [filterLevels, setFilterLevels] = usePersistedState<string[]>('logs.levels', []);
+  /** 右键反选排除的级别：命中的日志一律不显示 */
+  const [excludeLevels, setExcludeLevels] = usePersistedState<string[]>('logs.excludeLevels', []);
   // 账户筛选可多选：空数组 = 不过滤；含 '' 表示只看面板级；其余为账户名
   const [filterAccounts, setFilterAccounts] = usePersistedState<string[]>('logs.accounts', []);
   const [accountOptions, setAccountOptions] = useState<AccountSummary[]>([]);
   // 窄屏下筛选区默认折叠（md 起常驻展开，由 CSS 控制）—— 断点与账户总览一致
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const activeFilterCount = filterLevels.length + filterAccounts.length;
+  const activeFilterCount = filterLevels.length + excludeLevels.length + filterAccounts.length;
 
-  // 级别与账户筛选均下推到后端（源头过滤），变化时 hook 自动重连重拉
+  // 级别、排除级别与账户筛选均下推到后端（源头过滤），变化时 hook 自动重连重拉
   const { entries, connected, authRequired, loading, total, hasMore, loadMore, refresh } =
-    useLogStream(filterLevels, filterAccounts);
+    useLogStream(filterLevels, filterAccounts, excludeLevels);
 
   // 账户列表用于筛选下拉；取自面板账户而非已加载日志，
   // 否则筛选后列表会随日志内容塌缩、无法切回其他账户
@@ -86,7 +87,16 @@ export function LogsPage() {
 
   // Filter
   const toggleLevel = (lv: string) => {
+    setExcludeLevels((prev) => prev.filter((x) => x !== lv));
     setFilterLevels((prev) => (
+      prev.includes(lv) ? prev.filter((x) => x !== lv) : [...prev, lv]
+    ));
+  };
+
+  /** 右键反选：排除该级别；与「只显示选中级别」互斥，避免同一级别既选又排。 */
+  const toggleExcludeLevel = (lv: string) => {
+    setFilterLevels((prev) => prev.filter((x) => x !== lv));
+    setExcludeLevels((prev) => (
       prev.includes(lv) ? prev.filter((x) => x !== lv) : [...prev, lv]
     ));
   };
@@ -253,12 +263,17 @@ export function LogsPage() {
                         max-w-full shrink p-1 rounded-lg bg-gray-100 dark:bg-gray-800">
           {levels.map((lv) => {
             const active = filterLevels.includes(lv);
+            const excluded = excludeLevels.includes(lv);
             return (
               <button key={lv} onClick={() => toggleLevel(lv)}
+                onContextMenu={(e) => { e.preventDefault(); toggleExcludeLevel(lv); }}
+                title={excluded ? `已排除 ${lv}（右键取消）` : `左键筛选 ${lv}，右键排除 ${lv}`}
                 className={`px-2 py-1 text-xs font-medium rounded-md transition-colors shrink-0
-                  ${active
-                    ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
+                  ${excluded
+                    ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 line-through'
+                    : active
+                      ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                      : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}>
                 {/* 只有过长的级别才双份渲染（窄屏缩写 / md 起全称），由 CSS 决定
                     显示哪份 —— 比用 matchMedia 监听宽度简单，也没有首帧闪烁。
                     短的那些直接输出，不多塞一个节点。 */}
@@ -273,11 +288,14 @@ export function LogsPage() {
               </button>
             );
           })}
-          {filterLevels.length > 0 && (
-            <button onClick={() => setFilterLevels([])}
+          {(filterLevels.length > 0 || excludeLevels.length > 0) && (
+            <button onClick={() => { setFilterLevels([]); setExcludeLevels([]); }}
               className="px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-red-500
                          transition-colors shrink-0">清除</button>
           )}
+          <span className="px-1 text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
+            右键排除
+          </span>
         </div>
         <span className="w-px h-5 bg-gray-300 dark:bg-gray-700 mx-1" />
         <AccountFilter

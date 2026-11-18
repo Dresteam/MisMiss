@@ -122,6 +122,13 @@ def test_api_filter():
         assert any(e["account"] == "沅梦" for e in mixed["entries"])
         print(f"PASS 4b: 多选筛选正确（两账户 {both['total']} / 混选 {mixed['total']}）")
 
+        # 反选（排除级别）：右键排除 INFO 后，不应再返回任何 INFO 条目
+        excluded = q(exclude_levels="INFO")
+        assert all(e["level"] != "INFO" for e in excluded["entries"]), \
+            "FAIL: exclude_levels 仍返回了 INFO 条目"
+        assert excluded["total"] <= all_["total"]
+        print(f"PASS 4c: exclude_levels 排除生效（全部 {all_['total']} / 排除 INFO 后 {excluded['total']}）")
+
         # 未认证仍被拦截（新增参数不应绕过鉴权）
         assert client.get("/api/logs/history", params={"account": "沅梦"}).status_code == 401
         print("PASS 5: 未认证访问仍 401")

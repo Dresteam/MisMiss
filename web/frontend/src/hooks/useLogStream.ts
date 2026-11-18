@@ -29,6 +29,8 @@ export function useLogStream(
   levels: string[] = [],
   /** 按账户过滤，可多选：空数组不过滤；空串元素表示只看面板级日志；其余为账户名 */
   accounts: string[] = [],
+  /** 右键反选排除的级别：命中的日志一律不返回 */
+  excludeLevels: string[] = [],
 ): UseLogStreamReturn {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [connected, setConnected] = useState(false);
@@ -47,22 +49,24 @@ export function useLogStream(
   const isFirstRunRef = useRef(true);
 
   const levelsKey = [...levels].sort().join(',');
+  const excludeKey = [...excludeLevels].sort().join(',');
   // 账户是数组，每次渲染都是新引用，不能直接进依赖表 —— 用 JSON 序列化出稳定键。
   // 不用 join(分隔符)：账户名由用户填写，可能本身含分隔符（空格、逗号等），
   // 那样 ["a b"] 与 ["a","b"] 会撞成同一个键，导致筛选变化被漏掉
   const accountsKey = JSON.stringify([...accounts].sort());
   const accountsRef = useRef<string[]>([]);
   accountsRef.current = accounts;
-  // 把「级别 + 账户」压成一个查询串贯穿始终：筛选条件只需透传，无需在
-  // 分页逻辑里分别处理，避免把两条筛选条件缠绕进本来就绕的翻页游标计算
-  const buildQuery = useCallback((lvKey: string, accts: string[]) => {
+  // 把「级别 + 账户 + 排除级别」压成一个查询串贯穿始终：筛选条件只需透传，无需在
+  // 分页逻辑里分别处理，避免把多条筛选条件缠绕进本来就绕的翻页游标计算
+  const buildQuery = useCallback((lvKey: string, accts: string[], exKey: string) => {
     let q = lvKey ? `&levels=${encodeURIComponent(lvKey)}` : '';
+    if (exKey) q += `&exclude_levels=${encodeURIComponent(exKey)}`;
     // 重复同名参数实现多选；空串元素表示「只看面板级」；空数组表示不过滤
     for (const a of accts) q += `&account=${encodeURIComponent(a)}`;
     return q;
   }, []);
   const filterRef = useRef('');
-  filterRef.current = buildQuery(levelsKey, accounts);
+  filterRef.current = buildQuery(levelsKey, accounts, excludeKey);
 
   // ---- HTTP: 历史拉取（含源头级别与账户过滤）----
   const fetchHistory = useCallback(async (since: number, query: string) => {
@@ -158,14 +162,16 @@ export function useLogStream(
 
   // ---- 筛选变化：本地过滤 + 最新窗口合并 + 不足时向更早历史补拉 ----
   const applyFilter = useCallback(
-    async (query: string, lvKey: string, accts: string[]) => {
+    async (query: string, lvKey: string, accts: string[], exKey: string) => {
     frozenRef.current = true;
     try {
       const levelSet = new Set(lvKey ? lvKey.split(',') : []);
+      const excludeSet = new Set(exKey ? exKey.split(',') : []);
       // 1. 先对已加载日志做本地过滤（空筛选 = 全部保留）
       const local = entriesRef.current.filter(
         (e) =>
           (levelSet.size === 0 || levelSet.has(e.level))
+          && !excludeSet.has(e.level)
           && (accts.length === 0 || accts.includes(e.account ?? '')),
       );
 
@@ -198,8 +204,13 @@ export function useLogStream(
   useEffect(() => {
     if (isFirstRunRef.current) { isFirstRunRef.current = false; return; }
     // 从 ref 取当前账户数组：数组本身每次渲染都是新引用，依赖表里用 accountsKey
-    applyFilter(buildQuery(levelsKey, accountsRef.current), levelsKey, accountsRef.current);
-  }, [levelsKey, accountsKey, buildQuery, applyFilter]);
+    applyFilter(
+      buildQuery(levelsKey, accountsRef.current, excludeKey),
+      levelsKey,
+      accountsRef.current,
+      excludeKey,
+    );
+  }, [levelsKey, accountsKey, excludeKey, buildQuery, applyFilter]);
 
   // ---- WebSocket（筛选 / refreshKey 变化时重连）----
   useEffect(() => {
@@ -213,7 +224,7 @@ export function useLogStream(
       // 始终使用同源连接：经过反向代理时自动适配 HTTPS/WSS
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsHost = window.location.host; // 含端口（非标准端口时）
-      const q = buildQuery(levelsKey, accountsRef.current);
+      const q = buildQuery(levelsKey, accountsRef.current, excludeKey);
       // 浏览器 WebSocket API 无法设置 Authorization header,故 token 走查询参数
       const token = localStorage.getItem('auth_token');
       const tk = token ? `&token=${encodeURIComponent(token)}` : '';
@@ -314,7 +325,7 @@ export function useLogStream(
         wsRef.current = null;
       }
     };
-  }, [refreshKey, levelsKey, accountsKey, buildQuery]);
+  }, [refreshKey, levelsKey, accountsKey, excludeKey, buildQuery]);
 
   return { entries, connected, authRequired, loading, latestSeq, total, hasMore, loadMore, refresh };
 }
