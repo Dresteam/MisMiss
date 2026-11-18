@@ -119,6 +119,7 @@ class RingBuffer:
         返回 limit 条 seq_id <= since_seq 的最新日志，按 seq_id 升序排列。
         首次加载传入 0 则返回最新 limit 条。
         传入 ``levels`` 时仅返回指定级别的日志（源头过滤）；
+        传入 ``exclude_levels`` 时排除这些级别（右键反选）；
         传入 ``plugin_only`` 时仅返回插件相关来源的日志。
 
         传入 ``accounts`` 时仅返回这些账户的日志，**可多选**；
