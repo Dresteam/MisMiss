@@ -165,6 +165,17 @@ async def test_renumber_compacts_ids() -> None:
     check("构造出带空号的场景", sorted(mgr._records) == [1, 3, 5, 25],
           str(sorted(mgr._records)))
 
+    # 构造「已删除账户留下的残留目录正好占住目标编号」——线上事故的根因。
+    # 目标 2/4 不是记录，但旧实现会把 3/25 的正确目录顶成 .orphan。
+    for want in (1, 3, 5, 25):
+        ident = Path(mgr._server_dirs(want)) / "identity.txt"
+        ident.parent.mkdir(parents=True, exist_ok=True)
+        ident.write_text(f"u{want}", encoding="utf-8")
+    for stale in (2, 4):
+        ident = Path(mgr._server_dirs(stale)) / "identity.txt"
+        ident.parent.mkdir(parents=True, exist_ok=True)
+        ident.write_text(f"STALE{stale}", encoding="utf-8")
+
     before_ids = set(mgr._records)
     before_next = mgr._next_account_id
 
@@ -189,6 +200,18 @@ async def test_renumber_compacts_ids() -> None:
           {r.id: r.username for r in mgr._records.values()}
           == {1: "u1", 2: "u3", 3: "u5", 4: "u25"},
           str({r.id: r.username for r in mgr._records.values()}))
+
+    # 残留目录先被移走，目标目录必须落到正确账户的数据，而不是旧目录。
+    check("目标编号落到正确账户数据",
+          (Path(mgr._server_dirs(2)) / "identity.txt").read_text(encoding="utf-8") == "u3"
+          and (Path(mgr._server_dirs(4)) / "identity.txt").read_text(encoding="utf-8") == "u25",
+          "2/4 号目录被残留数据占住")
+    stale_files = sorted(
+        p.read_text(encoding="utf-8")
+        for p in Path(tmp).glob("accounts.stale-*/*/identity.txt")
+    )
+    check("残留目录被移出 accounts 且未删除",
+          stale_files == ["STALE2", "STALE4"], str(stale_files))
 
     # 重排后创建的账户接在末尾
     rec = await mgr.create_account("新", username="unew", password="pass1234",

@@ -911,6 +911,11 @@ class AccountManager:
         运行时启动失败都会吃掉一个号，于是列表里 #25 的下一个直接成了 #27。
         创建流程已修好不再产生新空号，这个函数负责清掉已有的。
 
+        重排前会把 ``accounts/`` 下所有**未被 panel.json 记录引用**的残留目录
+        （已删除账户、失败创建、旧版 ``.orphan``）移到同级的
+        ``accounts.stale-*``，而不是让它们继续占着目标编号。这一步是修复
+        「重排后私有 Cookie 丢失、公共 Bot 掉线」事故的关键。
+
         :param dry_run: 只计算映射不落地，供前端预览确认
         :return: ``{"mapping": {旧: 新}, "changed": n, "total": n, "dry_run": bool}``
         """
@@ -929,7 +934,23 @@ class AccountManager:
 
         _log.info("开始重排账户编号: {} 个账户受影响", len(mapping))
 
-        # 1. 停掉全部运行时。必须先摘插件 UI 路由再 shutdown ——
+        # 1. 先做纯检查（不改目录）：目标若是「仍被一个未重排账户占用的目录」，
+        #    说明映射本身有问题，必须在停服和移动目录之前拒绝。
+        suffix = f".renumber-{os.urandom(4).hex()}"
+        source_dirs = {
+            self._server_dirs(old_id) for old_id in mapping
+        }
+        for new_id in mapping.values():
+            dst = self._server_dirs(new_id)
+            # 目标是当前记录的目录但又不属于本次映射的源 —— 映射不合法。
+            # 目标只是无记录的残留目录则不拦，第 3 步会把它移到 stale 区。
+            if os.path.exists(dst) and dst not in source_dirs and new_id in self._records:
+                raise ValueError(
+                    f"重排目标目录 {dst} 被未重排账户占用，已拒绝执行；"
+                    "请检查残留目录后再重试"
+                )
+
+        # 2. 停掉全部运行时。必须先摘插件 UI 路由再 shutdown ——
         #    路由前缀里嵌着账户 id，不摘的话旧前缀会继续响应。
         for aid in list(self._servers.keys()):
             server = self._servers.pop(aid)
@@ -942,26 +963,65 @@ class AccountManager:
             except Exception as e:
                 _log.warning("重排时关闭账户 {} 出错: {}", aid, e)
 
-        # 2. 两阶段改目录名。25→5 这类映射会撞上仍然存在的 5，
-        #    所以先全部挪到临时名，再落到最终名。
-        suffix = f".renumber-{os.urandom(4).hex()}"
-        staged: list[tuple[str, str]] = []
-        for old_id, new_id in mapping.items():
-            src = self._server_dirs(old_id)
-            if not os.path.isdir(src):
-                continue
-            tmp = src + suffix
-            os.rename(src, tmp)
-            staged.append((tmp, self._server_dirs(new_id)))
-        for tmp, dst in staged:
-            if os.path.exists(dst):
-                # 理论上到不了：目标若是被映射走的旧目录，此时已经让开了
-                _log.error("重排目标 {} 已存在，跳过该账户", dst)
-                os.rename(tmp, tmp + ".orphan")
-                continue
-            os.rename(tmp, dst)
+        # 3. 清走不属于当前记录的残留目录（历史删除账户、失败创建、旧版 .orphan）。
+        #    这些目录如果正好占着目标编号，旧实现会让正确账户变成 .orphan，
+        #    而 panel.json 指向残留目录 —— 私有 Cookie 看起来「丢失」，实际还在。
+        #    移到 data/accounts.stale-* 而不是删除，保留人工找回的可能。
+        accounts_path = self._accounts_dir
+        stale_path = os.path.join(
+            os.path.dirname(accounts_path), f"accounts.stale-{suffix[1:]}"
+        )
+        stale_moved = 0
+        try:
+            if os.path.isdir(accounts_path):
+                for name in os.listdir(accounts_path):
+                    # 只保留当前记录中确实存在的数字目录；文件/符号链接/旧 .orphan
+                    # 以及已删除账户的残留目录全部移出 accounts。
+                    if name.isdigit() and int(name) in self._records:
+                        continue
+                    src = os.path.join(accounts_path, name)
+                    if not os.path.lexists(src):
+                        continue
+                    os.makedirs(stale_path, exist_ok=True)
+                    shutil.move(src, os.path.join(stale_path, name))
+                    stale_moved += 1
+        except Exception as e:
+            _log.error("重排前清理残留目录失败，已恢复运行时: {}", e)
+            await self.start_all()
+            raise
+        if stale_moved:
+            _log.warning(
+                "重排前移走 {} 个未登记目录到 {}（未删除）", stale_moved, stale_path
+            )
 
-        # 3. 重建记录（旧对象直接改 id，保留配置与凭据）
+        # 4. 两阶段改目录名。映射涉及的源目录先全部挪到临时名，再落到最终名。
+        staged: list[tuple[str, str, str]] = []
+        try:
+            for old_id, new_id in mapping.items():
+                src = self._server_dirs(old_id)
+                if not os.path.isdir(src):
+                    continue
+                tmp = src + suffix
+                os.rename(src, tmp)
+                staged.append((tmp, src, self._server_dirs(new_id)))
+            for tmp, src, dst in staged:
+                if os.path.exists(dst):
+                    # 清理残留目录并预检后，理论上到不了这里；真到了说明
+                    # 有人并发创建/改名，宁可回滚也不能再把目录变成 .orphan。
+                    raise RuntimeError(f"重排目标 {dst} 仍被占用，已回滚")
+                os.rename(tmp, dst)
+        except Exception as e:
+            # 尽量把已经挪走的目录搬回原位，避免重排失败后账户数据失踪。
+            for tmp, src, dst in reversed(staged):
+                if os.path.exists(tmp) and not os.path.exists(src):
+                    os.rename(tmp, src)
+                elif os.path.exists(dst) and not os.path.exists(src):
+                    os.rename(dst, src)
+            _log.error("账户目录重排失败，已尝试回滚: {}", e)
+            await self.start_all()
+            raise
+
+        # 5. 重建记录（旧对象直接改 id，保留配置与凭据）
         new_records: dict[int, AccountRecord] = {}
         for old_id, rec in self._records.items():
             rec.id = mapping.get(old_id, old_id)
@@ -971,7 +1031,7 @@ class AccountManager:
         self._next_account_id = max(self._records.keys(), default=0) + 1
         self._save_panel()
 
-        # 4. 重新拉起。用 start_all 是为了顺带享受启动错峰 ——
+        # 6. 重新拉起。用 start_all 是为了顺带享受启动错峰 ——
         #    重排会把所有账户一起重启，正是最需要限速的场景。
         await self.start_all()
         _log.info("账户编号重排完成，现为 1..{}", len(self._records))
