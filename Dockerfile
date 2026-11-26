@@ -56,7 +56,11 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 # 不用 cache 挂载：共享 apt 缓存在慢网/中断场景易损坏
 # （曾出现 "cannot stat pathname /tmp/apt-dpkg-install-*.deb"）；
 # 该层内容稳定，镜像层缓存已足够
-RUN apt-get update \
+ARG DEBIAN_MIRROR=deb.debian.org
+RUN if [ "${DEBIAN_MIRROR}" != "deb.debian.org" ]; then \
+        sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
