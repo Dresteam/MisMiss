@@ -58,6 +58,7 @@ class BrowserConfig:
     headless: bool = True
     max_concurrency: int = 2
     timeout_seconds: float = 45.0
+    no_sandbox: bool = False
 
     @classmethod
     def from_server_config(cls, cfg: ServerConfig) -> BrowserConfig:
@@ -67,6 +68,7 @@ class BrowserConfig:
             headless=bool(cfg.get("browser.headless", True)),
             max_concurrency=max(1, int(cfg.get("browser.max_concurrency", 2) or 2)),
             timeout_seconds=max(10.0, float(cfg.get("browser.timeout_seconds", 45) or 45)),
+            no_sandbox=bool(cfg.get("browser.no_sandbox", False)),
         )
 
 
@@ -236,6 +238,8 @@ class BrowserBridge:
                 "--window-size=1280,900",
                 "about:blank",
             ]
+            if self.config.no_sandbox or os.environ.get("MIS_BROWSER_NO_SANDBOX") == "1":
+                args.insert(2, "--no-sandbox")
             self._browser = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.DEVNULL,

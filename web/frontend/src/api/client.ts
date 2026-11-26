@@ -370,6 +370,8 @@ import type {
   AccountCreateRequest,
   AccountSummary,
   AccountUpdateRequest,
+  BrowserLoginSmsResponse,
+  BrowserLoginStartResponse,
   HelperStatusResponse,
   HelperTokenResponse,
   LicenseInfo,
@@ -801,6 +803,31 @@ export async function fetchHelperStatus(
 ): Promise<HelperStatusResponse> {
   return request<HelperStatusResponse>(`/accounts/${id}/helper/status`, {
     headers: { 'X-Helper-Token': token },
+  });
+}
+
+/** 浏览器登录：短信验证码 / 密码。 */
+export async function startBrowserLogin(
+  id: number,
+  method: 'sms' | 'password',
+  phone: string,
+  password = '',
+): Promise<BrowserLoginStartResponse> {
+  return request<BrowserLoginStartResponse>(`/accounts/${id}/browser-login/start`, {
+    method: 'POST',
+    body: JSON.stringify({ method, phone, password }),
+  });
+}
+
+/** 提交短信验证码，成功后后端会直接保存私有 Cookie。 */
+export async function submitBrowserLoginSms(
+  id: number,
+  sessionId: string,
+  code: string,
+): Promise<BrowserLoginSmsResponse> {
+  return request<BrowserLoginSmsResponse>(`/accounts/${id}/browser-login/sms`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, code }),
   });
 }
 

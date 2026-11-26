@@ -58,8 +58,8 @@ from core.account import AccountManager, ExpiryScheduler, migrate_legacy_data
 from core.config import ServerConfig
 from api.deps import set_account_manager
 from api.routes import (
-    account, account_plugins, auth, bot, config, cookie_login, live, panel,
-    plugin, proxy, server, timer, update, ws,
+    account, account_plugins, auth, bot, browser_login, config, cookie_login, live,
+    panel, plugin, proxy, server, timer, update, ws,
 )
 
 _log = get_logger("web.api")
@@ -108,6 +108,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     _manager = None
+    try:
+        await browser_login.close_browser_login()
+    except Exception:
+        pass
     # 关闭出站共享连接池，别把套接字留到进程退出
     try:
         from core.network.client import aclose_shared_client
@@ -216,6 +220,7 @@ app.include_router(
 )
 app.include_router(cookie_login.public_router, prefix="/api/helper", tags=["CookieLogin"])
 app.include_router(bot.router, prefix="/api/accounts/{account_id}/bot", tags=["Account-Bot"])
+app.include_router(browser_login.router, prefix="/api/accounts/{account_id}", tags=["Account-BrowserLogin"])
 app.include_router(live.router, prefix="/api/accounts/{account_id}/live", tags=["Account-Live"])
 app.include_router(timer.router, prefix="/api/accounts/{account_id}/timer", tags=["Account-Timer"])
 app.include_router(

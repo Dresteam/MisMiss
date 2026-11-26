@@ -243,6 +243,22 @@ export interface HelperStatusResponse {
   message: string;
 }
 
+export interface BrowserLoginStartResponse {
+  ok: boolean;
+  method: string;
+  session_id: string;
+  message: string;
+  username: string;
+  user_id: number;
+}
+
+export interface BrowserLoginSmsResponse {
+  ok: boolean;
+  message: string;
+  username: string;
+  user_id: number;
+}
+
 export interface PanelOverview {
   accounts: AccountSummary[];
   total: number;

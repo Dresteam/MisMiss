@@ -35,6 +35,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { ExpiryBadge } from '../components/ExpiryBadge';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CookieHelper } from '../components/CookieHelper';
+import { BrowserLogin } from '../components/BrowserLogin';
 import { SearchInput, FilterChips } from '../components/ListControls';
 import { RenewDialog, AccountInfoDialog } from '../components/AccountDialogs';
 import { PluginDrawer } from '../components/PluginDrawer';
@@ -885,16 +886,18 @@ export function BotTab({ acc, onAccountChanged }: {
         </div>
       )}
 
-      {/* 自助获取 Cookie —— 与自定义 Cookie 表单分开一张卡：
-          取 Cookie 是「怎么拿到」，下面是「拿到之后怎么填 + 给什么权限」 */}
-      {mode === 'private' && (
-        <div className="card">
-          <div className="card-header"><h3 className="font-semibold">获取 Cookie</h3></div>
-          <div className="card-body">
+      {/* 自助获取 Cookie / 浏览器登录 —— 与自定义 Cookie 表单分开一张卡：
+          取 Cookie 是「怎么拿到」，下面是「拿到之后怎么填 + 给什么权限」。
+          公共模式也展示：浏览器登录成功会自动切到 private，用户不必先手动切模式。 */}
+      <div className="card">
+        <div className="card-header"><h3 className="font-semibold">获取 Cookie</h3></div>
+        <div className="card-body">
+          <BrowserLogin accountId={acc.id} onDone={() => onAccountChanged?.()} />
+          <div className="mt-3">
             <CookieHelper accountId={acc.id} onDone={onAccountChanged} />
           </div>
         </div>
-      )}
+      </div>
 
       {/* 自定义 Cookie 表单(含完整权限设置)。
           data-guide 指到这里：公共 Cookie 模式下这张卡不渲染，指引那一步会

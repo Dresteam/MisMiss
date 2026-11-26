@@ -405,3 +405,32 @@ class HelperStatusResponse(BaseModel):
 
     state: str = Field(description="waiting=等书签回传 / done=已写入 / failed=写入失败")
     message: str = ""
+
+
+class BrowserLoginStartRequest(BaseModel):
+    """浏览器登录：短信验证码或密码。"""
+
+    method: str = Field(pattern="^(sms|password)$")
+    phone: str = Field(min_length=5, max_length=32)
+    password: str = Field(default="", max_length=128)
+
+
+class BrowserLoginStartResponse(BaseModel):
+    ok: bool
+    method: str
+    session_id: str = ""
+    message: str = ""
+    username: str = ""
+    user_id: int = 0
+
+
+class BrowserLoginSmsRequest(BaseModel):
+    session_id: str = Field(min_length=8, max_length=128)
+    code: str = Field(min_length=4, max_length=12)
+
+
+class BrowserLoginSmsResponse(BaseModel):
+    ok: bool
+    message: str = ""
+    username: str = ""
+    user_id: int = 0

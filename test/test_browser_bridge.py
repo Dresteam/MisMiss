@@ -8,13 +8,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from core.browser import BrowserBridge, BrowserConfig, BrowserDisabledError, BrowserSendResult
 from core.browser.bridge import _parse_cookies
+from core.config import ServerConfig
 
 
 def test_config_disabled_by_default():
     config = BrowserConfig()
     assert config.enabled is False
     assert config.max_concurrency == 2
+    assert config.no_sandbox is False
     print("PASS 1: 默认关闭")
+
+
+def test_config_from_server_config():
+    config = BrowserConfig.from_server_config(
+        ServerConfig({"browser": {"enabled": True, "max_concurrency": 3, "no_sandbox": True}})
+    )
+    assert config.enabled is True
+    assert config.max_concurrency == 3
+    assert config.no_sandbox is True
+    print("PASS 1b: 配置解析")
 
 
 def test_cookie_parser():
@@ -41,6 +53,7 @@ def test_result_dataclass():
 
 if __name__ == "__main__":
     test_config_disabled_by_default()
+    test_config_from_server_config()
     test_cookie_parser()
     test_disabled_send_rejected()
     test_result_dataclass()

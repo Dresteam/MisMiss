@@ -38,6 +38,7 @@ _DEFAULTS: dict[str, Any] = {
         "headless": True,
         "max_concurrency": 2,
         "timeout_seconds": 45,
+        "no_sandbox": False,
     },
     "update": {
         "repo": "Dresteam/MisMiss",

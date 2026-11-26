@@ -60,6 +60,26 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tini curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
+# ------------------------------------------------------------------ #
+# Microsoft Edge（浏览器登录 / 发送兜底）
+# ------------------------------------------------------------------ #
+# 猫耳登录与部分发送接口依赖真实浏览器指纹，纯 HTTP 无法复现，因此镜像内置
+# Edge。体积会明显增加；不需要浏览器功能的部署仍可使用旧镜像/裁剪构建。
+ARG EDGE_PACKAGE=microsoft-edge-stable
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends wget gnupg; \
+    install -d -m 0755 /usr/share/keyrings; \
+    curl -fsSL --retry 5 --retry-all-errors --connect-timeout 15 \
+        https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /usr/share/keyrings/microsoft-edge.gpg; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main" \
+        > /etc/apt/sources.list.d/microsoft-edge.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends "${EDGE_PACKAGE}"; \
+    rm -rf /var/lib/apt/lists/*; \
+    test -x /usr/bin/microsoft-edge-stable
+
 # 非 root 用户 —— 固定 uid=1000，与部署目录绑定挂载的宿主文件属主兼容
 # （Linux 服务器首个普通用户 uid 即 1000；root 部署时 deploy.sh 会 chown 到 1000）
 RUN groupadd -r mismiss && useradd -r -u 1000 -g mismiss -d /app mismiss
@@ -140,6 +160,8 @@ ENV MISMISS_PROD=1
 ENV API_PORT=8080
 ENV WORKERS=1
 ENV MISMISS_VERSION=${MISMISS_VERSION}
+# 容器内以非 root 运行，但 Chromium 仍可能需要关闭 sandbox
+ENV MIS_BROWSER_NO_SANDBOX=1
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/usr/local/bin/docker-entrypoint.sh"]

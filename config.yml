@@ -17,6 +17,8 @@ browser:
   # 同时最多打开几个发送页面；账户多时不要调大
   max_concurrency: 2
   timeout_seconds: 45
+  # Docker/root 环境可能需要关闭 Chromium sandbox；本机 Windows 保持 false
+  no_sandbox: false
 # 出站请求节流 —— 面向猫耳平台，避免短时间大量请求触发风控
 ratelimit:
   # 启动时账户之间的平均间隔（秒），实际取 0.5~1.5 倍之间的随机值。
