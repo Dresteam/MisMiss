@@ -32,6 +32,13 @@ _DEFAULTS: dict[str, Any] = {
     "plugin": {
         "pip_mirror": "https://pypi.tuna.tsinghua.edu.cn/simple",
     },
+    "browser": {
+        "enabled": False,
+        "edge_path": "",
+        "headless": True,
+        "max_concurrency": 2,
+        "timeout_seconds": 45,
+    },
     "update": {
         "repo": "Dresteam/MisMiss",
         "mirror": "",

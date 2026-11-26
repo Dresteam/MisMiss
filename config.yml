@@ -7,6 +7,16 @@ bot:
   timer_interval: 120
 plugin:
   pip_mirror: https://pypi.tuna.tsinghua.edu.cn/simple
+# 浏览器兜底（可选）——发送接口返回成功但直播间历史查不到时，用真实 Edge 页面发送。
+# 默认关闭；需要系统已安装 Edge/Chromium。Docker 请使用独立 browser sidecar。
+browser:
+  enabled: false
+  # 留空自动探测 Windows Edge / Linux chromium
+  edge_path: ''
+  headless: true
+  # 同时最多打开几个发送页面；账户多时不要调大
+  max_concurrency: 2
+  timeout_seconds: 45
 # 出站请求节流 —— 面向猫耳平台，避免短时间大量请求触发风控
 ratelimit:
   # 启动时账户之间的平均间隔（秒），实际取 0.5~1.5 倍之间的随机值。
